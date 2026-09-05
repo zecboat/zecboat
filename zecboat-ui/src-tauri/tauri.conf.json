@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Zecboat",
+  "version": "0.6.2",
+  "identifier": "com.zcash.zecboat",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../build"
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "zecboat"
+        ]
+      }
+    }
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "ZECBOAT",
+        "width": 800,
+        "height": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "Shielded Zcash wallet for Layer-2 memo assets (ZMAP)",
+    "longDescription": "Zecboat is a desktop Zcash wallet that holds, verifies and transfers ZMAP Layer-2 shielded assets. It syncs over lightwalletd gRPC and keeps spending keys encrypted on disk. It does not mint assets.",
+    "category": "Finance",
+    "licenseFile": "../../LICENSE",
+    "linux": {
+      "deb": {
+        "depends": [
+          "libjavascriptcoregtk-4.1-0",
+          "libayatana-appindicator3-1",
+          "librsvg2-2",
+          "libpcsclite1"
+        ]
+      }
+    }
+  }
+}

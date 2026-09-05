@@ -1,0 +1,78 @@
+[package]
+name = "zecboat-core"
+version = "0.6.2"
+edition = "2021"
+
+[dependencies]
+# gRPC / Protobuf
+#
+# tonic 0.14 matches zcash_client_backend 0.24's own gRPC client, which lets the
+# sync engine use `zcash_client_backend::proto` directly instead of compiling a
+# second copy of the protos here. The old setup carried BOTH prost 0.12 (for the
+# locally generated client) and prost 0.14 (for the backend's types), and
+# re-encoded every compact block to cross between them. Once the sync engine is
+# ported (W4), build.rs, proto/ and tonic-build all go away.
+tonic = { version = "0.14", features = ["tls-ring", "tls-webpki-roots"] }
+prost = "0.14"
+tokio-stream = "0.1"
+
+# Zcash ecosystem — the Ironwood (NU6.3) stack.
+#
+# Versions copied verbatim from ~/ironwood_shield/Cargo.toml, which built and
+# broadcast the real mined Ironwood transaction. The two release candidates are
+# pinned with `=` deliberately: they are consensus-relevant, and a silent patch
+# bump could change transaction construction. Do not relax those pins.
+#
+# zcash_address stays at 0.12 — 0.9 was yanked (core2).
+zcash_protocol = "0.10"
+zcash_client_sqlite = { version = "=0.22.0-rc.4", features = ["orchard", "transparent-inputs"] }
+zcash_client_backend = { version = "=0.24.0-rc.4", features = ["orchard", "transparent-inputs", "lightwalletd-tonic-transport", "lightwalletd-tonic-tls-webpki-roots"] }
+zcash_primitives = { version = "0.30", features = ["transparent-inputs"] }
+# 0.13, not 0.12: zip321 0.8 (pulled in by zcash_client_backend 0.24) builds its
+# Payment type against 0.13. Pinning 0.12 here put two incompatible ZcashAddress
+# types in the tree and `Payment::new` rejected ours.
+zcash_address = "0.13"
+zcash_keys = { version = "0.16", features = ["transparent-inputs", "sapling", "orchard", "transparent-key-encoding"] }
+zcash_proofs = "0.30"
+
+# Database & Concurrency
+deadpool-sqlite = "0.12"
+rusqlite = { version = "0.37", features = ["time"] }
+tokio = { version = "1", features = ["full"] }
+
+# Serialization and Utilities
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1.0"
+hex = "0.4"
+reqwest = { version = "0.11", features = ["json"] }
+bip0039 = "0.12.0"
+rand = "0.8.5"
+age = "0.10.0"
+orchard = "0.15"
+shardtree = "0.6.2"
+incrementalmerkletree = "0.8"
+nonempty = "0.11.0"
+zip32 = "0.2.1"
+once_cell = "1.21.4"
+zcash_transparent = "0.10"
+yubikey = "0.8.0"
+sha2 = "0.10.8"
+# verify_asset_image returns the hash-checked bytes as a data: URI, so the UI renders the image it
+# verified rather than re-fetching unverified bytes.
+base64 = "0.22"
+# reqwest returns bytes::Bytes; naming the type explicitly keeps the fetch loop readable.
+bytes = "1"
+axum = "0.7"
+
+
+
+# [build-dependencies] removed 2026-08-10.
+#
+# build.rs and proto/ compiled a second copy of the lightwalletd protos. rpc.rs
+# now aliases zcash_client_backend::proto::service instead, so there is nothing
+# left to generate. Both were archived to
+# zebd/zecboat_archive_20260810/removed_proto/.
+
+[profile.dev.package."*"]
+opt-level = 3
