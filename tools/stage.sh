@@ -48,7 +48,34 @@ for f in "$DEB" "$APP"; do
 done
 
 mkdir -p "$S/artifacts"
-cp "$DEB" "$APP" "$S/artifacts/"
+cp "$APP" "$S/artifacts/"
+
+# The Debian download ships as a ZIP containing the .deb, its own SHA256SUMS, and the
+# install scripts -- so a user verifies twice: the zip against the signed SHA256SUMS on
+# the download page, then the .deb against the SHA256SUMS inside the zip. That shape is
+# documented on zecboat.com/download and must not change silently.
+ZIPDIR="$S/.zipwork/zecboat-$V-debian"
+mkdir -p "$ZIPDIR"
+cp "$DEB" "$ZIPDIR/"
+for sc in install.sh install_depends.sh uninstall_zecboat_deb.sh; do
+  [ -f "$SRC_REPO/packaging/$sc" ] || die "missing packaging script: $sc"
+  cp "$SRC_REPO/packaging/$sc" "$ZIPDIR/"; chmod +x "$ZIPDIR/$sc"
+done
+( cd "$ZIPDIR" && sha256sum ./*.deb ./*.sh | sed 's|\./||' > SHA256SUMS )
+python3 - "$S/.zipwork" "$S/artifacts/zecboat-$V-debian.zip" <<'PYZIP'
+import os, sys, zipfile
+root, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for dirpath, _, files in os.walk(root):
+        for f in sorted(files):
+            full = os.path.join(dirpath, f)
+            arc = os.path.relpath(full, root)
+            zi = zipfile.ZipInfo(arc, date_time=(1980,1,1,0,0,0))
+            zi.external_attr = (0o755 << 16) if f.endswith(".sh") else (0o644 << 16)
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            with open(full, "rb") as fh: z.writestr(zi, fh.read())
+PYZIP
+rm -rf "$S/.zipwork"
 git archive --format=tar.gz --prefix="zecboat-$V/" -o "$S/artifacts/zecboat-$V-src.tar.gz" HEAD
 
 # --- gate every artifact -----------------------------------------------------
@@ -58,7 +85,7 @@ git archive --format=tar.gz --prefix="zecboat-$V/" -o "$S/artifacts/zecboat-$V-s
   echo "Staged:     $(date -Is)"; echo '```'
 } > "$S/GATE.md"
 FAIL=0
-for a in "$S/artifacts/"*.deb "$S/artifacts/"*.AppImage "$S/artifacts/"*.tar.gz; do
+for a in "$S/artifacts/"*.zip "$S/artifacts/"*.AppImage "$S/artifacts/"*.tar.gz; do
   out=$("$GATE" "$a" 2>&1); rc=$?
   echo "$out" | sed 's/^/  /' >> "$S/GATE.md"; echo "  exit $rc" >> "$S/GATE.md"; echo >> "$S/GATE.md"
   [ $rc -ne 0 ] && { echo "  GATE REFUSED $(basename "$a")"; FAIL=1; }
@@ -68,7 +95,7 @@ echo '```' >> "$S/GATE.md"
 
 # --- hashes, signature, provenance -------------------------------------------
 cd "$S/artifacts"
-sha256sum ./*.deb ./*.AppImage ./*.tar.gz | sed 's|\./||' > SHA256SUMS
+sha256sum ./*.zip ./*.AppImage ./*.tar.gz | sed 's|\./||' > SHA256SUMS
 openssl pkeyutl -sign -inkey "$KEY" -rawin -in SHA256SUMS -out SHA256SUMS.sig || die "signing failed"
 python3 -c "import binascii;open('/tmp/.p.der','wb').write(binascii.unhexlify('302a300506032b6570032100'+open('$PUB').read().strip()))"
 openssl pkey -pubin -inform DER -in /tmp/.p.der -out /tmp/.p.pem 2>/dev/null
