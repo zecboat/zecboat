@@ -90,25 +90,50 @@ for ART in "$@"; do
     *.zip)      unzip -q "$ART" -d "$out" 2>/dev/null || exit 2 ;;
     *)          cp "$ART" "$out/" ;;
   esac
-  # Recurse into EVERY nested container, not just .deb. Scanning a nested archive in its
-  # compressed state hides essentially all of its contents -- the same blindness that made
-  # the outer-container scan theatre.
-  while IFS= read -r inner; do
-    ib=$(basename "$inner"); io="$WORK/nested-$RANDOM-$ib.x"; mkdir -p "$io"
-    ok=0
-    case "$inner" in
-      *.deb)          dpkg-deb -x "$inner" "$io" 2>/dev/null && ok=1 ;;
-      *.tar.gz|*.tgz) tar xzf "$inner" -C "$io" 2>/dev/null && ok=1 ;;
-      *.tar)          tar xf  "$inner" -C "$io" 2>/dev/null && ok=1 ;;
-      *.zip)          unzip -q "$inner" -d "$io" 2>/dev/null && ok=1 ;;
-      *.AppImage)     cp "$inner" "$io/a"; chmod +x "$io/a"
-                      ( cd "$io" && ./a --appimage-extract >/dev/null 2>&1 ) && { rm -f "$io/a"; ok=1; } ;;
-    esac
-    if [ "$ok" -eq 1 ]; then echo "  (nested $ib)"; scan_tree "$io"; else
-      echo "  UNEXTRACTED NESTED ARCHIVE: $ib -- refusing rather than scanning it compressed"
-      FOUND=$((FOUND+1)); fi
-    rm -rf "$io"
-  done < <(find "$out" \( -name '*.deb' -o -name '*.zip' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar' -o -name '*.AppImage' \) 2>/dev/null)
+  # Recurse into nested containers to a bounded DEPTH, not one level.
+  #
+  # An external review defeated the previous single-level version with
+  #   outer.tar.gz -> middle.tar.gz -> inner.tar.gz -> leaky file
+  # The middle layer was extracted, the inner one was scanned as a flat file, and
+  # compression hid its contents: verdict CLEAN. One level of recursion is the same
+  # blindness as none, just further in.
+  #
+  # Depth is capped so a malicious deeply-nested archive cannot spin forever, and hitting
+  # the cap is a REFUSAL, not a pass -- an artifact we cannot fully open is not clean.
+  MAXDEPTH=8
+  extract_recursive() {
+    local dir="$1" depth="$2"
+    if [ "$depth" -gt "$MAXDEPTH" ]; then
+      echo "  NESTING DEPTH > $MAXDEPTH -- refusing rather than scanning unopened"
+      FOUND=$((FOUND+1)); return
+    fi
+    local found_any=0
+    while IFS= read -r inner; do
+      [ -f "$inner" ] || continue
+      found_any=1
+      local ib io ok=0
+      ib=$(basename "$inner"); io="$inner.x$depth"; mkdir -p "$io"
+      case "$inner" in
+        *.deb)          dpkg-deb -x "$inner" "$io" 2>/dev/null && ok=1 ;;
+        *.tar.gz|*.tgz) tar xzf "$inner" -C "$io" 2>/dev/null && ok=1 ;;
+        *.tar)          tar xf  "$inner" -C "$io" 2>/dev/null && ok=1 ;;
+        *.zip)          unzip -q "$inner" -d "$io" 2>/dev/null && ok=1 ;;
+        *.AppImage)     cp "$inner" "$io/a"; chmod +x "$io/a"
+                        ( cd "$io" && ./a --appimage-extract >/dev/null 2>&1 ) && { rm -f "$io/a"; ok=1; } ;;
+      esac
+      if [ "$ok" -eq 1 ]; then
+        echo "  (nested depth $depth: $ib)"
+        rm -f "$inner"                     # replaced by its contents; do not scan the blob
+        extract_recursive "$io" $((depth+1))
+      else
+        echo "  UNEXTRACTED NESTED ARCHIVE: $ib -- refusing rather than scanning it compressed"
+        FOUND=$((FOUND+1)); rm -rf "$io"
+      fi
+    done < <(find "$dir" \( -name '*.deb' -o -name '*.zip' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar' -o -name '*.AppImage' \) 2>/dev/null)
+    return 0
+  }
+  extract_recursive "$out" 1
+
   scan_tree "$out"
 done
 

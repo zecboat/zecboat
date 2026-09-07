@@ -66,3 +66,6 @@ UA*.txt
 *~
 .DS_Store
 Thumbs.db
+
+# The gate pattern file lists the strings it hunts, password included. Never commit.
+tools/gate-patterns.local
