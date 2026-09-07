@@ -48,10 +48,16 @@ scan_file() {
   local f="$1" rel="$2" isbin=0
   file -b "$f" 2>/dev/null | grep -qiE 'ELF|executable|shared object|archive' && isbin=1
   SCANNED=$((SCANNED+1))
+  # The generic /home/<user>/ pattern used to run on ELF files only, so a path baked into a
+  # vite bundle, a config JSON or a .desktop launcher walked straight through. It now runs
+  # on everything EXCEPT prose, where such a path is legitimate ("put it in /home/you/").
+  # Vendored third-party libraries stay exempt: they carry their packager's paths, which are
+  # not our identity and not ours to fix. STRICT still applies to them.
   local pats=( "${STRICT[@]}" )
-  if [ "$isbin" -eq 1 ] && ! [[ "$rel" =~ $VENDOR_RE ]]; then
-    pats+=( "${BINARY_ONLY[@]}" )
-  fi
+  case "$rel" in
+    *.md|*.txt|*.markdown) ;;                       # prose: strict patterns only
+    *) [[ "$rel" =~ $VENDOR_RE ]] || pats+=( "${BINARY_ONLY[@]}" ) ;;
+  esac
   for p in "${pats[@]}"; do
     local n
     n=$(strings -a "$f" 2>/dev/null | grep -cE -- "$p")
@@ -83,11 +89,25 @@ for ART in "$@"; do
     *.zip)      unzip -q "$ART" -d "$out" 2>/dev/null || exit 2 ;;
     *)          cp "$ART" "$out/" ;;
   esac
-  # a .zip of a .deb is the shape this project ships; recurse one level
+  # Recurse into EVERY nested container, not just .deb. Scanning a nested archive in its
+  # compressed state hides essentially all of its contents -- the same blindness that made
+  # the outer-container scan theatre.
   while IFS= read -r inner; do
-    ib=$(basename "$inner"); io="$WORK/$ib.x"; mkdir -p "$io"
-    dpkg-deb -x "$inner" "$io" 2>/dev/null && { echo "  (nested $ib)"; scan_tree "$io"; rm -rf "$io"; }
-  done < <(find "$out" -name '*.deb' 2>/dev/null)
+    ib=$(basename "$inner"); io="$WORK/nested-$RANDOM-$ib.x"; mkdir -p "$io"
+    ok=0
+    case "$inner" in
+      *.deb)          dpkg-deb -x "$inner" "$io" 2>/dev/null && ok=1 ;;
+      *.tar.gz|*.tgz) tar xzf "$inner" -C "$io" 2>/dev/null && ok=1 ;;
+      *.tar)          tar xf  "$inner" -C "$io" 2>/dev/null && ok=1 ;;
+      *.zip)          unzip -q "$inner" -d "$io" 2>/dev/null && ok=1 ;;
+      *.AppImage)     cp "$inner" "$io/a"; chmod +x "$io/a"
+                      ( cd "$io" && ./a --appimage-extract >/dev/null 2>&1 ) && { rm -f "$io/a"; ok=1; } ;;
+    esac
+    if [ "$ok" -eq 1 ]; then echo "  (nested $ib)"; scan_tree "$io"; else
+      echo "  UNEXTRACTED NESTED ARCHIVE: $ib -- refusing rather than scanning it compressed"
+      FOUND=$((FOUND+1)); fi
+    rm -rf "$io"
+  done < <(find "$out" \( -name '*.deb' -o -name '*.zip' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar' -o -name '*.AppImage' \) 2>/dev/null)
   scan_tree "$out"
 done
 
