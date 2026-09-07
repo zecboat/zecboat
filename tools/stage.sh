@@ -38,17 +38,19 @@ git rev-parse "v$V" >/dev/null 2>&1 || die "no tag v$V -- a release must be tagg
 
 DEB="$BUILD/deb/Zecboat_${VER}_amd64.deb"
 APP="$BUILD/appimage/Zecboat_${VER}_amd64.AppImage"
-for f in "$DEB" "$APP"; do [ -f "$f" ] || die "missing build output: $f"; done
+[ -f "$DEB" ] || die "missing build output: $DEB"
+# The AppImage is deliberately NOT released. It is 124 MB against the zip's 23 MB, and
+# AWS gives 100 GB/month of free egress from EC2 -- roughly 800 AppImage downloads
+# against 4,300 of the zip. Zecboat is a Debian desktop wallet; the .deb serves that
+# audience directly and builders use the source tarball or git. Re-add it here if
+# non-Debian distributions ever matter more than the bandwidth.
 
 # Every artifact must be NEWER than the commit it claims to be built from. This is
 # the check that would have caught the hand-staging error.
 CT=$(git log -1 --format=%ct HEAD)
-for f in "$DEB" "$APP"; do
-  [ "$(stat -c%Y "$f")" -ge "$CT" ] || die "$(basename "$f") predates HEAD -- it is from an older build"
-done
+[ "$(stat -c%Y "$DEB")" -ge "$CT" ] || die "$(basename "$DEB") predates HEAD -- it is from an older build"
 
 mkdir -p "$S/artifacts"
-cp "$APP" "$S/artifacts/"
 
 # The Debian download ships as a ZIP containing the .deb, its own SHA256SUMS, and the
 # install scripts -- so a user verifies twice: the zip against the signed SHA256SUMS on
@@ -85,7 +87,7 @@ git archive --format=tar.gz --prefix="zecboat-$V/" -o "$S/artifacts/zecboat-$V-s
   echo "Staged:     $(date -Is)"; echo '```'
 } > "$S/GATE.md"
 FAIL=0
-for a in "$S/artifacts/"*.zip "$S/artifacts/"*.AppImage "$S/artifacts/"*.tar.gz; do
+for a in "$S/artifacts/"*.zip "$S/artifacts/"*.tar.gz; do
   out=$("$GATE" "$a" 2>&1); rc=$?
   echo "$out" | sed 's/^/  /' >> "$S/GATE.md"; echo "  exit $rc" >> "$S/GATE.md"; echo >> "$S/GATE.md"
   [ $rc -ne 0 ] && { echo "  GATE REFUSED $(basename "$a")"; FAIL=1; }
@@ -95,7 +97,7 @@ echo '```' >> "$S/GATE.md"
 
 # --- hashes, signature, provenance -------------------------------------------
 cd "$S/artifacts"
-sha256sum ./*.zip ./*.AppImage ./*.tar.gz | sed 's|\./||' > SHA256SUMS
+sha256sum ./*.zip ./*.tar.gz | sed 's|\./||' > SHA256SUMS
 openssl pkeyutl -sign -inkey "$KEY" -rawin -in SHA256SUMS -out SHA256SUMS.sig || die "signing failed"
 python3 -c "import binascii;open('/tmp/.p.der','wb').write(binascii.unhexlify('302a300506032b6570032100'+open('$PUB').read().strip()))"
 openssl pkey -pubin -inform DER -in /tmp/.p.der -out /tmp/.p.pem 2>/dev/null
