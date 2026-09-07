@@ -1,6 +1,6 @@
 [package]
 name = "zecboat-ui"
-version = "0.6.2"
+version = "0.6.3"
 description = "Shielded Zcash wallet for Layer-2 memo assets (ZMAP)"
 authors = ["Zecboat <speed@zecboat.com>"]
 edition = "2021"
@@ -30,3 +30,19 @@ tauri-plugin-deep-link = "2.4.9"
 [profile.dev.package."*"]
 opt-level = 3
 
+
+# Release hardening, added 2026-09-07.
+#
+# `strip` removes debug symbols and the symbol table. Beyond size, those symbols are where
+# the build machine's absolute paths live: the shipped 0.6.2 binary carried 1,070 copies of
+# the builder's home directory, including the source tree's own path. Tauri's IPC is JSON over a custom
+# webview scheme and does not resolve Rust symbols dynamically, so stripping is safe.
+#
+# Paths are also remapped at build time via
+#   RUSTFLAGS="--remap-path-prefix=$HOME=/build"
+# which is what actually removes registry paths. `strip` alone is not sufficient.
+#
+# codegen-units = 1 is deliberately NOT set here: it materially lengthens the build for a
+# marginal size gain, and it is only worth adding when reproducible builds land in 0.8.0.
+[profile.release]
+strip = true

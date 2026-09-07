@@ -1,22 +1,21 @@
 <script lang="ts">
   import { type Tx, shortId, formatDate, confirmationsLabel, privacyLabel } from "$lib/tx";
+  import CopyButton from "./CopyButton.svelte";
 
   let { tx, onClose }: { tx: Tx; onClose: () => void } = $props();
 
-  let copied = $state("");
-  function copy(text: string, what: string) {
-    navigator.clipboard.writeText(text).then(
-      () => { copied = what; setTimeout(() => (copied = ""), 1500); },
-      () => { copied = "copy failed"; }
-    );
-  }
-
   const privacy = $derived(privacyLabel(tx));
 
-  // The txid is in display order, so an explorer link actually resolves. Before C1
-  // the UI held a byte-reversed, truncated string — pasting it anywhere failed
-  // twice over, which is why "copy a txid and search" never worked.
-  const explorer = $derived(`https://mainnet.zcashexplorer.app/transactions/${tx.id}`);
+  // There is deliberately no "open in explorer" link.
+  //
+  // Following one would hand this wallet's txid to a third-party server together with
+  // the user's IP, at the exact moment they are looking at their own transaction. That
+  // is a metadata leak the shielded pool otherwise prevents, performed by the wallet on
+  // the user's behalf. Anyone who wants an explorer can copy the id and paste it.
+  //
+  // Worth keeping: the txid here is in DISPLAY order. Zcash stores txids byte-reversed,
+  // and the UI once held a reversed, truncated string -- which is why copying an id and
+  // searching for it used to fail twice over.
 </script>
 
 <div class="detail-backdrop" role="presentation" onclick={onClose}>
@@ -37,7 +36,7 @@
       <div class="field">
         <span class="k">Transaction ID</span>
         <span class="v mono wrap">{tx.id}</span>
-        <button class="mini" onclick={() => copy(tx.id, "txid")}>{copied === "txid" ? "Copied" : "Copy"}</button>
+        <CopyButton value={tx.id} label="Copy TxID" title="Copy the transaction id" />
       </div>
 
       <div class="grid">
@@ -53,7 +52,7 @@
         <div class="field">
           <span class="k">Sent to</span>
           <span class="v mono wrap">{tx.to_address}</span>
-          <button class="mini" onclick={() => copy(tx.to_address ?? "", "addr")}>{copied === "addr" ? "Copied" : "Copy"}</button>
+          <CopyButton value={tx.to_address ?? ""} label="Copy" compact title="Copy the address" />
         </div>
       {:else if tx.type === "receive"}
         <!-- Not a gap in the data. The sender of a shielded payment is not
@@ -88,7 +87,6 @@
     </div>
 
     <div class="d-foot">
-      <a class="btn secondary" href={explorer} target="_blank" rel="noreferrer noopener">Open in explorer</a>
       <button class="btn primary" onclick={onClose}>Close</button>
     </div>
   </div>
@@ -138,9 +136,6 @@
           white-space: pre-wrap; word-break: break-word; font-size: .8rem; }
   .asset { display: flex; flex-direction: column; gap: .1rem; padding: .4rem .5rem;
            background: rgba(255,255,255,.04); border-radius: 6px; margin-bottom: .3rem; }
-  .mini { align-self: flex-start; margin-top: .2rem; background: transparent;
-          border: 1px solid var(--border-color,#2c2c2c); border-radius: 6px;
-          color: inherit; font-size: .7rem; padding: .15rem .45rem; cursor: pointer; }
 
   .d-foot { flex-shrink: 0; display: flex; gap: .5rem; justify-content: flex-end;
             padding: .8rem 1.15rem 1rem; border-top: 1px solid var(--border-color,#2c2c2c); }

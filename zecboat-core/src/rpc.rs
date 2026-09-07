@@ -3021,13 +3021,45 @@ pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
     };
     let verified = crate::zmap::verify_image(&bytes, &expected)?;
 
+    // The registry names every artefact `<hash>.<ext>` and a static host derives
+    // `Content-Type` from that extension alone. When the two disagree -- a JPEG stored under
+    // `.png`, which is exactly what the Happy Birthday collection is -- the server confidently
+    // answers `image/png`, and a data URI built from that claim declares PNG while carrying
+    // JPEG bytes. Every WebView refuses to render it, so the artwork is blank even though
+    // verification passed and the hash matched.
+    //
+    // The file cannot be corrected: its sha256 **is** the asset id, so re-encoding it to a real
+    // PNG would change the identity of the asset. Renaming does not help either, because `png`
+    // is tried first and answers 200.
+    //
+    // So trust the bytes, never the label. The extension is documented above as "routing only";
+    // this applies the same rule to rendering.
+    fn sniff_image_mime(b: &[u8]) -> Option<&'static str> {
+        if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            return Some("image/jpeg");
+        }
+        if b.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+            return Some("image/png");
+        }
+        if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") {
+            return Some("image/gif");
+        }
+        if b.len() >= 12 && b.starts_with(b"RIFF") && &b[8..12] == b"WEBP" {
+            return Some("image/webp");
+        }
+        None
+    }
+    let render_type = sniff_image_mime(&bytes)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| content_type.clone());
+
     // Only hand back renderable bytes when they are the bytes that passed. A caller cannot then
     // display unverified artwork by accident.
     let data_uri = if verified {
         use base64::Engine;
         Some(format!(
             "data:{};base64,{}",
-            content_type,
+            render_type,
             base64::engine::general_purpose::STANDARD.encode(&bytes)
         ))
     } else {
@@ -3041,6 +3073,8 @@ pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
         "actual_hash":   actual,
         "source_url":    url,
         "bytes":         bytes.len(),
+        "served_type":   content_type,
+        "actual_type":   render_type,
         "image":         data_uri,
     }))
 }

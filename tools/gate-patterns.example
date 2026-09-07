@@ -1,0 +1,12 @@
+# Copy to gate-patterns.local and fill in with YOUR machine's identifiers.
+# gate-patterns.local is git-ignored and must never be shipped: a scanner that
+# embeds the strings it hunts for is itself the leak. Found exactly that way,
+# 2026-09-07, when the gate refused a source tarball because it contained the gate.
+#
+# STRICT <regex>  — never legitimate in any file
+# BINARY <regex>  — enforced only on binaries we build (legitimate in docs)
+STRICT <your-username>
+STRICT <your-lan-ip>
+STRICT <your-server-ip>
+STRICT <any-test-password>
+BINARY /home/[a-zA-Z0-9_.-]+/

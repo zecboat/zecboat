@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CopyButton from "./CopyButton.svelte";
   import { invoke } from "@tauri-apps/api/core";
   
   let { 
@@ -60,7 +61,17 @@
   let showConfirmation = $state(false);
   let useHardwareWallet = $state(false);
   let isWaitingForHardware = $state(false);
-  let txResult = $state<{success: boolean, message: string} | null>(null);
+  let txResult = $state<{success: boolean, message: string, txid?: string} | null>(null);
+
+  /**
+   * The backend returns a human sentence like
+   *   Success! Operation ID: Transaction broadcasted successfully! TxID: "4de944..."
+   * A copy button should hand over the bare 64-hex txid, not the sentence around it --
+   * that is the part someone pastes into an explorer or a forum post.
+   */
+  function extractTxid(msg: string): string | undefined {
+    return msg.match(/\b[0-9a-fA-F]{64}\b/)?.[0];
+  }
   let paymentUri = $state("");
 
   const MAX_MEMO_CHARS = 512;
@@ -140,7 +151,8 @@
         
         txResult = {
           success: true,
-          message: `Success! Operation ID: ${opid}`
+          message: `Success! Operation ID: ${opid}`,
+          txid: extractTxid(opid)
         };
       }
       
@@ -279,7 +291,13 @@
 
   {#if txResult}
     <div class="result-message {txResult.success ? 'success' : 'error'}">
-      {txResult.message}
+      <div>{txResult.message}</div>
+      {#if txResult.txid}
+        <div class="result-actions">
+          <CopyButton value={txResult.txid} label="Copy TxID" title="Copy the transaction id" />
+          <CopyButton value={txResult.message} label="Copy full output" compact title="Copy the whole message" />
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -523,6 +541,12 @@
     50% { opacity: 0.5; }
   }
 
+  .result-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+  }
   .result-message {
     margin-top: 1.5rem;
     padding: 1rem;

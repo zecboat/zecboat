@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CopyButton from "./CopyButton.svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
 
@@ -172,6 +173,7 @@
               <div class="meta-row">
                 <span class="meta-label">ASSET ID</span>
                 <span class="meta-value mono">{selectedAssetId}</span>
+                <CopyButton value={selectedAssetId ?? ''} label="Copy" compact title="Copy the asset id" />
               </div>
               {#if parsedMetadata.error}
                 <div class="meta-row">

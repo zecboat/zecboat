@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CopyButton from "./CopyButton.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
 
@@ -56,7 +57,7 @@
   let customUrl = $state("");
   let isTestingNode = $state(false);
 
-  let actionFeedback = $state<{type: 'success' | 'info' | 'error', message: string, detail?: string} | null>(null);
+  let actionFeedback = $state<{type: 'success' | 'info' | 'error', message: string, detail?: string, copyValue?: string} | null>(null);
   let nodeFeedback = $state<{type: 'success' | 'info' | 'error', message: string, detail?: string} | null>(null);
   let showImportInput = $state(false);
   let importSeed = $state("");
@@ -217,10 +218,11 @@
         actionFeedback = { type: 'success', message: res };
       } else if (action === 'Export Keys') {
         const res: string = await invoke("export_keys");
-        actionFeedback = { type: 'success', message: res };
+        // copyValue is the key itself, so the button never copies the surrounding prose.
+        actionFeedback = { type: 'success', message: res, copyValue: res };
       } else if (action === 'Get Viewkey') {
         const res: string = await invoke("get_viewkey");
-        actionFeedback = { type: 'success', message: 'Full Viewing Key generated safely!', detail: res };
+        actionFeedback = { type: 'success', message: 'Full Viewing Key generated safely!', detail: res, copyValue: res };
       } else if (action === 'Remove YubiKey') {
         actionFeedback = { type: 'success', message: 'YubiKey removed from wallet configuration. Database re-encrypted with standard password.' };
       }
@@ -414,6 +416,9 @@
         <p class="main-msg">{actionFeedback.message}</p>
         {#if actionFeedback.detail}
           <pre class="detail-box">{actionFeedback.detail}</pre>
+        {/if}
+        {#if actionFeedback.copyValue}
+          <CopyButton value={actionFeedback.copyValue} label="Copy" title="Copy to clipboard" />
         {/if}
       </div>
     {/if}
