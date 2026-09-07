@@ -48,9 +48,10 @@ scan_file() {
   local f="$1" rel="$2" isbin=0
   file -b "$f" 2>/dev/null | grep -qiE 'ELF|executable|shared object|archive' && isbin=1
   SCANNED=$((SCANNED+1))
-  # The generic /home/<user>/ pattern used to run on ELF files only, so a path baked into a
+  # The generic home-directory pattern used to run on ELF files only, so a path baked into a
   # vite bundle, a config JSON or a .desktop launcher walked straight through. It now runs
-  # on everything EXCEPT prose, where such a path is legitimate ("put it in /home/you/").
+  # on everything EXCEPT prose, where documentation legitimately spells out a user home
+  # directory in an instruction to the reader.
   # Vendored third-party libraries stay exempt: they carry their packager's paths, which are
   # not our identity and not ours to fix. STRICT still applies to them.
   local pats=( "${STRICT[@]}" )
