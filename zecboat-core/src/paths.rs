@@ -126,7 +126,7 @@ mod tests {
 
     /// `HOME` is process-global and cargo runs tests in parallel threads, so these
     /// tests were overwriting each other's environment mid-assertion — one read
-    /// `/home/someone/captain` while another had just set `/tmp/zbtest`. The failure
+    /// one fixture path while another had just set a different one. The failure
     /// looked like a path bug and was a test bug. Any test that mutates an env var
     /// must hold this lock.
     static ENV: Mutex<()> = Mutex::new(());
@@ -151,12 +151,17 @@ mod tests {
 
     /// HOME is the isolation mechanism: a different HOME must give a different
     /// wallet. If this test ever fails, `~/captain` has stopped isolating funds.
+    ///
+    /// The fixtures are under /tmp deliberately. `release-gate.sh` scans shipped .rs
+    /// files for a `/home/<user>/` shape and cannot tell a placeholder from a real
+    /// username — an earlier version of this test used "/home/someone" and the gate
+    /// refused the 0.6.5 source tarball because of it.
     #[test]
     fn home_selects_the_wallet() {
         let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("HOME", "/home/someone");
+        std::env::set_var("HOME", "/tmp/zbtest-other");
         let a = wallet_db_path().unwrap();
-        std::env::set_var("HOME", "/home/someone/captain");
+        std::env::set_var("HOME", "/tmp/zbtest/captain");
         let b = wallet_db_path().unwrap();
         assert_ne!(a, b, "HOME no longer selects the wallet — isolation is broken");
     }
