@@ -3,6 +3,49 @@
 Notable changes to the Zecboat desktop wallet. Entries describe the user-visible effect,
 not the diff.
 
+## 0.6.5-beta — 2026-09-19
+
+**Theme: make the code portable without porting it.** No new platform ships. This removes
+the assumptions that would have made a Windows or macOS port a rewrite — and every item is
+a correctness fix on Linux on its own merits, which is why none of it was deferred.
+
+### Fixed
+
+- **A missing `HOME` no longer creates a wallet at the filesystem root.** Every path was
+  built from `env::var("HOME").unwrap_or_default()`, which turns an unset `HOME` into an
+  empty string — so the wallet database resolved to `/.AppVault/data/wallet.db` and
+  *nothing errored*. The wallet would report an empty balance, or quietly create a second
+  wallet where nobody would look for it. Paths now come from one module that **refuses**
+  rather than guessing. Refusing to open is recoverable; opening the wrong database is not.
+- **The proving-parameter error named the wrong directory on Windows and macOS.** It always
+  said `~/.zcash-params/`, which is correct only on Linux. It now names the directory for
+  the platform the binary is running on, and says what the consequence is: the wallet can
+  sync and display, but cannot build a transaction.
+
+### Changed
+
+- **Three C dependencies removed.** The `yubikey` crate was declared but never imported;
+  deleting it took `pcsc`/`pcsc-sys` with it and drops `libpcsclite1` from the `.deb`.
+  SQLite is now compiled from source rather than linked against whatever the build host
+  had. TLS is rustls only — `native-tls` and its OpenSSL dependency are gone. Together
+  these remove 677 lines from the lockfiles and most of what made this a Linux-only binary.
+
+### Security
+
+- **The release gate now knows all three home-directory shapes.** It checked artifacts for
+  `/home/<user>/` only. A Windows or macOS build would have passed while carrying the
+  builder's username, because Rust embeds source paths in debug info and panic messages.
+  It now also refuses `C:\Users\<user>\` and `/Users/<user>/`, verified against an
+  artifact with all three planted in it.
+
+### Not changed, deliberately
+
+- `yubi.rs` stays. The plan was to delete it alongside the `yubikey` crate, but the two are
+  unrelated — it never used that crate — and it is still on the unlock path. A wallet
+  created while the YubiKey option existed has its identity encrypted under a derived
+  passphrase, and **the wallet records no flag saying so**. Removing it would make such a
+  wallet permanently unopenable.
+
 ## 0.6.3-beta — 2026-09-07
 
 ### Fixed

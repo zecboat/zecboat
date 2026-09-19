@@ -1,0 +1,172 @@
+//! Every filesystem path the wallet uses, derived in one place.
+//!
+//! # Why this module exists
+//!
+//! Until 0.6.5 the wallet built its paths inline, 32 times, with this idiom:
+//!
+//! ```ignore
+//! let home = std::env::var("HOME").unwrap_or_default();
+//! let db_path = format!("{}/.AppVault/data/wallet.db", home);
+//! ```
+//!
+//! Two problems, one of which is a live bug on Linux:
+//!
+//! 1. **`unwrap_or_default()` swallows a missing `HOME` into `""`**, so the path
+//!    becomes `/.AppVault/data/wallet.db` — the filesystem root — and *nothing
+//!    errors*. The wallet reports an empty balance, or creates a second wallet
+//!    somewhere the user will never look. On Windows this is guaranteed rather
+//!    than merely possible: Windows sets `USERPROFILE`, not `HOME`, so
+//!    `env::var("HOME")` returns `Err` on every call.
+//!
+//! 2. **32 hand-copied expressions drift.** They already had two spellings of the
+//!    same path and three of the same error message.
+//!
+//! These functions **fail** on a missing home directory rather than defaulting.
+//! That is a deliberate behaviour change: refusing to open is recoverable, opening
+//! the wrong database is not.
+//!
+//! # ⚠ `HOME` is the wallet's only isolation mechanism. Do not replace it.
+//!
+//! `app_data_dir()` resolves through `$HOME` on Unix **on purpose**, and must keep
+//! doing so. Two live wallets on the maintainer's machine depend on it:
+//!
+//! ```text
+//! ~/captain/launch.sh    sets HOME=~/captain   -> the wallet holding real funds
+//! ~/user2/launch-user2.sh sets HOME=~/user2    -> an independent second wallet
+//! ~/zecboat_video/launch_demo_wallet.sh        -> an isolated demo wallet
+//! ```
+//!
+//! Every "run against a copy, never the live wallet" instruction works the same
+//! way. Swapping in a platform-directories crate that consults something else —
+//! `XDG_DATA_HOME`, `%APPDATA%`, `~/Library/Application Support` — would make all
+//! three silently open the *real* wallet while appearing to work. That is a
+//! fund-losing change dressed as a tidy-up.
+//!
+//! Windows and macOS may diverge later; `zecboat_windows.md` §2 covers it. Unix
+//! stays `$HOME`.
+
+use anyhow::{anyhow, Result};
+use std::path::PathBuf;
+
+/// The user's home directory.
+///
+/// Errors rather than defaulting. See the module header: an empty string here
+/// produced a silent write to the filesystem root.
+pub fn home_dir() -> Result<PathBuf> {
+    // Unix only, deliberately. `HOME` is what every launcher overrides to isolate
+    // a wallet; a crate that consults anything else would break that silently.
+    match std::env::var("HOME") {
+        Ok(h) if !h.is_empty() => Ok(PathBuf::from(h)),
+        Ok(_) => Err(anyhow!(
+            "HOME is set but empty. Refusing to guess a home directory — the wallet \
+             would otherwise be created at the filesystem root."
+        )),
+        Err(_) => Err(anyhow!(
+            "HOME is not set. The wallet derives every path from it, including which \
+             wallet is opened, so there is no safe default."
+        )),
+    }
+}
+
+/// `$HOME/.AppVault/data` — the wallet's data directory.
+pub fn app_data_dir() -> Result<PathBuf> {
+    Ok(home_dir()?.join(".AppVault").join("data"))
+}
+
+/// `$HOME/.AppVault/data/wallet.db`
+pub fn wallet_db_path() -> Result<PathBuf> {
+    Ok(app_data_dir()?.join("wallet.db"))
+}
+
+/// `$HOME/.AppVault/data/encryption-identity.txt`
+///
+/// The wallet will not open without this file, so it is always a pair with
+/// [`wallet_db_path`]. Backups that carry one without the other are useless.
+pub fn identity_path() -> Result<PathBuf> {
+    Ok(app_data_dir()?.join("encryption-identity.txt"))
+}
+
+/// `$HOME/ZecboatBackups`
+pub fn backup_dir() -> Result<PathBuf> {
+    Ok(home_dir()?.join("ZecboatBackups"))
+}
+
+/// A named file inside [`backup_dir`].
+pub fn backup_file(name: &str) -> Result<PathBuf> {
+    Ok(backup_dir()?.join(name))
+}
+
+/// The same paths as `String`, for the many call sites that want one.
+///
+/// `to_string_lossy()` rather than `to_str().unwrap()`: a non-UTF-8 home directory
+/// is exotic but should not panic a wallet.
+pub mod as_string {
+    use super::*;
+    pub fn app_data_dir() -> Result<String> {
+        Ok(super::app_data_dir()?.to_string_lossy().into_owned())
+    }
+    pub fn wallet_db_path() -> Result<String> {
+        Ok(super::wallet_db_path()?.to_string_lossy().into_owned())
+    }
+    pub fn identity_path() -> Result<String> {
+        Ok(super::identity_path()?.to_string_lossy().into_owned())
+    }
+    pub fn backup_dir() -> Result<String> {
+        Ok(super::backup_dir()?.to_string_lossy().into_owned())
+    }
+    pub fn backup_file(name: &str) -> Result<String> {
+        Ok(super::backup_file(name)?.to_string_lossy().into_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// `HOME` is process-global and cargo runs tests in parallel threads, so these
+    /// tests were overwriting each other's environment mid-assertion — one read
+    /// `/home/someone/captain` while another had just set `/tmp/zbtest`. The failure
+    /// looked like a path bug and was a test bug. Any test that mutates an env var
+    /// must hold this lock.
+    static ENV: Mutex<()> = Mutex::new(());
+
+    /// The paths must be byte-identical to what the inlined `format!` calls
+    /// produced, or an existing wallet silently becomes invisible.
+    #[test]
+    fn matches_the_legacy_layout() {
+        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("HOME", "/tmp/zbtest");
+        assert_eq!(wallet_db_path().unwrap().to_str().unwrap(),
+                   "/tmp/zbtest/.AppVault/data/wallet.db");
+        assert_eq!(identity_path().unwrap().to_str().unwrap(),
+                   "/tmp/zbtest/.AppVault/data/encryption-identity.txt");
+        assert_eq!(app_data_dir().unwrap().to_str().unwrap(),
+                   "/tmp/zbtest/.AppVault/data");
+        assert_eq!(backup_dir().unwrap().to_str().unwrap(),
+                   "/tmp/zbtest/ZecboatBackups");
+        assert_eq!(backup_file("a.tar.gz").unwrap().to_str().unwrap(),
+                   "/tmp/zbtest/ZecboatBackups/a.tar.gz");
+    }
+
+    /// HOME is the isolation mechanism: a different HOME must give a different
+    /// wallet. If this test ever fails, `~/captain` has stopped isolating funds.
+    #[test]
+    fn home_selects_the_wallet() {
+        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("HOME", "/home/someone");
+        let a = wallet_db_path().unwrap();
+        std::env::set_var("HOME", "/home/someone/captain");
+        let b = wallet_db_path().unwrap();
+        assert_ne!(a, b, "HOME no longer selects the wallet — isolation is broken");
+    }
+
+    #[test]
+    fn refuses_rather_than_defaulting() {
+        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("HOME");
+        assert!(home_dir().is_err(), "a missing HOME must error, not default to \"\"");
+        std::env::set_var("HOME", "");
+        assert!(home_dir().is_err(), "an empty HOME must error, not build /.AppVault/...");
+    }
+}

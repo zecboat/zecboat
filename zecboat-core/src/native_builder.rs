@@ -1,52 +1,64 @@
-//! Transaction construction.
+//! Transaction construction — plain ZEC **and** ZMAP asset transfers.
 //!
-//! ══════════════════════════════════════════════════════════════════════════
-//!  ⚠  THIS BUILD SENDS PLAIN ZEC ONLY. ZSA SENDS ARE REFUSED, NOT HANDLED.  ⚠
-//! ══════════════════════════════════════════════════════════════════════════
+//! Zecboat is an L2 shielded-asset wallet and this file is where both paths are
+//! built: ordinary Ironwood (NU6.3) value transfer, and the deliberate spend of
+//! an asset carrier. Assets ride on top of plain value, so the plain path has to
+//! be correct first.
 //!
-//! Zecboat is an L2 shielded-asset wallet, and this file is the layer beneath
-//! that: plain Ironwood (NU6.3) value transfer. Assets ride on top of it, so it
-//! has to be correct first. **It is not asset-aware, and must not be mistaken
-//! for asset-aware.**
+//! ## How carriers are protected
 //!
-//! ## The safety hole this file deliberately closes with a hard error
+//! A ZMAP asset is carried by a note of exactly `CARRIER_ZAT` (10,000 zatoshis).
+//! `propose_transfer` performs its **own** input selection, so a caller-side
+//! check cannot govern what gets spent — see the note on
+//! `assert_no_zsa_notes_at_risk` at `lock_zmap_carriers` below for why the
+//! previous pre-flight guard was removed rather than kept.
 //!
-//! `crate::wallet::validate_anti_burn` protects ZSA/NFT notes — exactly
-//! 10,000 zatoshis — from being consumed as ordinary value. It works by
-//! inspecting the caller's `ProposedInput` list.
+//! The protection now lives in selection itself. `lock_zmap_carriers` locks every
+//! carrier before each build; locked outputs are never selected under
+//! `LockedInputPolicy::Exclude`, the default carried by `SpendPolicy`. Ordinary
+//! spends route **around** carriers instead of being refused, so a wallet holding
+//! an asset can still send ZEC. A forgetful call site cannot bypass it, because
+//! the enforcement is in the backend rather than in a check this module performs.
 //!
-//! That protection was only ever real because the old builder **pinned** those
-//! notes: it looked each one up with `get_spendable_note` and handed that exact
-//! set to a hand-built `Proposal`. The validated list *was* the spent list.
+//! `crate::wallet::validate_anti_burn` still runs at both `wallet.rs` entry
+//! points as a second, caller-side check. It is no longer the only thing standing
+//! between an asset holder and a burned asset.
 //!
-//! This version uses `propose_transfer`, which performs its **own** input
-//! selection. The caller's list no longer determines what is spent. Left alone,
-//! `validate_anti_burn` would still run, still pass, and still print
-//! reassuringly — while the wallet independently picked a 10,000-zat note and
-//! burned an asset. A check that lies is worse than no check.
+//! ## Sending an asset
 //!
-//! So `assert_no_zsa_notes_at_risk` below **refuses to build the transaction at
-//! all** when a note of exactly 10,000 zatoshis exists in the wallet and has not
-//! been explicitly selected. It fails closed. Nothing is silently protected.
+//! `send_zmap_asset` (below) is the asset path, reached from the UI as
+//! `send_transaction(addr, amount, memo, Some(asset_id))` and routed at
+//! `wallet.rs:119`. `crate::zmap::plan_asset_send` picks the carrier and carries
+//! its memo.
 //!
-//! ## Restoring ZSA sends (the work this defers, not discards)
+//! Three rules that are not obvious and must not be "simplified":
 //!
-//! The fix is to give the wallet back explicit control of note selection —
-//! a custom `InputSource` supplied to `propose_transfer`, rather than a
-//! hand-built `Proposal`. Everything needed for that is preserved here on
-//! purpose:
+//!   * **Inputs are chosen explicitly, not by `propose_transfer`.** Value-based
+//!     selection could take *two* carriers of the same asset to cover a fee and
+//!     return the surplus as ordinary change, destroying a unit. Only the choice
+//!     of inputs is ours; ZIP-317 and the change strategy stay the library's.
+//!   * **The fee comes from separate notes.** Fees are inputs minus outputs, so
+//!     taking it from the carrier would hand the recipient a sub-carrier note and
+//!     destroy the asset. The recipient receives exactly `CARRIER_ZAT`. A wallet
+//!     holding *only* carriers therefore cannot send them — it has nothing to pay
+//!     the fee with.
+//!   * **The memo is reproduced byte for byte and the output is Ironwood**, so
+//!     transferring a legacy Orchard carrier performs the pool migration as a side
+//!     effect. `send_zmap_asset` deliberately ignores the caller's `amount` and
+//!     `memo`: honouring either would let a caller change an asset's identity in
+//!     flight.
 //!
-//!   * the `inputs: &[ProposedInput]` parameter stays in both public signatures
-//!   * selection is confined to `SELECTION` in `build_and_sign_request`, so
-//!     swapping it is a localised change, not a rewrite
-//!   * `validate_anti_burn` and `ProposedInput` are untouched
+//! Proven on mainnet — five Happy Birthday carriers sent, mined and
+//! nullifier-verified at heights 3,457,204 – 3,459,355.
 //!
-//! Restoring pinned selection removes the guard below. Until then the guard is
-//! the only thing standing between an asset holder and a burned asset.
+//! **`build_and_sign_batch_transaction` is the exception: plain ZEC only.**
+//! Multi-recipient sends cannot include an asset, and that refusal is correct
+//! behaviour rather than an unimplemented feature.
 //!
 //! ## Why this was rewritten rather than migrated (2026-08-11)
 //!
-//! The previous version — kept at `native_builder.rs.bak-preironwood-20260811` —
+//! The previous version — untracked, and removed by `git clean -xfd` on 2026-09-14;
+//! recover it from git history at the pre-Ironwood commit if ever needed —
 //! hand-rolled the whole proposal: its own ZIP-317 fee arithmetic, its own change
 //! output built by querying the addresses table, ~400 lines duplicated almost
 //! verbatim between the single and batch entry points. It was already fragile;
@@ -91,6 +103,35 @@ type Db = WalletDb<rusqlite::Connection, MainNetwork, zcash_client_sqlite::util:
 /// Orchard and Sapling notes stay *spendable*; this governs outputs only.
 const CHANGE_POOL: ShieldedPool = ShieldedPool::Ironwood;
 
+/// The "proving parameters missing" message, naming the directory for the platform the
+/// binary is actually running on.
+///
+/// Three call sites previously hardcoded `~/.zcash-params/`. That is correct on Linux and
+/// wrong everywhere else: `LocalTxProver::with_default_location()` resolves per platform,
+/// so a Windows user reading "install them to ~/.zcash-params/" would be sent to a
+/// directory the code never looks in. The paths below match what `zcash_proofs` uses and
+/// what `zecboat_windows.md` / `zecboat_macOS.md` record.
+pub(crate) fn params_not_found() -> String {
+    let dir = if cfg!(target_os = "windows") {
+        // known_folders::RoamingAppData
+        r"%APPDATA%\ZcashParams"
+    } else if cfg!(target_os = "macos") {
+        // NOT ~/Library/Application Support. zcash_proofs uses the `xdg` crate on macOS
+        // (verified in zcash_proofs-0.30.0/src/lib.rs:82-87), so on a stock Mac this is
+        // ~/.local/share/ZcashParams. The Apple-conventional path is the correct-LOOKING
+        // wrong answer, and zecboat_macOS.md flags it as exactly that trap.
+        "~/.local/share/ZcashParams"
+    } else {
+        // home::home_dir().join(".zcash-params")
+        "~/.zcash-params"
+    };
+    format!(
+        "Zcash proving parameters not found. Expected them in {dir}/ \
+         (sapling-spend.params and sapling-output.params). \
+         Without them the wallet can sync and display, but cannot build a transaction."
+    )
+}
+
 /// The ZSA/NFT note denomination `validate_anti_burn` protects.
 /// Lock every ZMAP carrier note so automatic input selection cannot spend it.
 ///
@@ -116,7 +157,7 @@ fn lock_zmap_carriers(wallet_db: &mut Db, target_height: BlockHeight) -> Result<
     // what is displayed as an asset.
     let holdings = {
         let conn = rusqlite::Connection::open_with_flags(
-            wallet_db_path(),
+            wallet_db_path()?,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
         .map_err(|e| anyhow!("could not open the wallet to look for asset notes: {}", e))?;
@@ -178,9 +219,12 @@ const CARRIER_LOCK_BLOCKS: u32 = 40_000;
 /// The wallet this crate operates on. Kept in one place so the lock path and the spend path can
 /// never diverge onto different databases — a bug the previous guard was explicitly written to
 /// avoid by taking its path as an argument.
-fn wallet_db_path() -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    format!("{}/.AppVault/data/wallet.db", home)
+fn wallet_db_path() -> Result<String> {
+    // Was an inlined `env::var("HOME").unwrap_or_default()`. That swallowed a missing
+    // HOME into "", producing /.AppVault/data/wallet.db at the filesystem root with no
+    // error. `crate::paths` fails instead, and is the single definition every call site
+    // now shares — see its module header on why HOME must remain the mechanism.
+    crate::paths::as_string::wallet_db_path()
 }
 
 /// Build a memo padded to the 512-byte ZIP-302 length.
@@ -281,10 +325,9 @@ fn build_and_sign_request(
     )
     .map_err(|e| anyhow!("could not build a spend proposal: {:?}", e))?;
 
-    // Sapling proving parameters, from ~/.zcash-params.
-    let prover = LocalTxProver::with_default_location().ok_or_else(|| {
-        anyhow!("Zcash proving parameters not found. Expected them in ~/.zcash-params/")
-    })?;
+    // Sapling proving parameters. `with_default_location()` resolves per platform — it is
+    // NOT always `~/.zcash-params`, so the error must not name one path as if it were.
+    let prover = LocalTxProver::with_default_location().ok_or_else(|| anyhow!("{}", params_not_found()))?;
 
     let spending_keys = SpendingKeys::from_unified_spending_key(usk.clone());
 
@@ -318,9 +361,13 @@ fn build_and_sign_request(
 /// Send to several recipients in one transaction. **Plain ZEC only.**
 ///
 /// `outputs` is `(address, zatoshis, memo)`. `inputs` is retained for the
-/// caller's anti-burn validation and for the eventual return of pinned
-/// selection; it does **not** control which notes are spent. See the module
-/// header.
+/// caller's anti-burn validation; it does **not** control which notes are spent.
+/// Carriers are protected by `lock_zmap_carriers`, not by this list — see the
+/// module header.
+///
+/// An asset is sent one at a time by `send_zmap_asset`, never here. Carriers are
+/// locked, so automatic selection cannot reach one from this path; the assertion
+/// below records that invariant rather than defending against a reachable state.
 pub fn build_and_sign_batch_transaction(
     mut wallet_db: Db,
     usk: &UnifiedSpendingKey,
@@ -332,17 +379,21 @@ pub fn build_and_sign_batch_transaction(
         return Err(anyhow!("no outputs supplied"));
     }
 
-    // A ZSA transfer means deliberately spending a carrier, which needs a spend policy naming the
-    // carrier lock owner. Not wired yet — refuse rather than quietly send it as ordinary value.
-    if inputs.iter().any(|i| i.is_explicitly_selected_asset) {
-        return Err(anyhow!(
-            "Sending a ZMAP asset is not wired up yet.\n\
-             \n\
-             Carrier notes are now locked so ordinary spends cannot consume them, and this wallet \
-             can send plain ZEC while holding assets. Spending a carrier on purpose additionally \
-             needs a SpendPolicy naming zmap::CARRIER_LOCK_OWNER. See P2-5 in the build plan."
-        ));
-    }
+    // `is_explicitly_selected_asset` is constructed `false` at every site and set `true` nowhere,
+    // so this cannot fire in a shipped build. It is an invariant, not a user-facing error:
+    // a deliberate carrier spend goes through `send_zmap_asset`, which unlocks exactly the one
+    // carrier it is sending under a SpendPolicy naming `zmap::CARRIER_LOCK_OWNER`.
+    //
+    // This was a `return Err("Sending a ZMAP asset is not wired up yet.")` until 2026-09-17.
+    // That string was unreachable but shipped, and a competitive analysis reading the stripped
+    // binary took it for a live limitation and recommended building a feature that already
+    // worked. Dead code that ASSERTS A CAPABILITY IS MISSING is worse than dead code that does
+    // nothing — so the invariant stays, the claim does not.
+    debug_assert!(
+        !inputs.iter().any(|i| i.is_explicitly_selected_asset),
+        "batch send reached with an explicitly selected asset input; \
+         asset transfers must go through send_zmap_asset"
+    );
 
     let mut payments = Vec::with_capacity(outputs.len());
     for (i, (address, amount_zat, memo)) in outputs.iter().enumerate() {
@@ -425,7 +476,7 @@ pub fn send_zmap_asset(
     // ── 1. Resolve exactly which note moves, and what memo it must carry ────────────────────
     let holdings = {
         let conn = rusqlite::Connection::open_with_flags(
-            wallet_db_path(),
+            wallet_db_path()?,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
         crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?)
@@ -655,7 +706,7 @@ pub fn send_zmap_asset(
     .map_err(|e| anyhow!("the asset transfer proposal is not valid: {:?}", e))?;
 
     let prover = LocalTxProver::with_default_location()
-        .ok_or_else(|| anyhow!("Zcash proving parameters not found in ~/.zcash-params/"))?;
+        .ok_or_else(|| anyhow!("{}", params_not_found()))?;
     let spending_keys = SpendingKeys::from_unified_spending_key(usk.clone());
 
     let txids = create_proposed_transactions::<_, _, std::convert::Infallible, _, std::convert::Infallible, _>(

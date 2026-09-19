@@ -52,8 +52,7 @@ pub fn batch_send_transaction(
     }
     
     // 3. Key Extraction: Read and decrypt the spending key using `age`
-    let home = std::env::var("HOME").unwrap_or_default();
-    let identity_path = format!("{}/.AppVault/data/encryption-identity.txt", home);
+    let identity_path = crate::paths::as_string::identity_path()?;
     
     let encrypted_data = std::fs::read(&identity_path)
         .map_err(|e| anyhow!("could not read the encryption identity file at {}: {}", identity_path, e))?;
@@ -92,7 +91,7 @@ pub fn batch_send_transaction(
     use zcash_client_backend::data_api::wallet::TargetHeight;
     use zcash_protocol::ShieldedPool;
     
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     let mut wallet_db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, OsRng)
         .map_err(|e| anyhow!("Failed to open wallet DB: {:?}", e))?;
 
@@ -278,8 +277,7 @@ pub fn send_transaction(
     memo_bytes.resize(512, 0);
     
     // 3. Key Extraction: Read and decrypt the spending key using `age`
-    let home = std::env::var("HOME").unwrap_or_default();
-    let identity_path = format!("{}/.AppVault/data/encryption-identity.txt", home);
+    let identity_path = crate::paths::as_string::identity_path()?;
     
     let encrypted_data = std::fs::read(&identity_path)
         .map_err(|e| anyhow!("could not read the encryption identity file at {}: {}", identity_path, e))?;
@@ -318,7 +316,7 @@ pub fn send_transaction(
     use zcash_client_backend::data_api::wallet::TargetHeight;
     use zcash_protocol::ShieldedPool;
     
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     let mut wallet_db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, OsRng)
         .map_err(|e| anyhow!("Failed to open wallet DB: {:?}", e))?;
 

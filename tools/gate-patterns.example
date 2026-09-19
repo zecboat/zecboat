@@ -10,3 +10,13 @@ STRICT <your-lan-ip>
 STRICT <your-server-ip>
 STRICT <any-test-password>
 BINARY /home/[a-zA-Z0-9_.-]+/
+#
+# Three home-directory shapes, one per platform. A binary built on any of them
+# embeds its source path in debug info and panic messages, so the gate must know
+# all three BEFORE the first Windows or macOS artifact exists — catching it after
+# is the 0.6.2 mistake in a new shape.
+#   /home/<user>/          Linux
+#   C:\Users\<user>\        Windows   (backslashes are literal in ERE, hence \\)
+#   /Users/<user>/         macOS
+BINARY [A-Za-z]:\\Users\\[A-Za-z0-9_.-]+
+BINARY /Users/[A-Za-z0-9_.-]+/

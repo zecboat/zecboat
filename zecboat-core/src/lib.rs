@@ -1,3 +1,4 @@
+pub mod paths;
 pub mod db;
 pub mod wallet;
 pub mod rpc;

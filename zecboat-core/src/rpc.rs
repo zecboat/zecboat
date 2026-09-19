@@ -36,11 +36,11 @@ pub static WALLET_PASSWORD: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::ne
 ///
 /// Mirrors `ironwood_shield/src/shield_iw.rs:44-64`, which is the code path that
 /// successfully unlocked this wallet to build the mined Ironwood transaction.
-fn verify_wallet_passphrase(home: &str, passphrase: &str) -> Result<()> {
+fn verify_wallet_passphrase(passphrase: &str) -> Result<()> {
     use std::io::Read;
     use std::str::FromStr;
 
-    let identity_path = format!("{}/.AppVault/data/encryption-identity.txt", home);
+    let identity_path = crate::paths::as_string::identity_path()?;
     let encrypted = std::fs::read(&identity_path).map_err(|e| {
         anyhow::anyhow!("could not read the wallet identity at {}: {}", identity_path, e)
     })?;
@@ -78,7 +78,6 @@ fn verify_wallet_passphrase(home: &str, passphrase: &str) -> Result<()> {
 }
 
 pub async fn unlock_wallet(password: String, use_yubikey: bool) -> Result<()> {
-    let home = std::env::var("HOME").unwrap_or_default();
 
     let final_password = if use_yubikey {
         crate::yubi::get_yubikey_derived_key(&password)?
@@ -96,7 +95,7 @@ pub async fn unlock_wallet(password: String, use_yubikey: bool) -> Result<()> {
     // Any string unlocked the wallet, so the unlock screen was decoration.
     // The bypass existed to reach the "auto-recovery" code below it, which has
     // also been removed; see the note further down.
-    verify_wallet_passphrase(&home, &final_password)?;
+    verify_wallet_passphrase(&final_password)?;
 
     *WALLET_PASSWORD.lock().unwrap() = Some(final_password);
 
@@ -209,8 +208,18 @@ pub fn start_sync_engine() {
     }
 
     tokio::spawn(async move {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let db_path = format!("{}/.AppVault/data/wallet.db", home);
+        // A spawned task returns `()`, so `?` is unavailable here. Refuse loudly
+        // rather than syncing into a guessed path: if HOME is unset the old code
+        // built `/.AppVault/data/wallet.db` at the filesystem root and reported an
+        // empty balance, which reads as lost funds. Not starting is the safe failure.
+        let db_path = match crate::paths::as_string::wallet_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                println!("[sync] REFUSING to start: {}", e);
+                SYNC_ENGINE_STARTED.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
 
         println!("[sync] starting Zecboat sync engine (gRPC)");
 
@@ -1354,8 +1363,7 @@ pub struct PendingBroadcast {
 ///
 /// `expiry_height = 0` means the transaction never expires, so it is never stale.
 pub fn pending_broadcasts(tip: Option<u32>) -> Result<Vec<PendingBroadcast>> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
 
     if !std::path::Path::new(&db_path).exists() {
         return Ok(Vec::new());
@@ -1458,8 +1466,7 @@ pub async fn check_pending_broadcasts() -> Result<Vec<PendingBroadcast>> {
 /// Erring toward leaving a note marked spent is recoverable by rescan. Erring the other
 /// way hands the user a balance that is not real.
 pub async fn release_expired_transactions() -> Result<String> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     if !std::path::Path::new(&db_path).exists() {
         return Ok("No wallet database.".to_string());
     }
@@ -1714,8 +1721,7 @@ pub async fn sync_status() -> Result<String> {
     
     let mut current_wallet_height = WALLET_HEIGHT.load(Ordering::Relaxed);
     if current_wallet_height == 0 {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let db_path = format!("{}/.AppVault/data/wallet.db", home);
+            let db_path = crate::paths::as_string::wallet_db_path()?;
         if let Ok(conn) = rusqlite::Connection::open(&db_path) {
             // Scanned height if there is one; otherwise the account's BIRTHDAY.
             //
@@ -1801,8 +1807,7 @@ pub async fn get_balance() -> Result<f64> {
     use zcash_client_backend::data_api::wallet::ConfirmationsPolicy;
     use zcash_client_backend::data_api::WalletRead;
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
 
     let wallet_db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, OsRng)
         .map_err(|e| anyhow::anyhow!("could not open wallet: {:?}", e))?;
@@ -1856,8 +1861,7 @@ pub async fn get_transparent_address() -> Result<Vec<Value>> {
     use zcash_client_sqlite::WalletDb;
     use zcash_protocol::consensus::MainNetwork;
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     let wallet_db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, rand::rngs::OsRng)
         .map_err(|e| anyhow::anyhow!("could not open the wallet: {:?}", e))?;
 
@@ -1895,8 +1899,7 @@ pub async fn get_transparent_address() -> Result<Vec<Value>> {
 }
 
 pub async fn get_transparent_balance() -> Result<f64> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     
     if let Ok(conn) = rusqlite::Connection::open(&db_path) {
         let mut total_zats: u64 = 0;
@@ -2139,8 +2142,7 @@ pub async fn send_transaction(address: &str, amount: f64, memo: &str, asset_id: 
 }
 
 pub async fn get_addresses() -> Result<Vec<Value>> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path_str = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path_str = crate::paths::as_string::wallet_db_path()?;
     let db_path = db_path_str.as_str();
     match crate::db::WalletPool::new(db_path) {
         Ok(pool) => {
@@ -2208,8 +2210,7 @@ pub async fn generate_new_address_with(with_transparent: bool) -> Result<String>
     use zcash_client_backend::data_api::{WalletRead, WalletWrite};
     use zcash_keys::keys::UnifiedAddressRequest;
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
 
     let mut wallet_db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, OsRng)
         .map_err(|e| anyhow::anyhow!("could not open wallet: {:?}", e))?;
@@ -2239,9 +2240,8 @@ pub async fn generate_new_address_with(with_transparent: bool) -> Result<String>
 }
 
 pub fn check_initialization_status() -> Result<bool> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
-    let identity_path = format!("{}/.AppVault/data/encryption-identity.txt", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
+    let identity_path = crate::paths::as_string::identity_path()?;
     
     // Returns true if BOTH files exist (initialized)
     Ok(std::path::Path::new(&db_path).exists() && std::path::Path::new(&identity_path).exists())
@@ -2250,8 +2250,7 @@ pub fn check_initialization_status() -> Result<bool> {
 // async so the new account's birthday can be read from the chain tip rather than
 // hardcoded. The Tauri command wrapping this was already async.
 pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday: Option<u32>) -> Result<String> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let data_dir = format!("{}/.AppVault/data", home);
+    let data_dir = crate::paths::as_string::app_data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
     
     // Derive the final password (either plain text or YubiKey HMAC'd)
@@ -2470,8 +2469,7 @@ pub async fn recover_wallet_from_seed(
         }
     }
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let data_dir = format!("{}/.AppVault/data", home);
+    let data_dir = crate::paths::as_string::app_data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
 
     // A fresh identity under the NEW password. This is the whole point: no prior
@@ -2650,14 +2648,13 @@ pub async fn import_wallet(seed: &str) -> Result<()> {
         // position, and a seed phrase must never reach a log or an error dialog.
         .map_err(|_| anyhow::anyhow!("IMPORT_WALLET_ERROR: Invalid BIP-39 seed phrase"))?;
     
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     
     let password = WALLET_PASSWORD.lock().unwrap().clone()
         .ok_or_else(|| anyhow::anyhow!("Wallet must be unlocked to import keys."))?;
         
     // 1. Fetch and decrypt the age identity
-    let identity_path = format!("{}/.AppVault/data/encryption-identity.txt", home);
+    let identity_path = crate::paths::as_string::identity_path()?;
     let encrypted_data = std::fs::read(&identity_path)
         .map_err(|e| anyhow::anyhow!("could not read the encryption identity file: {e}"))?;
     
@@ -2754,8 +2751,7 @@ pub async fn import_wallet(seed: &str) -> Result<()> {
 }
 
 pub async fn get_transactions() -> Result<Vec<Value>> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path_str = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path_str = crate::paths::as_string::wallet_db_path()?;
     let db_path = db_path_str.as_str();
     // Confirmations need the tip. A node being unreachable must not empty the
     // history — the transactions are still real, they just cannot be aged.
@@ -2773,8 +2769,7 @@ pub async fn get_transactions() -> Result<Vec<Value>> {
 }
 
 pub async fn get_invoices() -> Result<Vec<Value>> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path_str = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path_str = crate::paths::as_string::wallet_db_path()?;
     let db_path = db_path_str.as_str();
     if let Ok(pool) = crate::db::WalletPool::new(db_path) {
         if let Ok(invoices) = pool.get_invoices().await {
@@ -2789,8 +2784,7 @@ pub async fn get_invoices() -> Result<Vec<Value>> {
 }
 
 pub async fn add_invoice(invoice_id: String, date: String, items: String, total_zec: f64, total_fiat_value: f64, txid: String) -> Result<()> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path_str = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path_str = crate::paths::as_string::wallet_db_path()?;
     let db_path = db_path_str.as_str();
     if let Ok(pool) = crate::db::WalletPool::new(db_path) {
         pool.add_invoice(invoice_id, date, items, total_zec, total_fiat_value, txid).await?;
@@ -2807,8 +2801,7 @@ pub async fn add_invoice(invoice_id: String, date: String, items: String, total_
 /// `asset_id`, `name` and `amount` are kept for the existing gallery bindings; `amount` is the
 /// carrier count. The remaining fields are additive.
 pub async fn get_zsas() -> Result<Vec<Value>> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     let pool = crate::db::WalletPool::new(&db_path)?;
     let holdings = pool.get_zmap_holdings().await?;
 
@@ -2861,8 +2854,7 @@ pub async fn view_asset(asset_id: String) -> Result<String> {
     }
 
     // Prefer the URI the memo itself declares; fall back to the canonical layout.
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     let declared = match crate::db::WalletPool::new(&db_path) {
         Ok(pool) => pool
             .get_zmap_holdings()
@@ -2943,8 +2935,7 @@ pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
 
     // The hash to check against comes from the memo we hold, not from anything fetched. For legacy
     // prose memos the asset id *is* the image hash; for JSON memos an explicit `image_hash` wins.
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     let expected = match crate::db::WalletPool::new(&db_path) {
         Ok(pool) => pool
             .get_zmap_holdings()
@@ -3125,9 +3116,8 @@ pub async fn shield_transparent() -> Result<String> {
     use zcash_client_backend::data_api::wallet::{SpendingKeys, ConfirmationsPolicy};
     use zcash_client_backend::data_api::WalletRead;
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
-    let identity_path = format!("{}/.AppVault/data/encryption-identity.txt", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
+    let identity_path = crate::paths::as_string::identity_path()?;
     
     let password_str = WALLET_PASSWORD.lock().unwrap().clone()
         .ok_or_else(|| anyhow::anyhow!("Wallet is locked. Password required to decrypt identity file"))?;
@@ -3193,7 +3183,8 @@ pub async fn shield_transparent() -> Result<String> {
     let spending_keys = SpendingKeys::new(usk);
 
     // Load Zcash parameters for proving
-    let prover = LocalTxProver::with_default_location().ok_or_else(|| anyhow::anyhow!("Zcash prover parameters not found. Please install them to ~/.zcash-params/"))?;
+    let prover = LocalTxProver::with_default_location()
+        .ok_or_else(|| anyhow::anyhow!("{}", crate::native_builder::params_not_found()))?;
 
     let input_selector = GreedyInputSelector::<WalletDb<rusqlite::Connection, MainNetwork, SystemClock, OsRng>>::new();
     let change_strategy = SingleOutputChangeStrategy::<WalletDb<rusqlite::Connection, MainNetwork, SystemClock, OsRng>>::new(
@@ -3295,10 +3286,9 @@ pub async fn create_new_account() -> Result<String> {
 }
 
 pub async fn backup_wallet() -> Result<String> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let backup_dir = format!("{}/ZecboatBackups", home);
+    let backup_dir = crate::paths::as_string::backup_dir()?;
     std::fs::create_dir_all(&backup_dir)?;
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     // A clock set before 1970 makes `duration_since` return Err, and `.unwrap()` would
     // then panic the backend while the user was trying to *back up their wallet* — the
     // worst possible moment. Fall back to 0 rather than crash; a badly named backup is
@@ -3313,18 +3303,17 @@ pub async fn backup_wallet() -> Result<String> {
 }
 
 pub async fn restore_backup(backup_name: String) -> Result<String> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let backup_dir = format!("{}/ZecboatBackups", home);
+    let backup_dir = crate::paths::as_string::backup_dir()?;
     let backup_path = format!("{}/{}", backup_dir, backup_name);
     
     if !std::path::Path::new(&backup_path).exists() {
         return Err(anyhow::anyhow!("Backup file not found: {}", backup_path));
     }
     
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     
     // Safety: ensure data dir exists
-    std::fs::create_dir_all(format!("{}/.AppVault/data", home))?;
+    std::fs::create_dir_all(crate::paths::as_string::app_data_dir()?)?;
     
     // Overwrite current wallet.db with the backup
     std::fs::copy(&backup_path, &db_path)?;
@@ -3333,8 +3322,7 @@ pub async fn restore_backup(backup_name: String) -> Result<String> {
 }
 
 pub async fn list_backups() -> Result<Vec<String>> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let backup_dir = format!("{}/ZecboatBackups", home);
+    let backup_dir = crate::paths::as_string::backup_dir()?;
     let mut backups = Vec::new();
     
     if let Ok(entries) = std::fs::read_dir(backup_dir) {
@@ -3357,8 +3345,7 @@ fn extract_mnemonic_internal() -> Result<String> {
     let password_str = WALLET_PASSWORD.lock().unwrap().clone()
         .ok_or_else(|| anyhow::anyhow!("Wallet is locked. Please unlock the wallet first."))?;
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let identity_path = format!("{}/.AppVault/data/encryption-identity.txt", home);
+    let identity_path = crate::paths::as_string::identity_path()?;
     
     let encrypted_data = std::fs::read(&identity_path)
         .map_err(|e| anyhow::anyhow!("could not read the encryption identity file: {e}"))?;
@@ -3385,7 +3372,7 @@ fn extract_mnemonic_internal() -> Result<String> {
     let identity: age::x25519::Identity = std::str::FromStr::from_str(identity_key)
         .map_err(|e| anyhow::anyhow!("Invalid identity format: {:?}", e))?;
 
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     let encrypted_mnemonic_bytes: Vec<u8> = {
         let conn = rusqlite::Connection::open(&db_path)
             .map_err(|e| anyhow::anyhow!("Failed to open DB for mnemonic: {:?}", e))?;
@@ -3480,8 +3467,7 @@ pub async fn validate_address(address: String) -> Result<Value> {
 }
 
 pub async fn get_roster() -> Result<Vec<Value>> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     let conn = rusqlite::Connection::open(&db_path)?;
     conn.execute("CREATE TABLE IF NOT EXISTS roster (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, address TEXT NOT NULL, notes TEXT)", [])?;
     
@@ -3506,8 +3492,7 @@ pub async fn get_roster() -> Result<Vec<Value>> {
 }
 
 pub async fn add_roster_contact(name: String, address: String, notes: String) -> Result<String> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     let conn = rusqlite::Connection::open(&db_path)?;
     conn.execute("CREATE TABLE IF NOT EXISTS roster (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, address TEXT NOT NULL, notes TEXT)", [])?;
     
@@ -3519,8 +3504,7 @@ pub async fn add_roster_contact(name: String, address: String, notes: String) ->
 }
 
 pub async fn delete_roster_contact(id: i64) -> Result<String> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let db_path = format!("{}/.AppVault/data/wallet.db", home);
+    let db_path = crate::paths::as_string::wallet_db_path()?;
     if let Ok(conn) = rusqlite::Connection::open(&db_path) {
         conn.execute("DELETE FROM roster WHERE id = ?1", [id])?;
     }
