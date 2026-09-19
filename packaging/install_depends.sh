@@ -50,7 +50,6 @@ LIBS=(
   libgtk-3-0
   libayatana-appindicator3-1
   librsvg2-2
-  libpcsclite1
 )
 
 # A package may be satisfied by a DIFFERENT package that Provides its name.

@@ -52,8 +52,7 @@
         "depends": [
           "libjavascriptcoregtk-4.1-0",
           "libayatana-appindicator3-1",
-          "librsvg2-2",
-          "libpcsclite1"
+          "librsvg2-2"
         ]
       }
     }

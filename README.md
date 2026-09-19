@@ -83,15 +83,18 @@ sudo apt install -y \
     build-essential pkg-config curl git \
     libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
     libxdo-dev libssl-dev libayatana-appindicator3-dev \
-    librsvg2-dev libpcsclite-dev
+    librsvg2-dev
 ```
 
-Two of these matter more than they look:
+One of these matters more than it looks:
 
-- **`libpcsclite-dev`** — a smartcard library the dependency tree needs. Without it the build fails
-  *before* it reaches Zecboat's own code, and the error never mentions smartcards.
 - **`libwebkit2gtk-4.1-dev`** — the application shell. **Version 4.0 is a different, incompatible
   package** and will not work.
+
+`libpcsclite-dev` was required until 0.6.5 and is no longer. It was pulled in by the `yubikey`
+crate, which was declared but never imported; deleting the crate removed `pcsc-sys` and with it
+the C library. If you are following older instructions you may have installed it — it is now
+harmless but unnecessary.
 
 ### 2. Rust and Node
 
