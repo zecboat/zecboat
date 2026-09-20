@@ -3,7 +3,38 @@
 Notable changes to the Zecboat desktop wallet. Entries describe the user-visible effect,
 not the diff.
 
-## 0.6.5-beta — 2026-09-19
+## 0.6.5-beta.1 — 2026-09-20
+
+**The 0.6.5-beta release was withdrawn. This replaces it.** The wallet is byte-for-byte the
+same program; only the installer beside it changed.
+
+### Fixed
+
+- **`install.sh` looked for a file that was not in the download.** It still named the
+  previous release's artifact — `Zecboat_0.6.3_amd64.deb` — while the zip contained
+  `Zecboat_0.6.5_amd64.deb`, so the documented install path stopped at
+  *"Zecboat_0.6.3_amd64.deb is not in …"*. Anyone following the instructions on the
+  download page could not install. The package itself was never affected: extracting the
+  zip and running `apt install ./Zecboat_0.6.5_amd64.deb` worked throughout.
+
+  The filename is now found by glob rather than written down, and the script refuses unless
+  exactly one artifact matches — so a directory holding two releases stops instead of
+  guessing. The version now lives in one place: the filename the bundler produces.
+
+### Why it was not caught
+
+The release gate extracts every artifact and scans it, but it looks for leaked builder
+paths — it has no opinion about a script that names a file sitting next to it. The source
+tarball, both lockfiles and the binary were all correct, so no proxy would have shown this.
+**Only running the shipped installer does.** That check belongs in `stage.sh` and is not
+there yet.
+
+`0.6.5-beta`'s artifacts were removed from the download server. Its git tag remains: the
+code was sound, and rewriting history to hide a packaging bug would be worse than the bug.
+
+---
+
+## 0.6.5-beta — 2026-09-19 *(withdrawn — see 0.6.5-beta.1)*
 
 **Theme: make the code portable without porting it.** No new platform ships. This removes
 the assumptions that would have made a Windows or macOS port a rewrite — and every item is
