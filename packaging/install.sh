@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install.sh — install Zecboat 0.6.3-beta.
+# install.sh — install Zecboat from the .deb sitting beside this script.
 #
 #   bash install.sh              # deps, verify, install, then how to run it
 #   bash install.sh --run        # …and launch it
@@ -13,8 +13,8 @@
 
 set -uo pipefail
 
-DEB="Zecboat_0.6.3_amd64.deb"
-APPIMAGE="Zecboat_0.6.3_amd64.AppImage"
+# DEB and APPIMAGE are NOT set here. They are discovered from the directory this script
+# is in, after the cd below — see "finding the artifact".
 PKG="zecboat"
 BIN="zecboat-ui"
 
@@ -35,6 +35,27 @@ warn() { printf '    \033[33m%s\033[0m\n' "$*"; }
 die()  { printf '\n\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 cd "$(dirname "${BASH_SOURCE[0]}")" || die "cannot enter the script's directory"
+
+# --- finding the artifact ---------------------------------------------------
+# Discovered by glob, never hard-coded. 0.6.5-beta shipped with the previous release's
+# DEB="Zecboat_0.6.3_amd64.deb" still in place: the installer looked for a file the zip
+# did not contain and died at "is not in", so every download that followed the documented
+# path failed. The version lives in exactly one place — the filename tauri produces — and
+# a glob cannot fall out of step with it.
+shopt -s nullglob
+_debs=(Zecboat_*_amd64.deb)
+_apps=(Zecboat_*_amd64.AppImage)
+shopt -u nullglob
+
+if [[ "$APPIMAGE_ONLY" -eq 1 ]]; then
+  (( ${#_apps[@]} == 1 )) \
+    || die "expected exactly one Zecboat_*_amd64.AppImage beside this script; found ${#_apps[@]} in $(pwd)"
+else
+  (( ${#_debs[@]} == 1 )) \
+    || die "expected exactly one Zecboat_*_amd64.deb beside this script; found ${#_debs[@]} in $(pwd)"
+fi
+DEB="${_debs[0]-}"
+APPIMAGE="${_apps[0]-}"
 
 # --- verify the copy BEFORE anything else -----------------------------------
 say "Verifying"
