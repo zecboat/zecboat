@@ -260,7 +260,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 2.5rem;
+  margin-bottom: 1.75rem;
 }
 
 .logo-image {
@@ -269,11 +269,15 @@
   max-height: 60px;
 }
 
+/* NOT `flex: 1`. That made nav absorb every spare pixel in the sidebar, which — with
+   `.sidebar-bottom { margin-top: auto }` — pinned Network Status to the very bottom of the
+   window. On a tall window the status sat alone, far below the menu, and the taller the
+   window the further away it got. The menu now takes the height it needs and the status
+   follows it. */
 nav {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  flex: 1;
+  gap: 0.25rem;
 }
 
 .nav-item {
@@ -284,7 +288,7 @@ nav {
   font-family: inherit;
   font-size: 1rem;
   font-weight: 500;
-  padding: 0.75rem 1rem;
+  padding: 0.55rem 1rem;
   border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s;
@@ -301,8 +305,15 @@ nav {
   font-weight: 600;
 }
 
+/* `margin-top: auto` is gone with nav's `flex: 1` — see the note above. Network Status now
+   sits just under the last menu item, separated by a rule rather than by empty space, and
+   stays visible without scanning to the bottom of the window. `margin-bottom: auto` keeps
+   the whole block top-aligned in the column. */
 .sidebar-bottom {
-  margin-top: auto;
+  margin-top: 1.25rem;
+  margin-bottom: auto;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
 }
 
 /* Main Content Styles */

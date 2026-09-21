@@ -13,6 +13,24 @@
     source_url: string; bytes: number; image: string | null;
   };
 
+  // Split "Happy Birthday #010" into the range name and the design number.
+  //
+  // The memo is on-chain and immutable -- §5.2 requires byte-identical reproduction, so the
+  // name will read "Happy Birthday #010" forever and nothing here changes that. What the
+  // wallet DISPLAYS is ours, and rendering the number at the same weight as the name makes it
+  // look like a denominator: "#010" reading as "10 of 10". It is not. ZMAP-v0.3 §12.2 says an
+  // issuer's mint count is a lower bound on circulating carriers, and §13 says the protocol
+  // "does not prove scarcity" -- so a UI that implies an edition size is claiming something
+  // the protocol contradicts in writing.
+  //
+  // Shown small and secondary, it reads as what it is: a design number within a range, the way
+  // a card shop has numbered stock forever. The number stays useful for telling two designs
+  // apart; it stops implying how many exist.
+  function splitName(name: string): { range: string; design: string | null } {
+    const m = name.match(/^(.*?)\s*#\s*(\d+)\s*$/);
+    return m ? { range: m[1].trim(), design: `#${m[2]}` } : { range: name, design: null };
+  }
+
   let assets = $state<Asset[]>([]);
   let selectedAssetMetadata = $state<string | null>(null);
   let selectedAssetId = $state<string | null>(null);
@@ -94,6 +112,7 @@
   {/if}
   <div class="asset-grid">
     {#each assets as asset}
+      {@const n = splitName(asset.name)}
       <div class="asset-item" title="ID: {asset.asset_id}" onclick={() => showAssetDetails(asset.asset_id)}>
         <div class="asset-icon">
           <!-- "preview", not "unverified". These bytes genuinely are unchecked — they come from the
@@ -114,7 +133,9 @@
           {/if}
         </div>
         <div class="asset-info">
-          <span class="asset-name">{asset.name}</span>
+          <span class="asset-name">
+            {n.range}{#if n.design}<span class="design-no" title="Design number within the range — not an edition size">{n.design}</span>{/if}
+          </span>
           <span class="asset-balance">{asset.amount} {asset.amount === 1 ? 'unit' : 'units'}</span>
         </div>
       </div>
@@ -317,6 +338,15 @@
     font-weight: 600;
     font-size: 0.9rem;
     color: var(--text-primary, #fff);
+  }
+
+  /* Secondary on purpose — see splitName(). At the same weight as the range name, a design
+     number reads as an edition size. */
+  .design-no {
+    margin-left: 0.4rem;
+    font-weight: 400;
+    font-size: 0.8em;
+    color: var(--text-secondary, #999);
   }
 
   .asset-balance {

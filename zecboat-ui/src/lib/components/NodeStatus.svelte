@@ -46,8 +46,21 @@
   // ~3 block intervals. Zcash block times are Poisson, so gaps of two or three
   // intervals happen on a perfectly healthy chain; alarming on those trains people
   // to ignore the warning, which is worse than not having it.
-  const STALL_MS = 240_000;
+  const QUIET_MS = 240_000;
   const PROVIDER_STALL_MS = 300_000;
+
+  // A quiet gap is not a stall, and conflating them reports a working wallet as broken.
+  //
+  // Observed 2026-09-20: this panel read "Stalled" while the wallet was scanning at
+  // 433 blocks/min and closing a 2,700-block gap — it reached the tip minutes later. The
+  // scanner writes in ~200-block batches with pauses between them, and the pauses lengthen
+  // under CPU contention (that machine was sharing four cores with a compiler, zebrad and
+  // zainod). So "nothing happened for four minutes" was true and "stalled" was false.
+  //
+  // Elapsed silence alone cannot tell slow from stopped. Distinguish by horizon: quiet for
+  // a few minutes is SLOW, quiet for a quarter of an hour is STALLED. A wallet that is
+  // merely starved still lands a batch well inside the longer window.
+  const STALL_MS = 900_000;
 
   const POLL_SYNCING = 2000;
   const POLL_IDLE = 15000;
@@ -62,7 +75,9 @@
 
   // A spinner that turns regardless of progress is decoration. But "not advancing"
   // only means something when there is something to advance TO — hence walletLag.
-  const stalled = $derived(isSyncing && stalledMs > STALL_MS && walletLag > 2);
+  const scanQuiet = $derived(isSyncing && stalledMs > QUIET_MS && walletLag > 2);
+  const stalled = $derived(scanQuiet && stalledMs > STALL_MS);
+  const slow = $derived(scanQuiet && !stalled);
   const providerStuck = $derived(providerStaleMs > PROVIDER_STALL_MS && chainTip > 0);
 
   const eta = $derived(
@@ -145,7 +160,7 @@
     <div class="status-row">
       <span class="label">Provider</span>
       <span class="status-text {cls}">
-        {#if stalled}Stalled{:else if providerStuck}Provider stuck{:else}{status}{/if}
+        {#if stalled}Stalled{:else if slow}Syncing slowly{:else if providerStuck}Provider stuck{:else}{status}{/if}
       </span>
     </div>
 
@@ -175,7 +190,10 @@
         <div class="progress-track"><div class="progress-fill" style="width: {progress}%"></div></div>
         <div class="refresh-indicator">
           {#if stalled}
-            <span class="warn">No progress for {Math.round(stalledMs / 1000)}s.</span>
+            <span class="warn">No progress for {Math.round(stalledMs / 60000)} min.</span>
+          {:else if slow}
+            <span class="spinner">↻</span>
+            Scanning — last batch {Math.round(stalledMs / 1000)}s ago
           {:else}
             <span class="spinner">↻</span>
             Scanning{#if blocksPerSec > 0.01} · {blocksPerSec.toFixed(1)} blocks/s{/if}{#if eta > 0} · {fmtEta(eta)} left{/if}
