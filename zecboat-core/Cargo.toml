@@ -73,6 +73,23 @@ base64 = "0.22"
 bytes = "1"
 axum = "0.7"
 
+# --- issuance verification (the "Design Verified" badge) ---------------------
+#
+# ZMAP-v0.3 §9 checks 1, 3, 4 and 5. Check 6 (artwork hash) already runs via sha2.
+#
+# ed25519-dalek verifies the issuer signature over the manifest's RAW BYTES. Never
+# canonicalise: §"Signatures are over RAW FILE BYTES" -- the signature covers exactly what
+# was served, and re-serialising JSON breaks it. Pure Rust, so 0.6.5's removal of C
+# dependencies stands.
+ed25519-dalek = "2"
+#
+# zcash_note_encryption is what makes check 5 possible in the wallet: recover an output
+# from a published OCK. It was already in the tree transitively; naming it makes the
+# dependency deliberate rather than accidental. Version matches ironwood_shield, which is
+# where the reference implementation lives.
+zcash_note_encryption = "0.4"
+
+
 
 
 # [build-dependencies] removed 2026-08-10.

@@ -126,6 +126,17 @@ async fn view_asset(asset_id: String) -> Result<String, String> {
 /// `image` is null when verification fails — there is deliberately no way to obtain
 /// unverified artwork through this command.
 #[tauri::command]
+// Issuance verification -- ZMAP-v0.3 §9 checks 1, 3, 4 and 5, against a PINNED issuer key.
+// Distinct from verify_asset_image, which is check 6 alone. §12.1 forbids presenting 1-4 and 6
+// as "genuine" without 5, so the two are separate commands returning separate states.
+async fn verify_issuance(asset_id: String) -> Result<serde_json::Value, String> {
+    let state = zecboat_core::verify_issuance(asset_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(state).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn verify_asset_image(asset_id: String) -> Result<serde_json::Value, String> {
     zecboat_core::verify_asset_image(asset_id).await.map_err(|e| e.to_string())
 }
@@ -229,7 +240,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sync_status, set_provider_url, get_balance, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
-            registry_base, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image,
+            registry_base, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, lock_wallet,
             create_new_account, backup_wallet, list_backups, restore_backup, export_keys, get_viewkey, check_yubikey,
             get_roster, add_roster_contact, delete_roster_contact, validate_address

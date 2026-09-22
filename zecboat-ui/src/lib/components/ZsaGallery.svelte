@@ -36,6 +36,17 @@
   let selectedAssetId = $state<string | null>(null);
   let isLoadingMetadata = $state(false);
   let verification = $state<Verification | null>(null);
+
+  // Issuance verification -- §9 checks 1, 3, 4 and 5, against an issuer key PINNED in the
+  // binary. Deliberately separate from the artwork check: §12.1 forbids presenting checks
+  // 1-4 and 6 as "genuine" without 5, so the two results are never merged into one tick.
+  type Badge =
+    | { state: 'verified'; issuer: string; issuance_txid: string; issuance_height: number; checks: string[]; caveat: string }
+    | { state: 'not_listed'; issuer: string; detail: string }
+    | { state: 'signature_failed'; detail: string }
+    | { state: 'could_not_check'; detail: string };
+  let badge = $state<Badge | null>(null);
+  let isCheckingIssuance = $state(false);
   let verifyError = $state<string | null>(null);
   let isVerifying = $state(false);
 
@@ -66,6 +77,15 @@
     isVerifying = true;
     verification = null;
     verifyError = null;
+    badge = null;
+    isCheckingIssuance = true;
+
+    // Runs independently of the artwork check. One failing must not hide the other's result,
+    // and "could not reach the registry" is not a verdict about the asset.
+    invoke<Badge>("verify_issuance", { assetId })
+      .then((b) => { badge = b; })
+      .catch((e: any) => { badge = { state: 'could_not_check', detail: String(e) }; })
+      .finally(() => { isCheckingIssuance = false; });
 
     // Metadata is descriptive and host-trusted. The image check is the part that needs no trust,
     // so it runs independently — one failing must not hide the other's result.
@@ -88,6 +108,7 @@
     selectedAssetId = null;
     verification = null;
     verifyError = null;
+    badge = null;
   }
 
   // Straight parse of the published metadata. The previous version also base64-decoded an
@@ -164,18 +185,41 @@
               ✓ Artwork matches the memo&rsquo;s commitment
               <span class="verify-detail">sha256 {verification.expected_hash.slice(0, 16)}… · {(verification.bytes / 1024).toFixed(0)} KB</span>
             </div>
-            <!-- The check above is honest about what it did, but a green tick with nothing beside it
-                 still reads as "this asset is genuine". It is not that: a forger can copy a memo and
-                 point it at the same artwork, and this check passes for them too. State the gap
-                 rather than leave the tick to be over-read. Replaced by the four-state display once
-                 issuance verification lands. -->
-            <div class="verify-badge unknown">
-              Issuance not checked
-              <span class="verify-detail">
-                This confirms the artwork matches the identifier in the memo. It does not confirm who
-                issued this asset, or that this note is the one they issued.
-              </span>
-            </div>
+            <!-- The artwork check above says only that the bytes match the memo's identifier. A
+                 forger can copy a memo and point it at the same artwork and pass it too. The
+                 issuance badge below is the one that says who made this, and it is kept separate
+                 so the two can never merge into a single tick -- §12.1 forbids exactly that. -->
+            {#if isCheckingIssuance}
+              <div class="verify-badge checking">Checking issuance against a pinned issuer key…</div>
+            {:else if badge?.state === 'verified'}
+              <div class="verify-badge ok">
+                ✓ Design verified — genuinely from {badge.issuer}
+                <span class="verify-detail">
+                  {#each badge.checks as c}<span class="check-line">✓ {c}</span>{/each}
+                  <span class="check-line mono">issuance {badge.issuance_txid.slice(0, 16)}… · height {badge.issuance_height.toLocaleString()}</span>
+                </span>
+                <!-- The caveat ships WITH the tick, not beneath a fold. A badge that states its
+                     own limits is the difference between a claim and an overclaim. -->
+                <span class="verify-detail caveat">{badge.caveat}</span>
+              </div>
+            {:else if badge?.state === 'not_listed'}
+              <div class="verify-badge bad">
+                ✕ Not issued by {badge.issuer}
+                <span class="verify-detail">{badge.detail}</span>
+              </div>
+            {:else if badge?.state === 'signature_failed'}
+              <div class="verify-badge bad">
+                ✕ Issuance check failed
+                <span class="verify-detail">{badge.detail}</span>
+              </div>
+            {:else if badge?.state === 'could_not_check'}
+              <!-- NOT a verdict about the asset. Rendering this as a failure would defame a
+                   holder whose network is simply down. -->
+              <div class="verify-badge unknown">
+                Issuance could not be checked
+                <span class="verify-detail">{badge.detail}</span>
+              </div>
+            {/if}
           {:else if verification && !verification.verified}
             <div class="verify-badge bad">
               ✕ Artwork does NOT match the memo
@@ -332,6 +376,18 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+  }
+
+  .check-line {
+    display: block;
+    margin-top: 0.15rem;
+  }
+  /* Secondary, but present. The limits travel with the badge. */
+  .verify-detail.caveat {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border-color, #333);
+    opacity: 0.8;
   }
 
   .asset-name {
