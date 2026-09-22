@@ -59,6 +59,18 @@ const PINNED_ISSUERS: &[(&str, &str)] = &[
     ),
 ];
 
+/// The pinned keys, for the About panel.
+///
+/// Published deliberately: the badge claims to verify "against a key pinned in this wallet",
+/// and a claim a user cannot inspect is a claim they have to take on trust. These are public
+/// keys — showing them costs nothing and makes the badge checkable.
+pub fn pinned_issuers() -> Vec<serde_json::Value> {
+    PINNED_ISSUERS
+        .iter()
+        .map(|(label, key)| serde_json::json!({ "range": label, "key": key }))
+        .collect()
+}
+
 /// What the badge is allowed to say. Four states, never one tick.
 ///
 /// The three failure states are distinct on purpose. Collapsing "could not reach the registry"

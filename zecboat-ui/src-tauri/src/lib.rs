@@ -126,6 +126,13 @@ async fn view_asset(asset_id: String) -> Result<String, String> {
 /// `image` is null when verification fails — there is deliberately no way to obtain
 /// unverified artwork through this command.
 #[tauri::command]
+// What the wallet can honestly say about itself: which build is running, which keys it trusts,
+// where its data lives, and what it does NOT do.
+async fn wallet_about() -> Result<serde_json::Value, String> {
+    zecboat_core::wallet_about().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 // Asked BEFORE a send, so the constraint can be explained rather than hit. A carrier is
 // exactly CARRIER_ZAT and cannot pay its own fee -- a wallet holding only carriers cannot
 // send them, and the raw backend error for that is unreadable.
@@ -248,7 +255,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sync_status, set_provider_url, get_balance, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
-            registry_base, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, fee_readiness,
+            registry_base, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, lock_wallet,
             create_new_account, backup_wallet, list_backups, restore_backup, export_keys, get_viewkey, check_yubikey,
             get_roster, add_roster_contact, delete_roster_contact, validate_address

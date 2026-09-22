@@ -2925,6 +2925,56 @@ pub async fn view_asset(asset_id: String) -> Result<String> {
 ///
 /// The URL is derived from the **memo's** hash, never from host-supplied metadata, so a tampered
 /// metadata record cannot redirect the fetch.
+/// Everything the wallet can honestly say about itself, for the About panel.
+///
+/// **Why the build hash is here.** Until now the only way to know which binary was running was
+/// the launcher script printing it, or `/proc/<pid>/fd`. A wallet holding real funds should be
+/// able to answer "what am I running?" from inside itself, so a user can compare it against the
+/// published `SHA256SUMS` without a terminal.
+///
+/// **And the honest limit that ships with it:** a tampered binary can lie about its own hash.
+/// This is a convenience for comparing against the published sums, **not** a security control.
+/// Saying so is the difference between a useful field and a false one.
+///
+/// The pinned issuer keys are included because the badge claims to check against "a key pinned
+/// in this wallet" — and that claim should be inspectable rather than taken on faith.
+pub async fn wallet_about() -> Result<Value> {
+    use sha2::{Digest, Sha256};
+
+    // Hash of the running executable. Failure here is not an error: a packaged build may live
+    // somewhere unreadable, and "unknown" is a better answer than refusing to render the panel.
+    let (build_hash, exe_path) = match std::env::current_exe() {
+        Ok(p) => {
+            let h = std::fs::read(&p)
+                .map(|b| format!("{:x}", Sha256::digest(&b)))
+                .unwrap_or_else(|_| "unreadable".into());
+            (h, p.display().to_string())
+        }
+        Err(_) => ("unknown".into(), "unknown".into()),
+    };
+
+    Ok(serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "build_hash": build_hash,
+        "build_hash_caveat":
+            "This is the SHA-256 of the running program, computed by the running program. \
+             Compare it with SHA256SUMS from the download page. A tampered binary could report \
+             a hash it is not — this is a convenience, not a security control.",
+        "executable": exe_path,
+        "wallet_db": crate::paths::as_string::wallet_db_path().unwrap_or_else(|e| e.to_string()),
+        "node": grpc_endpoint(),
+        "registry": registry_base(),
+        "pinned_issuers": crate::issuance::pinned_issuers(),
+        "release_key": "e23a2fed8f8134005ba47a3d800509678ef913d65dbe8e39d2cffc778219ed0d",
+        "does_not": [
+            "Mint. Issuance is a separate application with separate keys — a wallet that can mint is a wallet that can forge.",
+            "Prove how many of an asset exist. No ZMAP asset can; see ZMAP-v0.3 §13.",
+            "Prove who holds an asset now. Shielded notes do not reveal ownership, to anyone, including us.",
+            "See your holdings — and for the same reason, recover them for you."
+        ]
+    }))
+}
+
 /// Pre-flight for the send screen: can this wallet pay a fee, and what is in the way?
 ///
 /// Returned BEFORE a send is attempted, so the UI can explain the constraint instead of

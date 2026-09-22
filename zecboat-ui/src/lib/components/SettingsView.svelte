@@ -3,6 +3,19 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
 
+  // About panel. Everything here is either public or a path the user already owns -- no
+  // secret is rendered. The build hash lets someone compare what they are running against
+  // SHA256SUMS without opening a terminal, and the pinned keys make the Design Verified
+  // badge's "a key pinned in this wallet" claim inspectable instead of taken on trust.
+  type About = {
+    version: string; build_hash: string; build_hash_caveat: string; executable: string;
+    wallet_db: string; node: string; registry: string;
+    pinned_issuers: { range: string; key: string }[];
+    release_key: string; does_not: string[];
+  };
+  let about = $state<About | null>(null);
+  invoke<About>("wallet_about").then((a) => { about = a; }).catch(() => { about = null; });
+
   // Where the wallet streams compact blocks from. Every option speaks the same
   // lightwalletd gRPC protocol (CompactTxStreamer); only the host differs.
   type NodePreset = {
@@ -424,6 +437,65 @@
     {/if}
   </div>
 
+  <div class="settings-section card">
+    <h3>About this wallet</h3>
+    {#if about}
+      <div class="about-grid">
+        <span class="about-label">Version</span>
+        <span class="about-value">{about.version}</span>
+
+        <span class="about-label">Build</span>
+        <span class="about-value mono">
+          {about.build_hash.slice(0, 32)}…
+          <CopyButton value={about.build_hash} label="Copy" compact title="Copy the full build hash" />
+        </span>
+
+        <span class="about-label">Wallet data</span>
+        <span class="about-value mono">{about.wallet_db}</span>
+
+        <span class="about-label">Node</span>
+        <span class="about-value mono">{about.node}</span>
+
+        <span class="about-label">Registry</span>
+        <span class="about-value mono">{about.registry}</span>
+      </div>
+
+      <!-- Shipped with the hash, not hidden behind it. A build that can lie about its own
+           hash is exactly the case a user needs told about, and stating it is the difference
+           between a useful field and a false one. -->
+      <p class="about-note">{about.build_hash_caveat}</p>
+
+      <h4>Issuer keys pinned in this build</h4>
+      <p class="about-note">
+        The Design Verified badge checks signatures against these keys, compiled in. They are
+        never fetched, so a compromised website cannot change which issuers this wallet trusts.
+        Changing them takes a new release.
+      </p>
+      <div class="about-grid">
+        {#each about.pinned_issuers as p}
+          <span class="about-label">{p.range}</span>
+          <span class="about-value mono">{p.key.slice(0, 32)}…
+            <CopyButton value={p.key} label="Copy" compact title="Copy the full key" />
+          </span>
+        {/each}
+        <span class="about-label">Release signing</span>
+        <span class="about-value mono">{about.release_key.slice(0, 32)}…
+          <CopyButton value={about.release_key} label="Copy" compact title="Copy the full key" />
+        </span>
+      </div>
+
+      <!-- The section nothing else in this space has. The limits are already published in
+           ZMAP-v0.3 §13; putting them inside the product means a sceptic has somewhere to land
+           without leaving it. -->
+      <h4>What this wallet does not do</h4>
+      <ul class="about-list">
+        {#each about.does_not as d}<li>{d}</li>{/each}
+      </ul>
+    {:else}
+      <p class="about-note">Reading build information…</p>
+    {/if}
+  </div>
+
   <!-- Security section hidden 2026-09-01. Every control here operated a MOCK: no YubiKey
        is ever contacted, and "Simulate Physical Touch" is exactly what it says. Telling a
        user their wallet is protected from physical access and keyloggers when it is not is
@@ -463,6 +535,36 @@
     border-radius: 16px;
     padding: 1.5rem 2rem;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  }
+
+  .about-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.45rem 1rem;
+    align-items: baseline;
+    margin: 0.75rem 0;
+  }
+  .about-label { color: var(--text-secondary, #999); font-size: 0.85rem; }
+  .about-value { color: var(--text-primary, #fff); font-size: 0.9rem; word-break: break-all; }
+  .about-value.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.82rem; }
+  .about-note {
+    color: var(--text-secondary, #999);
+    font-size: 0.82rem;
+    line-height: 1.55;
+    margin: 0.5rem 0 0;
+  }
+  .about-list {
+    margin: 0.5rem 0 0;
+    padding-left: 1.1rem;
+    color: var(--text-secondary, #bbb);
+    font-size: 0.85rem;
+    line-height: 1.6;
+  }
+  .about-list li { margin-bottom: 0.4rem; }
+  h4 {
+    margin: 1.5rem 0 0;
+    font-size: 0.95rem;
+    color: var(--text-primary, #fff);
   }
 
   h3 {
