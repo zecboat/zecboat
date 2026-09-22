@@ -2925,6 +2925,18 @@ pub async fn view_asset(asset_id: String) -> Result<String> {
 ///
 /// The URL is derived from the **memo's** hash, never from host-supplied metadata, so a tampered
 /// metadata record cannot redirect the fetch.
+/// Pre-flight for the send screen: can this wallet pay a fee, and what is in the way?
+///
+/// Returned BEFORE a send is attempted, so the UI can explain the constraint instead of
+/// surfacing `InsufficientFunds { available: 10000, required: 20000 }` against a balance it is
+/// showing as healthy.
+pub async fn fee_readiness() -> Result<Value> {
+    let db_path = crate::paths::as_string::wallet_db_path()?;
+    let pool = crate::db::WalletPool::new(&db_path)?;
+    let r = pool.fee_readiness().await?;
+    Ok(serde_json::to_value(r)?)
+}
+
 pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
     if asset_id.len() != 64 || !asset_id.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(anyhow::anyhow!(

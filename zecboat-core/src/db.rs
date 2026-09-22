@@ -49,6 +49,14 @@ impl WalletPool {
         .map_err(|e| anyhow::anyhow!("Interact error: {:?}", e))?
     }
 
+    /// Can this wallet pay a network fee? See `zmap::fee_readiness` for why this needs asking.
+    pub async fn fee_readiness(&self) -> Result<crate::zmap::FeeReadiness> {
+        let conn = self.pool.get().await?;
+        conn.interact(|conn| crate::zmap::fee_readiness(conn).map_err(anyhow::Error::from))
+            .await
+            .map_err(|e| anyhow::anyhow!("Interact error: {:?}", e))?
+    }
+
     pub async fn get_real_balance(&self) -> Result<f64> {
         let conn = self.pool.get().await?;
         conn.interact(|conn| {

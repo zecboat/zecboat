@@ -825,3 +825,78 @@ mod tests {
         assert!(!verify_image(b"different bytes", &h).unwrap());
     }
 }
+
+/// Can this wallet pay a network fee, and therefore send anything at all?
+///
+/// **Why this needs a dedicated answer.** A carrier is exactly `CARRIER_ZAT` = 10,000 zat, and
+/// the fee cannot be taken out of it: fees are inputs minus outputs, so shaving the carrier
+/// would hand the recipient a sub-carrier note and **destroy the asset**. `send_zmap_asset`
+/// therefore funds fees from separate notes — and the consequence, stated in `native_builder`'s
+/// own module docs, is that **a wallet holding only carriers cannot send them**.
+///
+/// Without this check the failure surfaces as the backend's raw error:
+///
+/// ```text
+/// InsufficientFunds { available: Zatoshis(10000), required: Zatoshis(20000) }
+/// ```
+///
+/// against a balance the UI is simultaneously displaying as healthy. That is not a message
+/// anyone can act on. It cost a day on 2026-09-03 when the cause was a pool mismatch rather
+/// than this, and it will read identically to a user who simply holds no spendable ZEC.
+///
+/// `fee_zat` is an estimate, not a quote: the real fee is ZIP-317 over the action count, which
+/// is not known until inputs are chosen. It is deliberately generous, because telling someone
+/// they have enough when they do not is the failure this exists to prevent.
+#[derive(Debug, serde::Serialize)]
+pub struct FeeReadiness {
+    /// Unspent value in notes that are NOT carriers — the only money a fee can come from.
+    pub spendable_zat: u64,
+    /// How many carriers are held. These are assets; spending one as ZEC destroys it.
+    pub carrier_count: u64,
+    /// Value locked in carriers. Shown so the arithmetic in the UI reconciles.
+    pub carrier_zat: u64,
+    /// A generous ZIP-317 estimate.
+    pub fee_zat: u64,
+    /// True when `spendable_zat` covers `fee_zat`.
+    pub can_pay_fee: bool,
+}
+
+/// Rough upper bound on a ZIP-317 fee for a small transfer.
+///
+/// `max(actions - 2, 0) * 5_000 + 10_000`. A transfer with a carrier in, a carrier out and a
+/// change note lands at 4 actions -> 20,000. Quoting that rather than the 10,000 minimum means
+/// the check errs toward "you need a little more", never toward a surprise at send time.
+pub const ESTIMATED_FEE_ZAT: u64 = 20_000;
+
+pub fn fee_readiness(conn: &rusqlite::Connection) -> rusqlite::Result<FeeReadiness> {
+    let mut stmt = conn.prepare(
+        "SELECT v.value
+           FROM v_received_outputs v
+           LEFT JOIN v_received_output_spends s
+             ON v.id_within_pool_table = s.received_output_id AND v.pool = s.pool
+          WHERE s.transaction_id IS NULL",
+    )?;
+    let values = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+
+    let (mut spendable_zat, mut carrier_count, mut carrier_zat) = (0u64, 0u64, 0u64);
+    for v in values {
+        let v = v? as u64;
+        // Exactly CARRIER_ZAT is the carrier test the rest of the codebase uses. A note of
+        // exactly 10,000 zat that is NOT an asset is indistinguishable here and is treated as a
+        // carrier -- erring toward protecting an asset rather than toward spending one.
+        if v == CARRIER_ZAT {
+            carrier_count += 1;
+            carrier_zat += v;
+        } else {
+            spendable_zat += v;
+        }
+    }
+
+    Ok(FeeReadiness {
+        spendable_zat,
+        carrier_count,
+        carrier_zat,
+        fee_zat: ESTIMATED_FEE_ZAT,
+        can_pay_fee: spendable_zat >= ESTIMATED_FEE_ZAT,
+    })
+}

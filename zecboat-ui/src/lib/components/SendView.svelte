@@ -59,6 +59,23 @@
 
   let isSending = $state(false);
   let showConfirmation = $state(false);
+
+  // Fee readiness -- asked before a send, not discovered during one.
+  //
+  // A carrier is exactly CARRIER_ZAT = 10,000 zat and the fee cannot come out of it: shaving
+  // the carrier would hand the recipient a sub-carrier note and destroy the asset. So the fee
+  // must come from ordinary notes, and a wallet holding only carriers cannot send anything.
+  //
+  // Without this the user meets the backend's raw error --
+  //   InsufficientFunds { available: Zatoshis(10000), required: Zatoshis(20000) }
+  // -- against a balance this screen is showing as healthy. Unactionable.
+  type Fee = {
+    spendable_zat: number; carrier_count: number; carrier_zat: number;
+    fee_zat: number; can_pay_fee: boolean;
+  };
+  let fee = $state<Fee | null>(null);
+  invoke<Fee>("fee_readiness").then((f) => { fee = f; }).catch(() => { fee = null; });
+  const zec = (z: number) => (z / 100_000_000).toFixed(8);
   let useHardwareWallet = $state(false);
   let isWaitingForHardware = $state(false);
   let txResult = $state<{success: boolean, message: string, txid?: string} | null>(null);
@@ -161,9 +178,19 @@
       memo = "";
       showConfirmation = false;
     } catch (err: any) {
+      // Translate the one error users actually hit. The backend message is correct and
+      // unreadable; leaving it raw is how "InsufficientFunds" gets reported against a healthy
+      // balance with no explanation of why.
+      const raw = String(err);
+      const insufficient = raw.includes("InsufficientFunds");
       txResult = {
         success: false,
-        message: `Error: ${err}`
+        message: insufficient
+          ? `Not enough ordinary ZEC to pay the network fee. Shielded assets are carried by ` +
+            `notes of exactly 0.00010000 ZEC, and the fee cannot be taken from one without ` +
+            `destroying the asset — so it must come from other funds. Add a small amount of ` +
+            `ZEC and try again.  (${raw})`
+          : `Error: ${raw}`
       };
       showConfirmation = false;
       isWaitingForHardware = false;
@@ -175,6 +202,25 @@
 </script>
 
 <div class="send-view card">
+  <!-- Stated up front, before anything is typed. Discovering this after composing a
+       transaction is the experience this replaces. Shown only when it is actually a
+       problem: a wallet with ordinary ZEC never sees it. -->
+  {#if fee && !fee.can_pay_fee}
+    <div class="fee-warning">
+      <strong>Not enough ordinary ZEC to pay a network fee.</strong>
+      <span>
+        You hold {zec(fee.spendable_zat)} ZEC that can pay a fee, and a fee costs about
+        {zec(fee.fee_zat)} ZEC.
+        {#if fee.carrier_count > 0}
+          Your {fee.carrier_count} shielded asset{fee.carrier_count === 1 ? '' : 's'}
+          ({zec(fee.carrier_zat)} ZEC) cannot pay it: each is carried by a note of exactly
+          0.00010000 ZEC, and taking the fee from one would destroy the asset.
+        {/if}
+        Add a small amount of ZEC to send anything from this wallet.
+      </span>
+    </div>
+  {/if}
+
   {#if !showConfirmation}
     <form onsubmit={handleReview}>
       <div class="form-group slide-in">
@@ -245,6 +291,16 @@
   {:else}
     <div class="confirmation-screen slide-in">
       <h3>Confirm Transaction</h3>
+      {#if fee && assetType === "ZSA"}
+        <!-- The fee source, on the confirmation screen, because this is the moment someone
+             asks "where does the fee come from?" The recipient gets exactly the carrier;
+             the fee comes from elsewhere or the asset would be destroyed. -->
+        <p class="fee-note">
+          The recipient receives the asset's carrier note of exactly 0.00010000 ZEC. The
+          network fee of about {zec(fee.fee_zat)} ZEC is paid from your other funds — never
+          from the carrier, which would destroy the asset.
+        </p>
+      {/if}
       
       <div class="confirm-details">
         <div class="detail-row">
@@ -303,6 +359,27 @@
 </div>
 
 <style>
+  .fee-warning {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-bottom: 1.25rem;
+    padding: 0.85rem 1rem;
+    border-radius: 10px;
+    border: 1px solid #ffd60055;
+    background: #ffd6000f;
+    color: var(--text-primary, #fff);
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+  .fee-warning span { color: var(--text-secondary, #bbb); }
+  .fee-note {
+    margin: 0 0 1rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--text-secondary, #999);
+  }
+
   .card {
     background: var(--surface-color, #1e1e1e);
     border: 1px solid var(--border-color, #2c2c2c);
