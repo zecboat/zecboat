@@ -1063,6 +1063,18 @@ pub async fn set_provider_url(new_url: String) -> Result<()> {
     Ok(())
 }
 
+/// What the backend resolved at startup — `ZECBOAT_PROVIDER` if it was set, the
+/// compiled-in default otherwise.
+///
+/// The UI needs this because it cannot otherwise tell the two apart, and the
+/// difference matters: an operator who exported `ZECBOAT_PROVIDER` has already
+/// stated which node they trust, and a wizard that offers them a preset list
+/// without it will quietly overrule that choice on the one screen where the
+/// stakes are highest — the one where a seed phrase is being typed.
+pub async fn get_provider_url() -> Result<String> {
+    Ok(PROVIDER_URL.lock().unwrap().clone())
+}
+
 /// The gRPC endpoint for the currently selected provider.
 ///
 /// Used verbatim. This previously special-cased the Port host, rewriting it to add

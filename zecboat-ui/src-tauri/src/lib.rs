@@ -241,6 +241,11 @@ async fn set_provider_url(url: String) -> Result<(), String> {
     zecboat_core::set_provider_url(url).await.map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn get_provider_url() -> Result<String, String> {
+    zecboat_core::get_provider_url().await.map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -253,7 +258,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            sync_status, set_provider_url, get_balance, get_transparent_balance, send_transaction, get_addresses,
+            sync_status, set_provider_url, get_provider_url, get_balance, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
             registry_base, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, lock_wallet,

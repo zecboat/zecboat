@@ -88,7 +88,23 @@
   // on every app start. Re-apply the user's saved choice on mount.
   onMount(async () => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (!saved) return;
+    if (!saved) {
+      // No stored choice. Do NOT leave the screen showing "public" — the backend may
+      // have resolved something else entirely from ZECBOAT_PROVIDER, and a Settings
+      // panel that names the wrong node is worse than one that names none: it is the
+      // screen a user opens specifically to find out where their wallet is talking.
+      try {
+        const current = (await invoke<string>("get_provider_url"))?.trim() ?? "";
+        if (!current) return;
+        const preset = NODE_PRESETS.find(p => p.url === current);
+        nodeUrl = current;
+        selectedPreset = preset ? preset.id : "custom";
+        if (!preset) customUrl = current;
+      } catch (e) {
+        console.error("Could not read the current node endpoint:", e);
+      }
+      return;
+    }
     try {
       const { presetId, url } = JSON.parse(saved);
 
@@ -484,13 +500,11 @@
         </span>
       </div>
 
-      <!-- The section nothing else in this space has. The limits are already published in
-           ZMAP-v0.3 §13; putting them inside the product means a sceptic has somewhere to land
-           without leaving it. -->
-      <h4>What this wallet does not do</h4>
-      <ul class="about-list">
-        {#each about.does_not as d}<li>{d}</li>{/each}
-      </ul>
+      <!-- "What this wallet does not do" was here. Removed 2026-09-22 at the owner's
+           direction: the limits belong in ZMAP-v0.3 §13 and on the website, not on a
+           settings panel a holder opens to check a build hash. `wallet_about` still
+           returns `does_not`, so nothing downstream breaks and the text has one home
+           rather than two that can drift apart. -->
     {:else}
       <p class="about-note">Reading build information…</p>
     {/if}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { onMount } from "svelte";
 
   let { onComplete } = $props<{ onComplete: () => void }>();
 
@@ -37,7 +38,38 @@
   let nodePreference = $state("local");
   let useYubikey = $state(false);
 
+  // What the backend resolved at startup. Non-empty only when ZECBOAT_PROVIDER was
+  // exported and names something the preset list does not already cover.
+  let configuredUrl = $state("");
+  // Where Continue goes after the node screen: the create flow and the restore flow
+  // both pass through it, and they resume at different places.
+  let afterNode = $state(4);
+  // The restore flow reaches the node screen too. It used to skip it entirely —
+  // handleRestore opened the seed modal directly — so restoring a wallet made no
+  // node choice at all and silently used the compiled-in default. On a downloaded
+  // build with no ZECBOAT_PROVIDER that is a public lightwalletd, contacted before
+  // the user has been offered any say in it.
+  let pendingRestore = $state(false);
+
+  onMount(async () => {
+    // An operator who exported ZECBOAT_PROVIDER has already said which node they
+    // trust. Offering them a two-item preset list and silently overruling that is
+    // wrong on any screen and worst on this one, where a seed phrase is about to be
+    // typed. Surface it as a preselected option instead.
+    try {
+      const current = (await invoke<string>("get_provider_url"))?.trim() ?? "";
+      if (current && !Object.values(NODE_URLS).includes(current)) {
+        configuredUrl = current;
+        nodePreference = "configured";
+      }
+    } catch (e) {
+      // A missing getter is not a reason to block onboarding; fall back to presets.
+      console.error("Could not read the configured node endpoint:", e);
+    }
+  });
+
   async function handleCreate() {
+    afterNode = 4; // Password
     currentScreen = 2; // Move to Node Selection
   }
 
@@ -53,7 +85,10 @@
   async function handleNodeSelection() {
     // Previously this discarded nodePreference entirely and just advanced the
     // screen, so the wizard's choice never reached the backend.
-    const url = NODE_URLS[nodePreference] ?? NODE_URLS.local;
+    const url =
+      nodePreference === "configured"
+        ? configuredUrl
+        : NODE_URLS[nodePreference] ?? NODE_URLS.local;
     try {
       await invoke("set_provider_url", { url });
       localStorage.setItem(
@@ -61,14 +96,30 @@
         // "public", not "port". SettingsView's presets were renamed when the retired
         // Zecboat Port host was removed; writing the old id here left a brand new
         // user's Settings screen with nothing selected and the Custom field hidden.
-        JSON.stringify({ presetId: nodePreference === "remote" ? "public" : "local", url })
+        //
+        // "configured" is stored as "custom": SettingsView has no preset for an
+        // environment-supplied URL, and Custom is exactly the case of "a valid
+        // address with no preset", which is what its own comment says it is for.
+        JSON.stringify({
+          presetId:
+            nodePreference === "remote"
+              ? "public"
+              : nodePreference === "configured"
+                ? "custom"
+                : "local",
+          url
+        })
       );
     } catch (e) {
       // Not fatal during onboarding — the wallet is created either way, and the
       // endpoint can be changed later in Settings.
       console.error("Failed to set provider URL during onboarding:", e);
     }
-    currentScreen = 4; // Skip the mocked YubiKey screen, straight to Password
+    currentScreen = afterNode; // Skips the mocked YubiKey screen
+    if (pendingRestore) {
+      pendingRestore = false;
+      showRestore = true;
+    }
   }
 
   async function handleYubiKeySelection() {
@@ -102,7 +153,11 @@
 
   function handleRestore() {
     error = "";
-    showRestore = true;
+    // Choose the node BEFORE the seed phrase is typed, not after. The modal opens
+    // from handleNodeSelection once an endpoint has actually been set.
+    pendingRestore = true;
+    afterNode = 1;
+    currentScreen = 2;
   }
 
   async function confirmRestore() {
@@ -243,10 +298,20 @@
       <p class="subtitle">How would you like Zecboat to connect to the Zcash network?</p>
       
       <div class="form-group node-selection">
+        {#if configuredUrl}
+          <label class="node-option">
+            <input type="radio" bind:group={nodePreference} value="configured" />
+            <div class="option-details">
+              <span class="option-title">Configured Node (Recommended)</span>
+              <span class="option-desc">Use <code>{configuredUrl}</code>, set by <code>ZECBOAT_PROVIDER</code> in the environment this wallet was launched from. You have already named the node you trust &mdash; this keeps it.</span>
+            </div>
+          </label>
+        {/if}
+
         <label class="node-option">
           <input type="radio" bind:group={nodePreference} value="local" />
           <div class="option-details">
-            <span class="option-title">Local Node (Recommended)</span>
+            <span class="option-title">Local Node{configuredUrl ? "" : " (Recommended)"}</span>
             <span class="option-desc">Connect to zebrad + zainod running on this machine (127.0.0.1:9067). Maximum privacy &mdash; no one sees which blocks you request. Requires ~300GB disk and an initial sync.</span>
           </div>
         </label>
@@ -261,7 +326,7 @@
       </div>
 
       <div class="actions">
-        <button class="secondary-btn" onclick={() => currentScreen = 1}>Back</button>
+        <button class="secondary-btn" onclick={() => { pendingRestore = false; currentScreen = 1; }}>Back</button>
         <button class="primary-btn" onclick={handleNodeSelection}>Continue</button>
       </div>
     </div>
