@@ -722,11 +722,23 @@ fn preserve_replaced_file(path: &str) -> Result<Option<String>> {
         return Ok(None);
     }
 
+    // Seconds alone are not enough. `rename` onto an existing name replaces it silently on
+    // Unix, so two calls inside the same second — a double-submitted wizard button, both
+    // Tauri commands being async with no lock between them — moved A to `.replaced-S` and
+    // then B to `.replaced-S`, destroying the only copy of A. That is the exact failure
+    // this function exists to prevent, occurring inside the function itself.
+    //
+    // Nanoseconds make the name unique in practice; the guard below makes it certain.
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let backup = format!("{}.replaced-{}", path, stamp);
+        .map(|d| format!("{}-{:09}", d.as_secs(), d.subsec_nanos()))
+        .unwrap_or_else(|_| "0-000000000".to_string());
+    let mut backup = format!("{}.replaced-{}", path, stamp);
+    let mut n = 1;
+    while std::path::Path::new(&backup).exists() {
+        backup = format!("{}.replaced-{}.{}", path, stamp, n);
+        n += 1;
+    }
 
     std::fs::rename(path, &backup).map_err(|e| {
         anyhow::anyhow!(
@@ -3509,8 +3521,48 @@ pub async fn backup_wallet() -> Result<String> {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let backup_path = format!("{}/wallet_backup_{}.db", backup_dir, stamp);
+
+    // A BACKUP IS BOTH FILES OR IT IS NOTHING.
+    //
+    // This used to copy wallet.db alone. `paths::identity_path` has said why that is
+    // wrong since it was written: "The wallet will not open without this file, so it is
+    // always a pair with wallet_db_path. Backups that carry one without the other are
+    // useless." The database holds the seed encrypted to an X25519 key that exists only
+    // in encryption-identity.txt, and BOTH `initialize_new_wallet` and
+    // `recover_wallet_from_seed` ROTATE that file. So a user who backed up, later
+    // recovered from seed, then restored the backup would get a wallet that displays the
+    // old balance and cannot spend a zatoshi of it — the only key to it sitting in a
+    // `.replaced-<stamp>` file nobody told them about.
+    //
+    // The 24 words remain the real recovery path. But a button labelled "Backup" that
+    // produces something which cannot restore is worse than no button, because it ends
+    // the user's search for safety.
+    let identity_path = crate::paths::as_string::identity_path()?;
+    if !std::path::Path::new(&identity_path).exists() {
+        anyhow::bail!(
+            "refusing to back up: {} is missing. A wallet database without its encryption \
+             identity cannot be opened, so a backup of one without the other would be a \
+             backup in name only.",
+            identity_path
+        );
+    }
+    let identity_backup = backup_path.replace(".db", ".identity.txt");
+
     std::fs::copy(&db_path, &backup_path)?;
-    Ok(format!("Wallet database successfully backed up to {}", backup_path))
+    // If the second copy fails the first must not be left behind advertising itself as a
+    // backup in `list_backups`.
+    if let Err(e) = std::fs::copy(&identity_path, &identity_backup) {
+        let _ = std::fs::remove_file(&backup_path);
+        return Err(anyhow::anyhow!(
+            "backup aborted: the database copied but its encryption identity did not ({e}). \
+             The partial copy has been removed rather than left looking like a usable backup."
+        ));
+    }
+
+    Ok(format!(
+        "Wallet backed up to {} (with its encryption identity beside it)",
+        backup_path
+    ))
 }
 
 pub async fn restore_backup(backup_name: String) -> Result<String> {
@@ -3522,14 +3574,86 @@ pub async fn restore_backup(backup_name: String) -> Result<String> {
     }
     
     let db_path = crate::paths::as_string::wallet_db_path()?;
-    
+    let identity_path = crate::paths::as_string::identity_path()?;
+
     // Safety: ensure data dir exists
     std::fs::create_dir_all(crate::paths::as_string::app_data_dir()?)?;
-    
-    // Overwrite current wallet.db with the backup
-    std::fs::copy(&backup_path, &db_path)?;
-    
-    Ok(format!("Successfully restored wallet from {}", backup_name))
+
+    // THIS USED TO BE A BARE `std::fs::copy` ONTO THE LIVE DATABASE.
+    //
+    // Every other replacement in this file goes through `preserve_replaced_file` — 2481,
+    // 2723, 2866. Restore was the one that did not, so it destroyed the current wallet
+    // with no copy kept. If that wallet was created after the backup was taken and its
+    // 24 words were never written down, the loss was total, from a button labelled
+    // "restore".
+    //
+    // `preserve_replaced_file` also moves the `-wal` and `-shm` sidecars, which matters
+    // more here than anywhere: a write-ahead log left beside a DIFFERENT database of the
+    // same name gets replayed into it on first open, corrupting the thing just restored.
+    // A bare copy cannot do that, so the old code could corrupt the backup it was
+    // recovering.
+    let kept_db = preserve_replaced_file(&db_path)?;
+
+    // A backup taken before this change has no identity beside it. Restoring its database
+    // over the current identity would produce precisely the mismatch this pairing exists
+    // to prevent, so the two cases are handled differently and the user is told which
+    // one happened.
+    let identity_backup = backup_path.replace(".db", ".identity.txt");
+    let has_identity = std::path::Path::new(&identity_backup).exists();
+
+    let kept_identity = if has_identity {
+        preserve_replaced_file(&identity_path)?
+    } else {
+        None
+    };
+
+    // Everything below can fail with both originals already moved aside. Put them back
+    // rather than leaving a half-restored directory, which is the state hardest for a
+    // user to reason about and the one most likely to end in a wrong conclusion about
+    // where their funds went.
+    let restored = (|| -> Result<()> {
+        std::fs::copy(&backup_path, &db_path)?;
+        if has_identity {
+            std::fs::copy(&identity_backup, &identity_path)?;
+        }
+        Ok(())
+    })();
+
+    if let Err(e) = restored {
+        let _ = std::fs::remove_file(&db_path);
+        if let Some(k) = &kept_db {
+            let _ = std::fs::rename(k, &db_path);
+        }
+        if has_identity {
+            let _ = std::fs::remove_file(&identity_path);
+            if let Some(k) = &kept_identity {
+                let _ = std::fs::rename(k, &identity_path);
+            }
+        }
+        return Err(anyhow::anyhow!(
+            "restore failed and the previous wallet has been put back: {e}"
+        ));
+    }
+
+    if has_identity {
+        Ok(format!(
+            "Restored wallet and encryption identity from {}. The previous wallet was \
+             moved aside, not deleted.",
+            backup_name
+        ))
+    } else {
+        // Deliberately not an error: the database is still the right one to restore, and
+        // refusing would strand anyone holding only an old backup. But it is the case
+        // that ends in "I can see my balance and cannot send", so it says so plainly.
+        Ok(format!(
+            "Restored the database from {}, but this backup predates encryption-identity \
+             backup and carries none. The identity already on this machine has been kept. \
+             If they are not a matching pair the balance will display but nothing can be \
+             sent — recover from your 24-word phrase instead if that happens. The previous \
+             wallet was moved aside, not deleted.",
+            backup_name
+        ))
+    }
 }
 
 pub async fn list_backups() -> Result<Vec<String>> {
@@ -3694,4 +3818,53 @@ pub async fn delete_roster_contact(id: i64) -> Result<String> {
         conn.execute("DELETE FROM roster WHERE id = ?1", [id])?;
     }
     Ok("Contact deleted successfully".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two replacements inside the same second must not overwrite each other's copy.
+    ///
+    /// `preserve_replaced_file` named its copy with `as_secs()`, and `rename` onto an
+    /// existing name replaces it silently on Unix. Two fast calls therefore destroyed the
+    /// first rescue copy — the exact failure this function exists to prevent, occurring
+    /// inside the function itself.
+    ///
+    /// This lives here rather than in `tests/` because the function is private, and an
+    /// integration test could only reach it through `initialize_new_wallet`, which takes
+    /// seconds per call. At that speed the seconds never collide and the test passes
+    /// against the defective code — proving nothing. Calling it directly is the only way
+    /// to reach the race.
+    #[test]
+    fn preserve_replaced_file_does_not_collide_within_one_second() {
+        let dir = std::env::temp_dir().join(format!("zb-preserve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wallet.db");
+        let path_s = path.to_string_lossy().into_owned();
+
+        let mut kept = Vec::new();
+        for i in 0..5u8 {
+            std::fs::write(&path, [i; 64]).unwrap();
+            kept.push(
+                preserve_replaced_file(&path_s)
+                    .expect("preserve should succeed")
+                    .expect("a file existed, so a copy must have been kept"),
+            );
+        }
+
+        let mut uniq = kept.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), kept.len(), "preserved copies collided: {kept:?}");
+
+        // Every copy must still hold its own distinct contents, not the last writer's.
+        for (i, k) in kept.iter().enumerate() {
+            let got = std::fs::read(k).unwrap();
+            assert_eq!(got, vec![i as u8; 64], "copy {i} was overwritten by a later one");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
