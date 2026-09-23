@@ -50,8 +50,18 @@
   // build with no ZECBOAT_PROVIDER that is a public lightwalletd, contacted before
   // the user has been offered any say in it.
   let pendingRestore = $state(false);
+  // Is a YubiKey carrying an age identity plugged in right now? Gates the seal-to-key
+  // option, so it appears exactly when it can be honoured — which is what the mock this
+  // replaces got wrong, reporting "Detected" with nothing attached.
+  let yubikeyAvailable = $state(false);
 
   onMount(async () => {
+    try {
+      yubikeyAvailable = await invoke<boolean>("check_yubikey");
+    } catch (e) {
+      // No plugin installed is the ordinary case, not an error worth surfacing.
+      console.error("Could not check for a YubiKey:", e);
+    }
     // An operator who exported ZECBOAT_PROVIDER has already said which node they
     // trust. Offering them a two-item preset list and silently overruling that is
     // wrong on any screen and worst on this one, where a seed phrase is about to be
@@ -367,7 +377,29 @@
         <input type="password" placeholder="Password" bind:value={password} />
         <input type="password" placeholder="Confirm Password" bind:value={confirmPassword} />
       </div>
-      
+
+      <!-- This control belongs HERE, not only on the unlock screen's "create a new wallet"
+           modal. A first run has no wallet, so the app shows this wizard and never shows
+           UnlockWallet — putting the option only there meant a new user could not reach it
+           at all, and every wallet came out password-encrypted no matter what was plugged
+           in. Found 2026-09-23 the only way it could be: by creating a wallet and reading
+           the header of encryption-identity.txt, which said `-> scrypt`.
+
+           Shown only when a key carrying an age identity is actually present. -->
+      {#if yubikeyAvailable}
+        <label class="yubikey-opt">
+          <input type="checkbox" bind:checked={useYubikey} />
+          Seal this wallet to the YubiKey that is plugged in
+        </label>
+        <p class="hint">
+          The wallet identity is encrypted to the device and can only be opened with it,
+          using its PIN instead of this password. <strong>This protects the identity file,
+          not spending</strong> — Zcash spend authorization is RedPallas over Pallas and no
+          YubiKey implements it. Keep your 24-word phrase: it is the only way back in if the
+          key is lost, and restoring from it produces an ordinary password wallet.
+        </p>
+      {/if}
+
       {#if error}
         <p class="error">{error}</p>
       {/if}
@@ -492,6 +524,23 @@
 {/if}
 
 <style>
+  .yubikey-opt {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.9rem;
+    font-size: 0.9rem;
+    text-align: left;
+  }
+
+  .hint {
+    font-size: 0.8rem;
+    opacity: 0.75;
+    text-align: left;
+    line-height: 1.45;
+    margin-top: 0.4rem;
+  }
+
   .rs-backdrop { position: fixed; inset: 0; z-index: 1400; background: rgba(0,0,0,.72);
                  display: flex; align-items: center; justify-content: center; padding: 1rem; }
   .rs-modal { background: var(--surface-color, #1e1e1e); border: 1px solid var(--border-color, #2c2c2c);
