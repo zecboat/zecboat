@@ -36,6 +36,62 @@ pub static WALLET_PASSWORD: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::ne
 ///
 /// Mirrors `ironwood_shield/src/shield_iw.rs:44-64`, which is the code path that
 /// successfully unlocked this wallet to build the mined Ironwood transaction.
+/// Parse a seed phrase into a mnemonic. **Every phrase entering this wallet goes through
+/// here**, and there are two reasons it exists rather than calling `from_phrase` directly.
+///
+/// # 1. NFKD, which `bip0039` does not do for the seed
+///
+/// BIP-39 requires the phrase be NFKD-normalised before PBKDF2. `bip0039 0.12` normalises
+/// for the **checksum** — `mnemonic.rs:365`, inside `phrase_to_entropy`, on a *local* copy
+/// — and then `from_phrase` stores `phrase.split_whitespace().join(" ")` from the
+/// **original** text. `to_seed` hashes that stored text under this comment:
+///
+/// ```text
+/// // the phrase has been normalized
+/// let normalized_password = self.phrase();
+/// ```
+///
+/// It has not been. So a phrase carrying compatibility characters passes the checksum and
+/// derives a seed **no other BIP-39 wallet would derive** — silently, with no error, into
+/// an empty wallet.
+///
+/// Measured on 2026-09-23: `fine` written with U+FB01 gives `03e79f69…`, the ASCII
+/// spelling gives `a830c0d3…`, and NFKD folds the first onto the second. The realistic
+/// route is a phrase copied out of a PDF whose renderer substituted ligatures, and the
+/// affected words are ordinary: *fine finger finish fire firm first fish fit fix flag
+/// flame flash flat flavor flee effort*.
+///
+/// A second reviewer read `bip0039` and concluded it normalises correctly, having believed
+/// that comment. Two passes disagreed; the test settled it, because it calls the crate
+/// instead of reading it.
+///
+/// # 2. The error must never contain the phrase
+///
+/// `wallet.rs:207` and `:478` formatted the decrypted phrase into an `anyhow` error that
+/// reaches a UI toast, a log, or a bug report. The `rpc.rs` entry points already refused to
+/// do this; `wallet.rs` did not get the memo. The returned error names a word count and
+/// nothing else — never the phrase, never which word failed, since that tells anyone
+/// holding a partial phrase exactly what they still need.
+pub(crate) fn phrase_to_mnemonic(phrase: &str) -> Result<Mnemonic<English>> {
+    use unicode_normalization::UnicodeNormalization;
+
+    // NFKD first, then collapse whitespace. Order matters: some compatibility characters
+    // decompose to sequences containing spaces.
+    let normalized: String = phrase.nfkd().collect();
+    let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    let words = normalized.split_whitespace().count();
+
+    Mnemonic::<English>::from_phrase(normalized).map_err(|_| {
+        if words != 24 {
+            anyhow::anyhow!("A recovery phrase is 24 words. This one has {words}.")
+        } else {
+            anyhow::anyhow!(
+                "This recovery phrase is not valid. Check for a mistyped or transposed word."
+            )
+        }
+    })
+}
+
 /// Is this wallet sealed to a YubiKey?
 ///
 /// The stub file is the mode — see [`unlock_wallet`]. The UI needs this so the unlock
@@ -2632,7 +2688,7 @@ pub async fn recover_wallet_from_seed(
     //
     // The error stays deliberately vague: bip39 messages can name the offending word
     // or its position, and a seed phrase must never reach a log or a dialog.
-    let mnemonic = Mnemonic::<English>::from_phrase(seed)
+    let mnemonic = phrase_to_mnemonic(seed)
         .map_err(|_| anyhow::anyhow!("Invalid BIP-39 seed phrase"))?;
 
     if password.is_empty() {
@@ -2852,7 +2908,7 @@ pub async fn recover_wallet_from_seed(
 
 pub async fn import_wallet(seed: &str) -> Result<()> {
     // Basic validation of the seed phrase
-    let _mnemonic = Mnemonic::<English>::from_phrase(seed)
+    let _mnemonic = phrase_to_mnemonic(seed)
         // Deliberately discarded: bip39 errors can name the offending word or its
         // position, and a seed phrase must never reach a log or an error dialog.
         .map_err(|_| anyhow::anyhow!("IMPORT_WALLET_ERROR: Invalid BIP-39 seed phrase"))?;
@@ -3354,7 +3410,6 @@ pub async fn shield_transparent() -> Result<String> {
     use zcash_client_backend::fees::standard::SingleOutputChangeStrategy;
     use zcash_client_backend::fees::{StandardFeeRule, DustOutputPolicy};
     use zcash_protocol::ShieldedPool;
-    use bip0039::{English, Mnemonic};
     use zcash_client_backend::keys::UnifiedSpendingKey;
     use zcash_client_backend::data_api::wallet::{SpendingKeys, ConfirmationsPolicy};
     use zcash_client_backend::data_api::WalletRead;
@@ -3399,7 +3454,7 @@ pub async fn shield_transparent() -> Result<String> {
 
     let seed_str = String::from_utf8(decrypted_mnemonic)?;
     // Deliberately discarded — the error can echo seed words. See the import path.
-    let mnemonic = Mnemonic::<English>::from_phrase(&seed_str).map_err(|_| anyhow::anyhow!("Invalid mnemonic"))?;
+    let mnemonic = phrase_to_mnemonic(&seed_str)?;
     let seed_bytes = mnemonic.to_seed("");
     let usk = UnifiedSpendingKey::from_seed(&MainNetwork, &seed_bytes, zip32::AccountId::try_from(0).unwrap())
         .map_err(|e| anyhow::anyhow!("Failed to derive USK: {:?}", e))?;
@@ -3727,7 +3782,7 @@ pub async fn export_keys() -> Result<String> {
 
 pub async fn get_viewkey() -> Result<String> {
     let phrase = extract_mnemonic_internal()?;
-    let mnemonic = bip0039::Mnemonic::<bip0039::English>::from_phrase(phrase.trim())
+    let mnemonic = phrase_to_mnemonic(&phrase)
         .map_err(|e| anyhow::anyhow!("Invalid seed phrase: {:?}", e))?;
     let seed_bytes = mnemonic.to_seed("");
     

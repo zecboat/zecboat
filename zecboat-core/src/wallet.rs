@@ -203,8 +203,12 @@ pub fn batch_send_transaction(
     validate_anti_burn(&proposed_inputs)?;
 
     let phrase = _spending_key.trim();
-    let mnemonic = bip0039::Mnemonic::<bip0039::English>::from_phrase(phrase)
-        .map_err(|e| anyhow!("WALLET_ERROR_SEED_PHRASE: '{}', error: {:?}", phrase, e))?;
+    let mnemonic = crate::rpc::phrase_to_mnemonic(phrase)
+        // Was: anyhow!("WALLET_ERROR_SEED_PHRASE: '{}', error: {:?}", phrase, e) — which put
+        // the decrypted seed phrase into an error bound for a UI toast, a log, or a bug
+        // report. phrase_to_mnemonic already returns something safe and readable; the job
+        // here is simply not to undo that.
+        ?;
     let seed_bytes = mnemonic.to_seed("");
     
     let usk = zcash_keys::keys::UnifiedSpendingKey::from_seed(&MainNetwork, &seed_bytes, zip32::AccountId::ZERO)
@@ -375,8 +379,10 @@ pub fn send_transaction(
     // The amount and memo arguments are ignored: both are fixed by the carrier being moved, and
     // honouring a caller's version of either would let the UI change an asset's identity in flight.
     if let Some(id) = asset_id.map(str::trim).filter(|s| !s.is_empty()) {
-        let mnemonic = bip0039::Mnemonic::<bip0039::English>::from_phrase(_spending_key.trim())
-            .map_err(|e| anyhow!("WALLET_ERROR_SEED_PHRASE: {:?}", e))?;
+        let mnemonic = crate::rpc::phrase_to_mnemonic(&_spending_key)
+            // {:?} on the underlying error could render UnknownWord("<word>"), naming a
+            // word from the user's phrase. The helper's error names a count and nothing more.
+            ?;
         let usk = zcash_keys::keys::UnifiedSpendingKey::from_seed(
             &MainNetwork,
             &mnemonic.to_seed(""),
@@ -474,8 +480,12 @@ pub fn send_transaction(
     // 7. Execute builder
     // Convert string seed to usk
     let phrase = _spending_key.trim();
-    let mnemonic = bip0039::Mnemonic::<bip0039::English>::from_phrase(phrase)
-        .map_err(|e| anyhow!("WALLET_ERROR_SEED_PHRASE: '{}', error: {:?}", phrase, e))?;
+    let mnemonic = crate::rpc::phrase_to_mnemonic(phrase)
+        // Was: anyhow!("WALLET_ERROR_SEED_PHRASE: '{}', error: {:?}", phrase, e) — which put
+        // the decrypted seed phrase into an error bound for a UI toast, a log, or a bug
+        // report. phrase_to_mnemonic already returns something safe and readable; the job
+        // here is simply not to undo that.
+        ?;
     let seed_bytes = mnemonic.to_seed("");
     
     let usk = zcash_keys::keys::UnifiedSpendingKey::from_seed(&MainNetwork, &seed_bytes, zip32::AccountId::ZERO)
