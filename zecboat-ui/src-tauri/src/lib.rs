@@ -246,6 +246,11 @@ async fn get_provider_url() -> Result<String, String> {
     zecboat_core::get_provider_url().await.map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn wallet_uses_yubikey() -> Result<bool, String> {
+    zecboat_core::wallet_uses_yubikey().await.map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -261,7 +266,7 @@ pub fn run() {
             sync_status, set_provider_url, get_provider_url, get_balance, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
             registry_base, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, fee_readiness, wallet_about,
-            sign_transaction_with_hardware, shield_transparent, unlock_wallet, lock_wallet,
+            sign_transaction_with_hardware, shield_transparent, unlock_wallet, wallet_uses_yubikey, lock_wallet,
             create_new_account, backup_wallet, list_backups, restore_backup, export_keys, get_viewkey, check_yubikey,
             get_roster, add_roster_contact, delete_roster_contact, validate_address
         ])

@@ -36,6 +36,89 @@ pub static WALLET_PASSWORD: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::ne
 ///
 /// Mirrors `ironwood_shield/src/shield_iw.rs:44-64`, which is the code path that
 /// successfully unlocked this wallet to build the mined Ironwood transaction.
+/// Is this wallet sealed to a YubiKey?
+///
+/// The stub file is the mode — see [`unlock_wallet`]. The UI needs this so the unlock
+/// box can ask for a PIN rather than a password, which are not the same thing and have
+/// very different consequences for getting wrong: three bad PINs block the device.
+pub async fn wallet_uses_yubikey() -> Result<bool> {
+    Ok(crate::paths::yubikey_stub_path()?.exists())
+}
+
+/// Decrypt `encryption-identity.txt` and return the X25519 identity inside it.
+///
+/// **The wallet directory decides how**, not the caller: if the YubiKey stub is present
+/// the file is opened on the device, otherwise with the unlock password. Four call sites
+/// previously each opened it themselves, all four hardcoding
+/// `Decryptor::Passphrase`, so a YubiKey wallet would have failed in three of them with
+/// "Expected passphrase-based age encryption" — and any future call site would have
+/// inherited the same bug by copying its neighbour.
+///
+/// This is the same move `lock_zmap_carriers` made: put the rule where a forgetful call
+/// site cannot bypass it, rather than asking every caller to remember.
+fn decrypt_identity() -> Result<age::x25519::Identity> {
+    use std::io::Read;
+    use std::str::FromStr;
+
+    let secret = WALLET_PASSWORD
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("Wallet is locked. Please unlock the wallet first."))?;
+
+    let identity_path = crate::paths::identity_path()?;
+    let encrypted = std::fs::read(&identity_path)
+        .map_err(|e| anyhow::anyhow!("could not read the encryption identity file: {e}"))?;
+
+    let stub_path = crate::paths::yubikey_stub_path()?;
+    let text = if stub_path.exists() {
+        let stub = std::fs::read_to_string(&stub_path)?;
+        let stub = stub
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("AGE-PLUGIN-YUBIKEY-"))
+            .ok_or_else(|| {
+                anyhow::anyhow!("the YubiKey stub contains no identity line")
+            })?;
+        // In YubiKey mode WALLET_PASSWORD holds the PIV PIN.
+        String::from_utf8(crate::yubi::decrypt_with_yubikey(&encrypted, stub, &secret)?)
+            .map_err(|e| anyhow::anyhow!("decrypted identity is not valid text: {e}"))?
+    } else {
+        let decryptor = match age::Decryptor::new(&encrypted[..]) {
+            Ok(age::Decryptor::Passphrase(d)) => d,
+            // `.unwrap()` here once panicked the backend on a damaged identity file.
+            Ok(_) => {
+                return Err(anyhow::anyhow!(
+                    "the encryption identity file is not passphrase-protected as expected. \
+                     It may have been replaced or corrupted."
+                ))
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "could not read the encryption identity file ({e}). It may be damaged or \
+                     truncated. This file is one half of a wallet backup; without it the seed \
+                     phrase in the database cannot be decrypted."
+                ))
+            }
+        };
+        let mut reader = decryptor
+            .decrypt(&age::secrecy::Secret::new(secret), Some(22))
+            // Deliberately opaque — see the note on the unlock path.
+            .map_err(|_| anyhow::anyhow!("Incorrect password."))?;
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf)?;
+        String::from_utf8(buf)
+            .map_err(|e| anyhow::anyhow!("decrypted data is not valid UTF-8: {e}"))?
+    };
+
+    let key_line = text
+        .lines()
+        .find(|l| l.starts_with("AGE-SECRET-KEY-"))
+        .ok_or_else(|| anyhow::anyhow!("No AGE-SECRET-KEY found in decrypted identity"))?;
+    age::x25519::Identity::from_str(key_line)
+        .map_err(|e| anyhow::anyhow!("the encryption identity is not in a recognised format: {e}"))
+}
+
 fn verify_wallet_passphrase(passphrase: &str) -> Result<()> {
     use std::io::Read;
     use std::str::FromStr;
@@ -77,11 +160,56 @@ fn verify_wallet_passphrase(passphrase: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn unlock_wallet(password: String, use_yubikey: bool) -> Result<()> {
+pub async fn unlock_wallet(password: String, _use_yubikey: bool) -> Result<()> {
 
-    let final_password = if use_yubikey {
-        crate::yubi::get_yubikey_derived_key(&password)?
+    // `use_yubikey` is ignored, deliberately. It used to be a caller-supplied flag, which
+    // meant a caller could ask for the password path on a wallet sealed to a device — and
+    // get an "Incorrect password." for a wallet that has no password. **The wallet
+    // directory decides, not the call site**: the presence of the stub file is the mode.
+    //
+    // That also makes the refusal unconditional. There is no argument any caller can pass
+    // that opens a YubiKey wallet without the key, which is what the ship gate asks for.
+    let stub_path = crate::paths::yubikey_stub_path()?;
+    let final_password = if stub_path.exists() {
+        let stub = std::fs::read_to_string(&stub_path)?;
+        let stub = stub
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("AGE-PLUGIN-YUBIKEY-"))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "the YubiKey stub at {} contains no identity line; the wallet cannot \
+                     be opened without it",
+                    stub_path.display()
+                )
+            })?;
+
+        // The typed string is the PIV PIN. Decryption happens on the card.
+        let identity = crate::yubi::decrypt_with_yubikey(
+            &std::fs::read(crate::paths::identity_path()?)?,
+            stub,
+            &password,
+        )?;
+        let identity = String::from_utf8(identity)
+            .map_err(|e| anyhow::anyhow!("decrypted identity is not valid text: {e}"))?;
+
+        // Same structural check the password path makes: decryption succeeding is the
+        // proof, but confirm the plaintext really is an age identity so a corrupt file
+        // cannot masquerade as a successful unlock.
+        use std::str::FromStr;
+        let key_line = identity
+            .lines()
+            .find(|l| l.starts_with("AGE-SECRET-KEY-"))
+            .ok_or_else(|| anyhow::anyhow!("decrypted identity contains no age secret key"))?;
+        age::x25519::Identity::from_str(key_line)
+            .map_err(|e| anyhow::anyhow!("decrypted identity is malformed: {}", e))?;
+
+        // Everything downstream reads WALLET_PASSWORD to re-open the identity file. In
+        // YubiKey mode the PIN plays that role, and `decrypt_identity` routes on the same
+        // stub check, so the two stay consistent.
+        password.clone()
     } else {
+        verify_wallet_passphrase(&password)?;
         password.clone()
     };
 
@@ -2265,12 +2393,32 @@ pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday
     let data_dir = crate::paths::as_string::app_data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
     
-    // Derive the final password (either plain text or YubiKey HMAC'd)
-    let final_password = if use_yubikey {
-        crate::yubi::get_yubikey_derived_key(&password)?
+    // A YubiKey wallet must be sealed to a device that is present NOW. Resolve the
+    // recipient before anything is written, so the failure is "no key found" with an
+    // empty directory rather than a half-built wallet nothing can open.
+    //
+    // The old code called yubi::get_yubikey_derived_key(), which hashed the password
+    // with a fixed string and contacted no hardware. A wallet created that way was
+    // protected by a password and told its owner it was protected by a device.
+    let yubikey_recipient: Option<String> = if use_yubikey {
+        let recipients = crate::yubi::list_recipients()?;
+        Some(recipients.into_iter().next().ok_or_else(|| {
+            if crate::yubi::plugin_installed() {
+                anyhow::anyhow!(
+                    "No YubiKey with an age identity was found. Insert the key, then create \
+                     an identity on it with:\n    age-plugin-yubikey --generate"
+                )
+            } else {
+                anyhow::anyhow!(
+                    "age-plugin-yubikey is not installed, so a YubiKey cannot be used. \
+                     Install it with:\n    cargo install age-plugin-yubikey"
+                )
+            }
+        })?)
     } else {
-        password.clone()
+        None
     };
+    let final_password = password.clone();
     
     // 1. Generate a secure age cryptographic identity
     let identity = age::x25519::Identity::generate();
@@ -2279,19 +2427,39 @@ pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday
         identity.to_string().expose_secret().to_string()
     };
     
-    // Encrypt the identity string with the password using age passphrase encryption
-    let encryptor = age::Encryptor::with_user_passphrase(age::secrecy::Secret::new(final_password.clone()));
+    // Seal it: to the YubiKey if one was chosen, otherwise under the password.
+    // These are mutually exclusive by age's own rules — an scrypt stanza must be the
+    // only recipient stanza in a file — so there is no "both" to offer.
     let mut encrypted_identity = vec![];
+    if let Some(recipient) = &yubikey_recipient {
+        encrypted_identity = crate::yubi::encrypt_to_yubikey(identity_str.as_bytes(), recipient)?;
+    } else {
+    let encryptor = age::Encryptor::with_user_passphrase(age::secrecy::Secret::new(final_password.clone()));
     {
         let mut writer = encryptor.wrap_output(&mut encrypted_identity)?;
         std::io::Write::write_all(&mut writer, identity_str.as_bytes())?;
         writer.finish()?;
+    }
     }
     
     // 2. Save this identity to the filesystem
     let identity_path = format!("{}/encryption-identity.txt", data_dir);
     preserve_replaced_file(&identity_path)?;
     std::fs::write(&identity_path, encrypted_identity)?;
+
+    // The stub is what puts this wallet in YubiKey mode from now on. unlock_wallet reads
+    // the directory, not a caller-supplied flag, so writing this file is the whole switch.
+    let stub_path = crate::paths::as_string::yubikey_stub_path()?;
+    if yubikey_recipient.is_some() {
+        let stubs = crate::yubi::list_identities()?;
+        let stub = stubs.into_iter().next().ok_or_else(|| {
+            anyhow::anyhow!("the YubiKey stopped responding while the wallet was being created")
+        })?;
+        std::fs::write(&stub_path, format!("{stub}\n"))?;
+    } else {
+        // A password wallet must not inherit a stub from whatever was here before.
+        let _ = std::fs::remove_file(&stub_path);
+    }
     
     // 3. Generate a fresh 24-word BIP-39 Seed Phrase
     let mnemonic = Mnemonic::<English>::generate(Count::Words24);
@@ -2508,6 +2676,23 @@ pub async fn recover_wallet_from_seed(
     let kept_identity = preserve_replaced_file(&identity_path)?;
     std::fs::write(&identity_path, encrypted_identity)?;
 
+    // Recovery always produces a PASSWORD wallet, so a stub left by whatever was in this
+    // directory before must go. It is not tidiness: the stub is what puts a wallet in
+    // YubiKey mode, so leaving one beside a passphrase-encrypted identity produces a
+    // directory whose two halves disagree — unlock would take the device path and find a
+    // file no device can open.
+    //
+    // The consequence is worth stating plainly rather than hiding: restoring from seed
+    // DROPS YubiKey protection. Re-applying it needs a flag the restore flow does not
+    // have yet, and silently keeping a mode the user was never asked about would be
+    // worse than losing one they can re-enable deliberately.
+    if let Ok(stub) = crate::paths::as_string::yubikey_stub_path() {
+        if std::path::Path::new(&stub).exists() {
+            preserve_replaced_file(&stub)?;
+            let _ = std::fs::remove_file(&stub);
+        }
+    }
+
     // Everything from here can fail, and the identity above has ALREADY been replaced.
     // Left alone, a failure here hands the user a directory whose identity is encrypted
     // under the new password while the wallet database is missing or half-built: the old
@@ -2662,37 +2847,9 @@ pub async fn import_wallet(seed: &str) -> Result<()> {
     
     let db_path = crate::paths::as_string::wallet_db_path()?;
     
-    let password = WALLET_PASSWORD.lock().unwrap().clone()
-        .ok_or_else(|| anyhow::anyhow!("Wallet must be unlocked to import keys."))?;
-        
-    // 1. Fetch and decrypt the age identity
-    let identity_path = crate::paths::as_string::identity_path()?;
-    let encrypted_data = std::fs::read(&identity_path)
-        .map_err(|e| anyhow::anyhow!("could not read the encryption identity file: {e}"))?;
-    
-    let decryptor = match age::Decryptor::new(&encrypted_data[..]) {
-        Ok(age::Decryptor::Passphrase(d)) => d,
-        // `.unwrap()` here panicked the backend on a damaged identity file.
-        Ok(_) => return Err(anyhow::anyhow!(
-            "the encryption identity file is not passphrase-protected as expected. \
-             It may have been replaced or corrupted."
-        )),
-        Err(e) => return Err(anyhow::anyhow!(
-            "could not read the encryption identity file ({e}). It may be damaged or \
-             truncated. This file is one half of a wallet backup; without it the seed \
-             phrase in the database cannot be decrypted."
-        )),
-    };
-    
-    let mut reader = decryptor.decrypt(&age::secrecy::Secret::new(password), Some(22))
-        // Deliberately opaque — see the note on the unlock path.
-        .map_err(|_| anyhow::anyhow!("Invalid password during import"))?;
-        
-    let mut decrypted_identity = vec![];
-    std::io::Read::read_to_end(&mut reader, &mut decrypted_identity)?;
-    let identity_str = String::from_utf8(decrypted_identity)?;
-    let identity: age::x25519::Identity = identity_str.parse()
-        .map_err(|e| anyhow::anyhow!("could not parse the encryption identity: {e}"))?;
+    // Routed through decrypt_identity() — it used to hardcode Decryptor::Passphrase and
+    // would have refused a YubiKey wallet with a message about passphrase protection.
+    let identity = decrypt_identity()?;
         
     // 2. Encrypt the new seed phrase
     let recipient = identity.to_public();
@@ -3191,29 +3348,9 @@ pub async fn shield_transparent() -> Result<String> {
     use zcash_client_backend::data_api::WalletRead;
 
     let db_path = crate::paths::as_string::wallet_db_path()?;
-    let identity_path = crate::paths::as_string::identity_path()?;
-    
-    let password_str = WALLET_PASSWORD.lock().unwrap().clone()
-        .ok_or_else(|| anyhow::anyhow!("Wallet is locked. Password required to decrypt identity file"))?;
-
-    let encrypted_data = std::fs::read(&identity_path)
-        .map_err(|e| anyhow::anyhow!("could not read the encryption identity file: {e}"))?;
-
-    let decryptor = match age::Decryptor::new(&encrypted_data[..]) {
-        Ok(age::Decryptor::Passphrase(d)) => d,
-        _ => return Err(anyhow::anyhow!("Expected passphrase-based age encryption")),
-    };
-
-    let mut decrypted_identity = vec![];
-    let mut reader = decryptor.decrypt(&age::secrecy::Secret::new(password_str), Some(22))
-        .map_err(|e| anyhow::anyhow!("Decryption failed: {:?}", e))?;
-    std::io::Read::read_to_end(&mut reader, &mut decrypted_identity)?;
-    
-    let identity_str = String::from_utf8(decrypted_identity)?;
-    let identity_key = identity_str.lines().find(|l| l.starts_with("AGE-SECRET-KEY-"))
-        .ok_or_else(|| anyhow::anyhow!("No AGE-SECRET-KEY found"))?;
-    let identity: age::x25519::Identity = std::str::FromStr::from_str(identity_key)
-        .map_err(|e| anyhow::anyhow!("the encryption identity is not in a recognised format: {e}"))?;
+    // Routed through decrypt_identity() so this works on a YubiKey wallet too; it used
+    // to hardcode Decryptor::Passphrase and would have refused one outright.
+    let identity = decrypt_identity()?;
 
     let mut wallet_db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, OsRng)?;
     zcash_client_sqlite::wallet::init::init_wallet_db(&mut wallet_db, None)?;
@@ -3416,35 +3553,9 @@ pub async fn list_backups() -> Result<Vec<String>> {
 }
 
 fn extract_mnemonic_internal() -> Result<String> {
-    let password_str = WALLET_PASSWORD.lock().unwrap().clone()
-        .ok_or_else(|| anyhow::anyhow!("Wallet is locked. Please unlock the wallet first."))?;
-
-    let identity_path = crate::paths::as_string::identity_path()?;
-    
-    let encrypted_data = std::fs::read(&identity_path)
-        .map_err(|e| anyhow::anyhow!("could not read the encryption identity file: {e}"))?;
-
-    let decryptor = match age::Decryptor::new(&encrypted_data[..]) {
-        Ok(age::Decryptor::Passphrase(d)) => d,
-        _ => return Err(anyhow::anyhow!("Expected passphrase-based age encryption")),
-    };
-
-    let mut decrypted_identity = vec![];
-    let mut reader = decryptor.decrypt(&age::secrecy::Secret::new(password_str.to_string()), Some(22))
-        .map_err(|e| anyhow::anyhow!("Decryption failed: {:?}", e))?;
-    
-    std::io::Read::read_to_end(&mut reader, &mut decrypted_identity)
-        .map_err(|e| anyhow::anyhow!("could not read the decrypted data: {e}"))?;
-        
-    let identity_str = String::from_utf8(decrypted_identity)
-        .map_err(|e| anyhow::anyhow!("decrypted data is not valid UTF-8: {e}"))?;
-
-    let identity_key = identity_str.lines()
-        .find(|l| l.starts_with("AGE-SECRET-KEY-"))
-        .ok_or_else(|| anyhow::anyhow!("No AGE-SECRET-KEY found in decrypted identity"))?;
-
-    let identity: age::x25519::Identity = std::str::FromStr::from_str(identity_key)
-        .map_err(|e| anyhow::anyhow!("Invalid identity format: {:?}", e))?;
+    // Routed through decrypt_identity(): this is the function that hands back the seed
+    // phrase, so it is the last place that should carry its own copy of the rule.
+    let identity = decrypt_identity()?;
 
     let db_path = crate::paths::as_string::wallet_db_path()?;
     let encrypted_mnemonic_bytes: Vec<u8> = {

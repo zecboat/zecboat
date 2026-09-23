@@ -11,9 +11,22 @@
   let useYubikey = $state(false);
   let yubikeyDetected = $state(false);
 
+  // Whether THIS wallet directory is sealed to a YubiKey. Asked of the backend rather
+  // than remembered in the UI: the stub file beside the wallet is the only authority,
+  // and a wallet that moved between machines must still open correctly.
+  let yubikeyWallet = $state(false);
+  // Only true when a key carrying an age identity is really attached. Gates the create
+  // checkbox, so the option appears exactly when it can be honoured.
+  let yubikeyCreateAvailable = $state(false);
+
   onMount(async () => {
     try {
-      // yubikeyDetected = await invoke("check_yubikey");  // mock; always true
+      yubikeyCreateAvailable = await invoke<boolean>("check_yubikey");
+      yubikeyWallet = await invoke<boolean>("wallet_uses_yubikey");
+      // A YubiKey wallet asks for the PIV PIN, not a password. The distinction matters:
+      // three wrong PINs block the device, and someone who thinks they are guessing at a
+      // password will keep guessing.
+      if (yubikeyWallet) yubikeyDetected = await invoke<boolean>("check_yubikey");
     } catch (e) {
       console.error(e);
     }
@@ -218,14 +231,23 @@
     </div>
     
     <h2>Unlock Your Wallet</h2>
-    <p class="subtitle">Enter your wallet password to decrypt and access your funds.</p>
-    
+    {#if yubikeyWallet}
+      <p class="subtitle">
+        This wallet is sealed to a YubiKey. Insert it and enter its PIN.
+        {#if !yubikeyDetected}
+          <strong>No YubiKey detected.</strong>
+        {/if}
+      </p>
+    {:else}
+      <p class="subtitle">Enter your wallet password to decrypt and access your funds.</p>
+    {/if}
+
     <form onsubmit={handleUnlock}>
       <div class="input-group">
         <div class="password-wrapper">
-          <input 
-            type={showPassword ? "text" : "password"} 
-            placeholder="Wallet Password..." 
+          <input
+            type={showPassword ? "text" : "password"}
+            placeholder={yubikeyWallet ? "YubiKey PIN..." : "Wallet Password..."}
             bind:value={seedPhrase}
           />
           <button type="button" class="visibility-btn" onclick={togglePasswordVisibility}>
@@ -349,6 +371,25 @@
                bind:value={newWalletBirthday} />
         <p class="hint">A new seed has no history, so this starts at the chain tip. Lowering it only costs scanning time.</p>
         <p class="hint">Any wallet already here is moved aside, not deleted.</p>
+
+        <!-- Restored 2026-09-23, after the mock behind it was replaced with a real age
+             plugin. The control was hidden on 2026-09-01 because check_yubikey() returned
+             true unconditionally, so it read "● Detected" with nothing plugged in.
+             It is now shown ONLY when a key carrying an age identity is actually present:
+             an option that cannot be honoured should not be offerable. -->
+        {#if yubikeyCreateAvailable}
+          <label class="yubikey-opt">
+            <input type="checkbox" bind:checked={useYubikey} />
+            Seal this wallet to the YubiKey that is plugged in
+          </label>
+          <p class="hint">
+            The wallet identity is encrypted to the device and can only be opened with it,
+            using its PIV PIN instead of a password. <strong>This protects the identity
+            file, not the spend</strong> — Zcash spend authorization is RedPallas over
+            Pallas and no YubiKey implements it. Keep your 24-word seed: it is the only way
+            back in if the key is lost.
+          </p>
+        {/if}
         {#if errorMsg}<p class="modal-err">{errorMsg}</p>{/if}
       </div>
       <div class="modal-foot">
@@ -456,6 +497,14 @@
     font-family: inherit;
   }
   .modal-body textarea { resize: vertical; }
+  .yubikey-opt {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    font-size: 0.9rem;
+  }
+
   .hint { font-size: .74rem; opacity: .7; line-height: 1.35; margin: .35rem 0 0; }
 
   /* Never scrolls, never shrinks. The buttons are always on screen. */

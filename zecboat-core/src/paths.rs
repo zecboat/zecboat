@@ -86,6 +86,19 @@ pub fn identity_path() -> Result<PathBuf> {
     Ok(app_data_dir()?.join("encryption-identity.txt"))
 }
 
+/// `$HOME/.AppVault/data/yubikey-identity.txt`
+///
+/// Present only in a wallet that opted into YubiKey protection. Holds the plugin
+/// identity stub (`AGE-PLUGIN-YUBIKEY-…`), which names a device serial and PIV slot
+/// and is **not** a secret — it is useless without the key in hand.
+///
+/// Its presence is what puts the wallet in YubiKey mode, so it is as much a pair with
+/// [`identity_path`] as that file is with [`wallet_db_path`]. A backup carrying the
+/// identity without this stub will try the password path and fail confusingly.
+pub fn yubikey_stub_path() -> Result<PathBuf> {
+    Ok(app_data_dir()?.join("yubikey-identity.txt"))
+}
+
 /// `$HOME/ZecboatBackups`
 pub fn backup_dir() -> Result<PathBuf> {
     Ok(home_dir()?.join("ZecboatBackups"))
@@ -110,6 +123,9 @@ pub mod as_string {
     }
     pub fn identity_path() -> Result<String> {
         Ok(super::identity_path()?.to_string_lossy().into_owned())
+    }
+    pub fn yubikey_stub_path() -> Result<String> {
+        Ok(super::yubikey_stub_path()?.to_string_lossy().into_owned())
     }
     pub fn backup_dir() -> Result<String> {
         Ok(super::backup_dir()?.to_string_lossy().into_owned())

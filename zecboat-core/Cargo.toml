@@ -57,7 +57,10 @@ hex = "0.4"
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 bip0039 = "0.12.0"
 rand = "0.8.5"
-age = "0.10.0"
+# `plugin` is not a default feature. It brings in the age plugin protocol, which is how
+# age-plugin-yubikey is driven — as a separate executable over stdio, so libpcsclite stays
+# out of this binary. See zecboat-core/src/yubi.rs.
+age = { version = "0.10.0", features = ["plugin"] }
 orchard = "0.15"
 shardtree = "0.6.2"
 incrementalmerkletree = "0.8"
