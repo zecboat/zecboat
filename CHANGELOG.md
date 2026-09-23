@@ -3,6 +3,70 @@
 Notable changes to the Zecboat desktop wallet. Entries describe the user-visible effect,
 not the diff.
 
+## Unreleased — 0.7.0
+
+### Added
+
+- **YubiKey protection for the wallet identity file.** `encryption-identity.txt` can now be
+  encrypted to a PIV key that cannot leave the device, so no copy of the wallet directory is
+  useful without the physical key — decryption happens on the card. The unlock box asks for
+  the key's PIN rather than a password, and says so. These are not interchangeable: three
+  wrong PINs block the device, and someone who thinks they are guessing at a password will
+  keep guessing.
+
+  **It does not protect spending.** Zcash spend authorization is RedPallas over Pallas and
+  no YubiKey applet implements it. Once the wallet is unlocked, signing is software exactly
+  as before. The wallet says this on the screen where you turn the feature on.
+
+  **Requires `age-plugin-yubikey`, which you install yourself:**
+
+  ```
+  cargo install age-plugin-yubikey
+  ```
+
+  It is not packaged for Debian and installing it needs a Rust toolchain, so in this release
+  **YubiKey support is effectively developer-only.** We chose not to bundle the plugin: it
+  links `libpcsclite`, so shipping it would re-add that dependency for every user, including
+  everyone who will never own a YubiKey. Without the plugin the option simply does not
+  appear — nothing breaks, but nothing advertises itself either, so this note is the only
+  place the feature is announced.
+
+  **Supported:** YubiKey 4 and 5 series, including Nano and USB-C. **Not supported:** the
+  pre-YK4 NEO series, or the blue "Security Key by Yubico", which has no PIV applet at all.
+
+  **Two things to know before enabling it.** Restoring from your seed phrase produces a
+  password wallet and drops YubiKey protection — keep the 24 words, they remain the only way
+  back in if the key is lost. And `yubikey-identity.txt`, written beside the wallet, encodes
+  the key's **hardware serial number in plaintext** — it is bech32, not encryption. A leaked
+  backup therefore carries a device identifier, so prefer a key dedicated to this wallet over
+  one that also does your SSH or website logins.
+
+### Changed
+
+- **The node is chosen before the seed phrase is typed.** Restoring a wallet previously
+  offered no network choice at all: it went straight to seed entry and used whichever node
+  was compiled in, so on a downloaded build a public lightwalletd was contacted before you
+  had been asked. Restore now passes through the same network screen as wallet creation, and
+  if `ZECBOAT_PROVIDER` is set that node is offered preselected rather than overruled by a
+  preset.
+
+- **Settings shows the node actually in use.** With no stored choice it displayed the public
+  node regardless of where the wallet was really pointed — on the one screen you open to
+  find that out.
+
+- **Settings → About** no longer carries the "What this wallet does not do" list. Those
+  limits are published in ZMAP-v0.3 §13 and on zecboat.com; a second copy on a panel you
+  open to check a build hash only invited the two to drift apart.
+
+### Fixed
+
+- **The YubiKey option used to be a mock.** Before this release the detector reported a key
+  as present whether or not one was plugged in, and the "hardware" response was a fixed
+  string compiled into the binary. The controls were hidden in September for that reason;
+  they return now that the mechanism behind them is real.
+
+---
+
 ## 0.6.5-beta.1 — 2026-09-20
 
 **The 0.6.5-beta release was withdrawn. This replaces it.** The wallet is byte-for-byte the
