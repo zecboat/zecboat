@@ -74,6 +74,11 @@
   let nodeFeedback = $state<{type: 'success' | 'info' | 'error', message: string, detail?: string} | null>(null);
   let showImportInput = $state(false);
   let importSeed = $state("");
+  // null = scan from Sapling activation, the "I don't know" answer that cannot silently
+  // lose funds. Import previously hardcoded 3,364,599 (Aug 2025) with a comment admitting
+  // any older seed would under-report — the literal "zero balance, funds are really there"
+  // outcome, by design. Restore has offered this choice all along; import did not.
+  let importBirthday = $state<number | null>(null);
   let isImporting = $state(false);
   // Import REPLACES the wallet on this machine. The user has to say so explicitly;
   // see the warning block in the markup for why a plain button was not enough.
@@ -270,7 +275,7 @@
     actionFeedback = { type: 'info', message: 'Replacing wallet, deriving keys and starting a rescan...' };
 
     try {
-      await invoke("import_wallet", { seed: importSeed.trim() });
+      await invoke("import_wallet", { seed: importSeed.trim(), birthday: importBirthday });
       // Say what actually happened. The old message ("successfully imported") did not
       // mention that a wallet had just been replaced, which is the part that matters.
       actionFeedback = {
@@ -399,6 +404,15 @@
         </div>
         <label for="import-seed">Enter the 24-word seed phrase to use instead</label>
         <textarea id="import-seed" rows="3" placeholder="abandon abandon abandon..." bind:value={importSeed}></textarea>
+        <label for="import-bday">Scan from (optional)</label>
+        <input id="import-bday" type="number" min="0" placeholder="leave empty to scan everything"
+               bind:value={importBirthday} disabled={isImporting} />
+        <p class="hint">
+          Leave this empty unless you know the block your wallet was created at. Empty scans
+          from Sapling activation — slowest, and it cannot miss funds. A height set later than
+          a block your funds arrived in means that block is never scanned and the wallet shows
+          zero for money that is really there.
+        </p>
         <label class="ack-line">
           <input type="checkbox" bind:checked={importAcknowledged} disabled={isImporting} />
           <span>I understand this replaces the wallet currently on this machine.</span>

@@ -381,7 +381,7 @@ async fn database_backed_entry_points_agree_with_direct_derivation() {
     // the string as given, and every reader must still find the same wallet.
     let alt = &KNOWN_WALLETS[1];
     let padded = format!("  {}\n", alt.phrase);
-    zecboat_core::import_wallet(&padded).await.expect("import_wallet");
+    zecboat_core::import_wallet(&padded, Some(BIRTHDAY)).await.expect("import_wallet");
     let (stored_ufvk, stored_addr) = stored_account(&sb.wallet_db());
     assert_eq!(stored_ufvk, alt.ufvk, "import derived a different wallet from the fixture phrase");
     assert_eq!(stored_addr, alt.default_ua);
@@ -569,7 +569,7 @@ async fn public_entry_points_reject_bad_phrases_without_echoing_them() {
     assert!(!sb.wallet_db().exists(), "recovery must not create a wallet from a bad phrase");
 
     // import_wallet validates the phrase before it even checks the lock state.
-    let err = zecboat_core::import_wallet(&bad).await.expect_err("import must reject an unknown word");
+    let err = zecboat_core::import_wallet(&bad, None).await.expect_err("import must reject an unknown word");
     let text = format!("{err:?}");
     assert!(!text.contains("zecboat") && !text.contains("abandon"), "seed words in error: {text}");
     assert!(!sb.wallet_db().exists());
@@ -688,7 +688,7 @@ async fn a_non_nfkd_phrase_opens_the_same_wallet_through_our_entry_points() {
         zecboat_core::unlock_wallet("pw".into(), false)
             .await
             .expect("unlock");
-        zecboat_core::import_wallet(&contaminated)
+        zecboat_core::import_wallet(&contaminated, Some(BIRTHDAY))
             .await
             .expect("import must accept the contaminated phrase");
         let (ufvk, _addr) = stored_account(&sb.wallet_db());

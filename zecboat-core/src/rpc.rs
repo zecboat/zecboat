@@ -2970,7 +2970,11 @@ pub async fn recover_wallet_from_seed(
     Ok(birthday_height)
 }
 
-pub async fn import_wallet(seed: &str) -> Result<()> {
+pub async fn import_wallet(seed: &str, birthday: Option<u32>) -> Result<()> {
+    // Sapling activation. Everything this wallet can hold exists at or after it, so it is
+    // the "I don't know" answer that cannot silently lose funds — the same constant and the
+    // same reasoning as recover_wallet_from_seed.
+    const SAPLING_ACTIVATION: u32 = 419_200;
     // Basic validation of the seed phrase
     let _mnemonic = phrase_to_mnemonic(seed)
         // Deliberately discarded: bip39 errors can name the offending word or its
@@ -3003,7 +3007,18 @@ pub async fn import_wallet(seed: &str) -> Result<()> {
     zcash_client_sqlite::wallet::init::init_wallet_db(&mut wallet_db, None)
         .map_err(|e| anyhow::anyhow!("Failed to init wallet DB: {:?}", e))?;
 
-    if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+    // `if let Ok(conn) = ...` swallowed a failed open: the block was skipped, the account
+    // below was still created, and Ok(()) returned — leaving a wallet that holds an account
+    // and NO stored mnemonic, unable to ever export its own seed. The import would have
+    // reported success.
+    {
+        let conn = rusqlite::Connection::open(&db_path).map_err(|e| {
+            anyhow::anyhow!(
+                "import failed: the wallet database could not be opened to store the seed \
+                 phrase ({e}). Nothing has been imported; the previous wallet was moved \
+                 aside and can be put back."
+            )
+        })?;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS ext_zecboat_keystore_mnemonics (
                 hd_seed_fingerprint BLOB NOT NULL UNIQUE,
@@ -3012,7 +3027,6 @@ pub async fn import_wallet(seed: &str) -> Result<()> {
             [],
         )?;
         
-        // Use a dummy 32-byte array for the fingerprint to satisfy the schema constraint
         let dummy_fingerprint = seed_fingerprint(&_mnemonic);
         conn.execute(
             "INSERT OR REPLACE INTO ext_zecboat_keystore_mnemonics (hd_seed_fingerprint, encrypted_mnemonic) VALUES (?1, ?2)",
@@ -3040,13 +3054,31 @@ pub async fn import_wallet(seed: &str) -> Result<()> {
     // will still under-report. The real fix is to ask the user for their wallet's
     // birthday during import, or to offer a full rescan from Sapling activation.
     // Until then this stays put — moving it forward is the dangerous direction.
-    let chain_state = ChainState::empty(BlockHeight::from_u32(3364599), zcash_primitives::block::BlockHash([0; 32]));
+    let birthday_height = birthday.unwrap_or(SAPLING_ACTIVATION);
+
+    // Refuse a birthday above the chain, the same guard recover_wallet_from_seed carries:
+    // that value guarantees a wallet that can never scan the block its funds are in, and
+    // would report a zero balance forever. Say the tip rather than clamping, so the caller
+    // learns the real number.
+    match current_chain_tip().await {
+        Ok(tip) if birthday_height > tip => {
+            anyhow::bail!(
+                "birthday {birthday_height} is above the current chain tip {tip}. \
+                 A wallet born above the tip can never scan the block its funds are in \
+                 and would report a zero balance forever. Choose {tip} or lower."
+            );
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("[import] could not check the chain tip ({e}); continuing with {birthday_height}"),
+    }
+
+    let chain_state = ChainState::empty(BlockHeight::from_u32(birthday_height), zcash_primitives::block::BlockHash([0; 32]));
     let birthday = AccountBirthday::from_parts(chain_state, None);
     wallet_db.create_account("Imported Wallet", &seed_secret, &birthday, None)
         .map_err(|e| anyhow::anyhow!("Failed to create account: {:?}", e))?;
     
     // Trigger the rescan in the UI by resetting the mock wallet height
-    WALLET_HEIGHT.store(3364599, Ordering::Relaxed);
+    WALLET_HEIGHT.store(birthday_height as u64, Ordering::Relaxed);
     
     Ok(())
 }

@@ -84,8 +84,8 @@ async fn recover_wallet_from_seed(
 }
 
 #[tauri::command]
-async fn import_wallet(seed: String) -> Result<(), String> {
-    zecboat_core::import_wallet(&seed).await.map_err(|e| e.to_string())
+async fn import_wallet(seed: String, birthday: Option<u32>) -> Result<(), String> {
+    zecboat_core::import_wallet(&seed, birthday).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -235,7 +235,7 @@ async fn a_stored_seed_that_matches_no_account_is_refused() {
 
     // A published vector, so nothing here is a seed that has held funds.
     const OTHER: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote";
-    zecboat_core::import_wallet(OTHER).await.expect("import");
+    zecboat_core::import_wallet(OTHER, Some(BIRTHDAY)).await.expect("import");
 
     // Import ADDS an account, so the wallet now holds two and the stored mnemonic belongs
     // to one of them. This must still work — an earlier draft compared against the first
@@ -273,5 +273,58 @@ async fn a_stored_seed_that_matches_no_account_is_refused() {
     assert!(
         msg.contains("does not belong to any of its accounts"),
         "refused, but for the wrong reason — the fingerprint check did not run: {msg}"
+    );
+}
+
+/// Import must not silently succeed without storing the seed phrase.
+///
+/// `if let Ok(conn) = Connection::open(...)` swallowed a failed open: the block that writes
+/// the mnemonic was skipped, the account below was still created, and `Ok(())` returned.
+/// The result was a wallet holding an account and NO stored seed — unable to ever export
+/// its own phrase — reported to the user as a successful import.
+///
+/// Also pins the birthday, which was hardcoded to 3,364,599 (Aug 2025) with a comment
+/// admitting any older seed would under-report. That is the literal "zero balance, funds
+/// are really there" outcome, by design. It is now a parameter defaulting to Sapling
+/// activation.
+#[tokio::test]
+async fn import_defaults_to_sapling_activation_and_stores_the_seed() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let sb = Sandbox::new("import-bday");
+
+    zecboat_core::initialize_new_wallet("pw".into(), false, Some(BIRTHDAY))
+        .await
+        .expect("wallet");
+    zecboat_core::unlock_wallet("pw".into(), false).await.expect("unlock");
+
+    const OTHER: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote";
+    // None = "I don't know", which must mean the safest height, not a recent one.
+    zecboat_core::import_wallet(OTHER, None).await.expect("import");
+
+    let conn = rusqlite::Connection::open(sb.db()).unwrap();
+
+    let bday: i64 = conn
+        .query_row("SELECT birthday_height FROM accounts LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    // 419,201, not 419,200: ChainState::empty(H) puts the chain state AT H, so the account
+    // is born at the first block it must actually scan. The property being asserted is that
+    // "I don't know" means Sapling activation, not a recent height.
+    assert!(
+        (419_200..=419_201).contains(&bday),
+        "an import with no stated birthday must scan from Sapling activation, got {bday}; \
+         the old hardcoded 3,364,599 silently hid every note older than August 2025"
+    );
+
+    // The seed must actually be there. The swallowed open produced a wallet where it was not.
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ext_zecboat_keystore_mnemonics", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1, "import stored no seed phrase — the wallet could never export it");
+
+    // And it must be the phrase that was imported, not the one that was replaced.
+    let exported = zecboat_core::export_keys().await.expect("export");
+    assert!(
+        exported.contains("zoo zoo"),
+        "the stored phrase is not the imported one: {exported}"
     );
 }
