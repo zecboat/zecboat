@@ -118,11 +118,42 @@ impl WalletPool {
             // so a wallet with N transactions compiled the same SQL N times — and two
             // review passes reported it as already hoisted without looking. It is the
             // statement that is reusable; only the bound txid changes per iteration.
+            // BOTH sides of the transaction. This read `FROM sent_notes` alone — the outputs
+            // this wallet CREATED — so a received transaction matched zero rows and its memo
+            // was never shown. **Zecboat could not display a memo anyone sent you**, only
+            // ones you sent yourself, which is backwards: the memo that matters is the one
+            // addressed to you.
+            //
+            // Measured on ~/user2 2026-09-23: five transactions, five received memos, two
+            // with sent_notes. The wallet held five memos and could display at most two.
+            //
+            // The gap was half-noticed. The pool label below carried the comment "Receives
+            // have no sent_notes rows, so the pool is not knowable from this side" — correct
+            // about the symptom, wrong about the conclusion. It is knowable; it is in the
+            // other table, and so is the memo.
+            //
+            // Received CHANGE is excluded: on a send, sent_notes already supplies the memo,
+            // and the change note would add an empty one (0xF6) plus a misleading pool.
             let mut out_stmt = conn.prepare(
-                "SELECT sn.output_pool, sn.value, sn.to_address, sn.memo
-                 FROM sent_notes sn
-                 JOIN transactions t ON t.id_tx = sn.transaction_id
-                 WHERE t.txid = ?1"
+                "SELECT sn.output_pool AS pool, sn.value, sn.to_address, sn.memo
+                   FROM sent_notes sn
+                   JOIN transactions t ON t.id_tx = sn.transaction_id
+                  WHERE t.txid = ?1
+                 UNION ALL
+                 SELECT 2, n.value, NULL, n.memo
+                   FROM sapling_received_notes n
+                   JOIN transactions t ON t.id_tx = n.transaction_id
+                  WHERE t.txid = ?1 AND n.is_change = 0
+                 UNION ALL
+                 SELECT 3, n.value, NULL, n.memo
+                   FROM orchard_received_notes n
+                   JOIN transactions t ON t.id_tx = n.transaction_id
+                  WHERE t.txid = ?1 AND n.is_change = 0
+                 UNION ALL
+                 SELECT 4, n.value, NULL, n.memo
+                   FROM ironwood_received_notes n
+                   JOIN transactions t ON t.id_tx = n.transaction_id
+                  WHERE t.txid = ?1 AND n.is_change = 0"
             )?;
 
             let mut rows = stmt.query([])?;
@@ -186,8 +217,10 @@ impl WalletPool {
                 };
 
                 let pool_label = if pools.is_empty() {
-                    // Receives have no sent_notes rows, so the pool is not knowable
-                    // from this side. Null rather than a guess.
+                    // Now genuinely unknowable rather than merely unqueried: the statement
+                    // above reads received notes too, so a receive reports its real pool.
+                    // Empty here means neither side produced a row — a transparent-only
+                    // transaction, or one the wallet has recorded but not yet enhanced.
                     None
                 } else {
                     Some(pools.iter().map(|p| crate::zmap::pool_name(*p))
