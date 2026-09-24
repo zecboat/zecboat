@@ -328,3 +328,53 @@ async fn import_defaults_to_sapling_activation_and_stores_the_seed() {
         "the stored phrase is not the imported one: {exported}"
     );
 }
+
+/// A backup taken mid-session must contain writes still sitting in the write-ahead log.
+///
+/// The wallet runs in WAL mode and `WalletPool` holds connections open, so SQLite never
+/// checkpoints on close. `backup_wallet` did a bare `fs::copy` of `wallet.db`, which omits
+/// every committed transaction still in the log — a backup that looks fine and is missing
+/// the most recent activity, which is exactly the activity worth backing up.
+///
+/// `preserve_replaced_file` states the hazard twice in the same file. The reasoning was
+/// applied to restore and not to backup, in the same session.
+///
+/// Neither other backup test catches this: both run against a wallet whose log is empty.
+#[tokio::test]
+async fn a_backup_contains_writes_still_in_the_write_ahead_log() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let sb = Sandbox::new("wal");
+
+    zecboat_core::initialize_new_wallet("pw".into(), false, Some(BIRTHDAY))
+        .await
+        .expect("wallet");
+
+    // A connection that stays open, with a committed write small enough that SQLite's
+    // automatic checkpoint (1000 pages) never fires. This is what a running wallet looks
+    // like: work committed, log not yet folded in.
+    let held = rusqlite::Connection::open(sb.db()).unwrap();
+    held.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+    held.execute("CREATE TABLE IF NOT EXISTS zz_wal_marker (note TEXT)", []).unwrap();
+    held.execute("INSERT INTO zz_wal_marker (note) VALUES ('committed before the backup')", [])
+        .unwrap();
+
+    zecboat_core::backup_wallet().await.expect("backup");
+
+    let name = zecboat_core::list_backups().await.unwrap().into_iter().next().expect("a backup");
+    let copy = rusqlite::Connection::open_with_flags(
+        sb.backups().join(name),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("open the backup");
+
+    let found: i64 = copy
+        .query_row("SELECT COUNT(*) FROM zz_wal_marker", [], |r| r.get(0))
+        .unwrap_or(0);
+    assert_eq!(
+        found, 1,
+        "the backup is missing a transaction that was committed before it was taken — the \
+         write-ahead log was not folded in"
+    );
+
+    drop(held);
+}

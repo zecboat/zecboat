@@ -8065,6 +8065,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+ "unicode-normalization",
  "zcash_address",
  "zcash_client_backend",
  "zcash_client_sqlite",

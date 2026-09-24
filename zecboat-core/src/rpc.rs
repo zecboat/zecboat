@@ -125,11 +125,13 @@ fn seed_fingerprint(mnemonic: &Mnemonic<English>) -> Vec<u8> {
 fn verify_seed_matches_account(conn: &rusqlite::Connection, mnemonic: &Mnemonic<English>) -> Result<()> {
     let ours = seed_fingerprint(mnemonic);
 
-    // EVERY account, not the first. `import_wallet` calls `create_account`, so a database
-    // that has ever been imported into holds two rows — the original and the imported —
-    // and the stored mnemonic legitimately belongs to only one of them. An earlier draft
-    // of this compared against `accounts LIMIT 1` and would have started refusing every
-    // wallet that had ever used import.
+    // EVERY account, not the first.
+    //
+    // An earlier draft compared against `accounts LIMIT 1`, on the belief that
+    // `import_wallet` ADDS an account and a database could hold two rows. Measuring it
+    // showed otherwise: import moves `wallet.db` aside and builds a fresh one, so there is
+    // a single row. The belief was wrong; reading every row is still right, because it
+    // costs nothing and does not depend on that behaviour staying true.
     let mut stmt = conn.prepare("SELECT hd_seed_fingerprint FROM accounts")?;
     let rows: Vec<Option<Vec<u8>>> = stmt
         .query_map([], |r| r.get(0))?
@@ -2641,10 +2643,10 @@ pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday
     )?;
     
     // The real ZIP-32 fingerprint, not a constant. See seed_fingerprint().
-    let dummy_fingerprint = seed_fingerprint(&mnemonic);
+    let seed_fp = seed_fingerprint(&mnemonic);
     conn.execute(
         "INSERT OR REPLACE INTO ext_zecboat_keystore_mnemonics (hd_seed_fingerprint, encrypted_mnemonic) VALUES (?1, ?2)",
-        rusqlite::params![dummy_fingerprint, encrypted_mnemonic_bytes],
+        rusqlite::params![seed_fp, encrypted_mnemonic_bytes],
     )?;
 
     // 6 & 7. Derive Account 0 and Unified Address
@@ -2879,10 +2881,10 @@ pub async fn recover_wallet_from_seed(
             )",
             [],
         )?;
-        let dummy_fingerprint = seed_fingerprint(&mnemonic);
+        let seed_fp = seed_fingerprint(&mnemonic);
         conn.execute(
             "INSERT OR REPLACE INTO ext_zecboat_keystore_mnemonics (hd_seed_fingerprint, encrypted_mnemonic) VALUES (?1, ?2)",
-            rusqlite::params![dummy_fingerprint, encrypted_mnemonic_bytes],
+            rusqlite::params![seed_fp, encrypted_mnemonic_bytes],
         )?;
 
         use zcash_client_backend::data_api::chain::ChainState;
@@ -3027,10 +3029,10 @@ pub async fn import_wallet(seed: &str, birthday: Option<u32>) -> Result<()> {
             [],
         )?;
         
-        let dummy_fingerprint = seed_fingerprint(&_mnemonic);
+        let seed_fp = seed_fingerprint(&_mnemonic);
         conn.execute(
             "INSERT OR REPLACE INTO ext_zecboat_keystore_mnemonics (hd_seed_fingerprint, encrypted_mnemonic) VALUES (?1, ?2)",
-            rusqlite::params![dummy_fingerprint, encrypted_mnemonic_bytes],
+            rusqlite::params![seed_fp, encrypted_mnemonic_bytes],
         )?;
     }
     
@@ -3043,17 +3045,15 @@ pub async fn import_wallet(seed: &str, birthday: Option<u32>) -> Result<()> {
     
     let seed_secret = SecretVec::new(_mnemonic.to_seed("").to_vec());
 
-    // DELIBERATELY NOT the chain tip, and deliberately unchanged.
+    // An imported seed may have received funds at any past height. A birthday set later
+    // than a note's block means that note is never scanned, and the wallet reports zero
+    // for money that is really there — indistinguishable, to the person looking at it,
+    // from having lost it.
     //
-    // An imported seed may have received funds at any past height. A birthday set
-    // later than a note's block means that note is never scanned, and the wallet
-    // reports a balance of zero for money that is really there — indistinguishable,
-    // to the person looking at it, from having lost it.
-    //
-    // 3,364,599 is a floor, not a correct answer: a seed with funds older than that
-    // will still under-report. The real fix is to ask the user for their wallet's
-    // birthday during import, or to offer a full rescan from Sapling activation.
-    // Until then this stays put — moving it forward is the dangerous direction.
+    // This was hardcoded to 3,364,599 under a comment that named the fix and deferred it:
+    // "the real fix is to ask the user for their wallet's birthday during import". R5 did
+    // that. `None` now means Sapling activation, the answer that cannot silently lose
+    // funds, and Settings offers the height as restore always did.
     let birthday_height = birthday.unwrap_or(SAPLING_ACTIVATION);
 
     // Refuse a birthday above the chain, the same guard recover_wallet_from_seed carries:
@@ -3671,7 +3671,15 @@ pub async fn backup_wallet() -> Result<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let backup_path = format!("{}/wallet_backup_{}.db", backup_dir, stamp);
+    // Two backups inside one second would overwrite each other silently — the same
+    // as_secs() defect fixed in preserve_replaced_file, still here. The contents would be
+    // identical, but "the backup I took before the change" must remain findable.
+    let mut backup_path = format!("{}/wallet_backup_{}.db", backup_dir, stamp);
+    let mut n = 1;
+    while std::path::Path::new(&backup_path).exists() {
+        backup_path = format!("{}/wallet_backup_{}.{}.db", backup_dir, stamp, n);
+        n += 1;
+    }
 
     // A BACKUP IS BOTH FILES OR IT IS NOTHING.
     //
@@ -3698,6 +3706,40 @@ pub async fn backup_wallet() -> Result<String> {
         );
     }
     let identity_backup = backup_path.replace(".db", ".identity.txt");
+
+    // CHECKPOINT FIRST, OR THE COPY IS INCOMPLETE.
+    //
+    // The wallet runs in WAL mode (see the PRAGMA in start_sync_engine) and `WalletPool` is
+    // a deadpool that holds connections open, so SQLite never checkpoints on close. A bare
+    // copy of `wallet.db` mid-session therefore omits every committed transaction still
+    // sitting in the log, and can catch the main file mid-checkpoint.
+    //
+    // `preserve_replaced_file` states this hazard twice, twenty lines from here — "A `-wal`
+    // holds committed transactions that have not yet been folded into the main file". That
+    // reasoning was applied to restore and not to backup, in the same session, by the same
+    // hand. Found by review 2026-09-24.
+    //
+    // Refusing beats writing a quiet half-backup: the whole point of this function is that
+    // what it produces can be restored.
+    {
+        let conn = rusqlite::Connection::open(&db_path)
+            .map_err(|e| anyhow::anyhow!("backup aborted: could not open the wallet to \
+                                          checkpoint it ({e})"))?;
+        let (busy, log_frames, _checkpointed): (i64, i64, i64) = conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .map_err(|e| anyhow::anyhow!("backup aborted: the write-ahead log could not be \
+                                          folded into the database ({e})"))?;
+        if busy != 0 || log_frames > 0 {
+            anyhow::bail!(
+                "backup aborted: the wallet's write-ahead log could not be folded into the \
+                 database (busy={busy}, {log_frames} frames left). A copy taken now would \
+                 silently omit recent transactions. Close any other window using this \
+                 wallet and try again."
+            );
+        }
+    }
 
     std::fs::copy(&db_path, &backup_path)?;
     // If the second copy fails the first must not be left behind advertising itself as a
