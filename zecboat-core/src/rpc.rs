@@ -946,6 +946,71 @@ fn preserve_replaced_file(path: &str) -> Result<Option<String>> {
 /// `-wal` is why the sidecars are not optional. It holds committed transactions that have
 /// not been folded into the main file, so restoring `wallet.db` alone silently discards
 /// them.
+/// One file this operation replaced: where it lives, and the `.replaced-<stamp>` copy of
+/// what was there before, if anything was.
+pub(crate) struct Replaced {
+    pub path: String,
+    pub kept: Option<String>,
+}
+
+/// Put back everything a failed wallet replacement moved aside.
+///
+/// Three functions replace a wallet in place — `initialize_new_wallet`,
+/// `recover_wallet_from_seed` and `import_wallet` — and each moves files aside and then does
+/// fallible work. Only `recover_wallet_from_seed` had an unwind; the other two left the
+/// directory in the state hardest for a user to reason about: a new identity beside no
+/// database, where the old password opens nothing and the new one opens nothing worth
+/// opening. Nothing is lost — the originals are under `.replaced-<stamp>` — but recovering
+/// them means knowing that convention and renaming files by hand, which is not a bar to set
+/// for someone whose wallet creation just failed.
+///
+/// Written once here rather than copied a third time, for the same reason `decrypt_identity`
+/// and `phrase_to_mnemonic` exist: a rule in one place cannot be half-applied.
+///
+/// **Order matters.** Items are unwound in reverse, so a file replaced last is put back
+/// first — the mirror of how they were replaced.
+///
+/// **A `None` in `kept` is not "nothing to do".** It means no previous file existed, so the
+/// NEW one must still be removed: an identity with no wallet beside it reads as an
+/// initialised install and sends `check_initialization_status` the wrong answer.
+///
+/// Returns an error that says which of the two happened, because "nothing was changed" and
+/// "it could not be put back" call for very different responses from the user.
+pub(crate) fn unwind_replacements(items: &[Replaced], e: anyhow::Error, data_dir: &str, what: &str) -> anyhow::Error {
+    let mut clean = true;
+
+    for item in items.iter().rev() {
+        // Remove what we wrote. SQLite sidecars belong to the database that was renamed:
+        // a `-wal` left beside a restored file is replayed into it on first open.
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let _ = std::fs::remove_file(format!("{}{}", item.path, suffix));
+        }
+        // Only if we actually moved one. When `preserve_replaced_file` is what failed,
+        // `kept` is None and the original is still at `path` untouched — removing it above
+        // would be the exact disaster this exists to prevent, so that case is why the
+        // caller must record `kept` from preserve_replaced_file's own return value.
+        if let Some(backup) = item.kept.as_deref() {
+            if !restore_preserved(&item.path, backup) {
+                clean = false;
+            }
+        }
+    }
+
+    if clean {
+        anyhow::anyhow!(
+            "{what} failed and nothing was changed: {e}. The wallet that was here before is \
+             back in place and your old password still opens it."
+        )
+    } else {
+        anyhow::anyhow!(
+            "{what} failed ({e}), and the previous wallet could NOT be put back cleanly. \
+             Nothing was deleted — every file is present in {data_dir} either under its own \
+             name or with a `.replaced-<timestamp>` suffix. Do not create or recover another \
+             wallet at this path until they have been reunited."
+        )
+    }
+}
+
 fn restore_preserved(path: &str, backup: &str) -> bool {
     let mut ok = std::fs::rename(backup, path).is_ok();
     for suffix in ["-wal", "-shm", "-journal"] {
@@ -2576,24 +2641,65 @@ pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday
     }
     }
     
-    // 2. Save this identity to the filesystem
+    // A brand new seed has never received anything, so its birthday is now. This was
+    // hardcoded to 3,364,599 — around 64,000 blocks BEFORE Ironwood activated at
+    // 3,428,143, and further below the tip with every day that passed. Every new
+    // wallet paid for scanning a stretch of chain it could not possibly appear in.
+    //
+    // If the node cannot be reached we fall back to Ironwood activation rather than
+    // guessing a recent height: too early only costs scanning time, while too late
+    // silently skips blocks. For a NEW seed that floor is already generous.
+    //
+    // Note this is the opposite of the right call for an imported seed — see
+    // import_wallet, where moving the birthday forward would hide real funds.
+    const IRONWOOD_ACTIVATION: u32 = 3_428_143;
+    // An explicit birthday wins. A new seed's correct answer is the tip, but the
+    // caller may know better — a phrase generated elsewhere weeks ago, or a node
+    // reporting a tip that is wrong. Lowering it only costs scanning time.
+    let birthday_height = match birthday {
+        Some(h) => h,
+        None => match current_chain_tip().await {
+        Ok(tip) => tip,
+        Err(e) => {
+            eprintln!(
+                "[wallet] could not reach a node to read the chain tip ({e}); \
+                 using Ironwood activation {IRONWOOD_ACTIVATION} as the birthday. \
+                 The first sync will scan more of the chain than it needs to."
+            );
+            IRONWOOD_ACTIVATION
+        }
+        },
+    };
+    println!("[wallet] new account birthday: {birthday_height}");
+
+    // Resolved BEFORE anything on disk is replaced. It is the only await in this function,
+    // and leaving it in the middle meant the fallible remainder could not run in a closure
+    // at all — R4's unwind needs a synchronous body. It also matches what the YubiKey
+    // recipient above does and for the same reason: fail with the directory untouched.
+
+    // 2. Save this identity to the filesystem.
+    //
+    // From here on, files that already existed are being replaced. Every `kept` below is
+    // recorded so `unwind_replacements` can put them back if anything after this fails —
+    // see R4. Without it, a failure left a NEW identity beside NO database: the old
+    // password opens nothing and the new one opens nothing worth opening.
     let identity_path = format!("{}/encryption-identity.txt", data_dir);
-    preserve_replaced_file(&identity_path)?;
+    let kept_identity = preserve_replaced_file(&identity_path)?;
     std::fs::write(&identity_path, encrypted_identity)?;
 
     // The stub is what puts this wallet in YubiKey mode from now on. unlock_wallet reads
     // the directory, not a caller-supplied flag, so writing this file is the whole switch.
     let stub_path = crate::paths::as_string::yubikey_stub_path()?;
+    let kept_stub = preserve_replaced_file(&stub_path)?;
     if yubikey_recipient.is_some() {
         let stubs = crate::yubi::list_identities()?;
         let stub = stubs.into_iter().next().ok_or_else(|| {
             anyhow::anyhow!("the YubiKey stopped responding while the wallet was being created")
         })?;
         std::fs::write(&stub_path, format!("{stub}\n"))?;
-    } else {
-        // A password wallet must not inherit a stub from whatever was here before.
-        let _ = std::fs::remove_file(&stub_path);
     }
+    // A password wallet must not inherit a stub from whatever was here before — and does
+    // not, because preserve_replaced_file above has already moved any previous one aside.
     
     // 3. Generate a fresh 24-word BIP-39 Seed Phrase
     let mnemonic = Mnemonic::<English>::generate(Count::Words24);
@@ -2612,7 +2718,11 @@ pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday
     // 5. Initialize the SQLite wallet.db
     let db_path = format!("{}/wallet.db", data_dir);
     // CRITICAL: A new wallet must be completely clean. Destroy any existing database.
-    preserve_replaced_file(&db_path)?;
+    let kept_db = preserve_replaced_file(&db_path)?;
+
+    // Everything from here can fail with three files already replaced. R4: run it in a
+    // closure so the failure path can put all of them back.
+    let built = (|| -> Result<String> {
     
     let mut wallet_db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, OsRng)
         .map_err(|e| anyhow::anyhow!("Failed to open wallet DB: {:?}", e))?;
@@ -2658,46 +2768,35 @@ pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday
     
     let seed_secret = SecretVec::new(mnemonic.to_seed("").to_vec());
 
-    // A brand new seed has never received anything, so its birthday is now. This was
-    // hardcoded to 3,364,599 — around 64,000 blocks BEFORE Ironwood activated at
-    // 3,428,143, and further below the tip with every day that passed. Every new
-    // wallet paid for scanning a stretch of chain it could not possibly appear in.
-    //
-    // If the node cannot be reached we fall back to Ironwood activation rather than
-    // guessing a recent height: too early only costs scanning time, while too late
-    // silently skips blocks. For a NEW seed that floor is already generous.
-    //
-    // Note this is the opposite of the right call for an imported seed — see
-    // import_wallet, where moving the birthday forward would hide real funds.
-    const IRONWOOD_ACTIVATION: u32 = 3_428_143;
-    // An explicit birthday wins. A new seed's correct answer is the tip, but the
-    // caller may know better — a phrase generated elsewhere weeks ago, or a node
-    // reporting a tip that is wrong. Lowering it only costs scanning time.
-    let birthday_height = match birthday {
-        Some(h) => h,
-        None => match current_chain_tip().await {
-        Ok(tip) => tip,
-        Err(e) => {
-            eprintln!(
-                "[wallet] could not reach a node to read the chain tip ({e}); \
-                 using Ironwood activation {IRONWOOD_ACTIVATION} as the birthday. \
-                 The first sync will scan more of the chain than it needs to."
-            );
-            IRONWOOD_ACTIVATION
-        }
-        },
-    };
-    println!("[wallet] new account birthday: {birthday_height}");
 
     let chain_state = ChainState::empty(BlockHeight::from_u32(birthday_height), zcash_primitives::block::BlockHash([0; 32]));
     let birthday = AccountBirthday::from_parts(chain_state, None);
     wallet_db.create_account("My Wallet", &seed_secret, &birthday, None)
         .map_err(|e| anyhow::anyhow!("Failed to create account: {:?}", e))?;
 
-    // Note: To keep this minimal and functional without exact zcash_client_backend API matching,
-    // we set WALLET_PASSWORD to enable extracting later, but for now we just return the seed phrase.
+        Ok(seed_phrase)
+    })();
+
+    let seed_phrase = match built {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(unwind_replacements(
+                &[
+                    Replaced { path: identity_path, kept: kept_identity },
+                    Replaced { path: stub_path,     kept: kept_stub },
+                    Replaced { path: db_path,       kept: kept_db },
+                ],
+                e,
+                &data_dir,
+                "creating the wallet",
+            ))
+        }
+    };
+
+    // Only once the wallet really exists. Setting this on the failure path would leave the
+    // process believing it holds the password to a wallet that was rolled back.
     *WALLET_PASSWORD.lock().unwrap() = Some(final_password);
-    
+
     Ok(seed_phrase)
 }
 
@@ -2907,50 +3006,18 @@ pub async fn recover_wallet_from_seed(
     })();
 
     if let Err(e) = built {
-        let mut clean = true;
-
-        // The database first. Only if we actually moved one: when
-        // `preserve_replaced_file` is what failed, `kept_db` is None and the original is
-        // still sitting at `db_path` untouched — deleting it here would be the exact
-        // disaster this unwind exists to prevent.
-        if let Some(backup) = kept_db.as_deref() {
-            for suffix in ["", "-wal", "-shm", "-journal"] {
-                let _ = std::fs::remove_file(format!("{}{}", db_path, suffix));
-            }
-            if !restore_preserved(&db_path, backup) {
-                clean = false;
-            }
-        }
-
-        // Then the identity, which is the file that decides whether the user can get in
-        // at all. With no previous one there is nothing to restore, but the new one must
-        // still go: an identity with no wallet beside it reads as an initialised install
-        // and sends `check_initialization_status` the wrong answer.
-        match kept_identity.as_deref() {
-            Some(backup) => {
-                if !restore_preserved(&identity_path, backup) {
-                    clean = false;
-                }
-            }
-            None => {
-                let _ = std::fs::remove_file(&identity_path);
-            }
-        }
-
-        // Never claim a rollback that did not happen.
-        return Err(if clean {
-            anyhow::anyhow!(
-                "recovery failed and nothing was changed: {e}. The wallet that was here \
-                 before is back in place and your old password still opens it."
-            )
-        } else {
-            anyhow::anyhow!(
-                "recovery failed ({e}), and the previous wallet could NOT be put back \
-                 cleanly. Nothing was deleted — every file is present in {data_dir} either \
-                 under its own name or with a `.replaced-<timestamp>` suffix. Do not create \
-                 or recover another wallet at this path until they have been reunited."
-            )
-        });
+        // Was a hand-written unwind, duplicated here. Now the shared one — see
+        // unwind_replacements, added by R4 when initialize_new_wallet and import_wallet
+        // needed the same thing and copying it a third time would have been the mistake.
+        return Err(unwind_replacements(
+            &[
+                Replaced { path: identity_path.clone(), kept: kept_identity },
+                Replaced { path: db_path.clone(),       kept: kept_db.clone() },
+            ],
+            e,
+            &data_dir,
+            "recovery",
+        ));
     }
 
     // Unlock as the recovered wallet, so the caller does not have to ask for the
@@ -2999,9 +3066,32 @@ pub async fn import_wallet(seed: &str, birthday: Option<u32>) -> Result<()> {
         writer.finish()?;
     }
     
+    let birthday_height = birthday.unwrap_or(SAPLING_ACTIVATION);
+
+    // Refuse a birthday above the chain, the same guard recover_wallet_from_seed carries:
+    // that value guarantees a wallet that can never scan the block its funds are in, and
+    // would report a zero balance forever. Say the tip rather than clamping, so the caller
+    // learns the real number.
+    match current_chain_tip().await {
+        Ok(tip) if birthday_height > tip => {
+            anyhow::bail!(
+                "birthday {birthday_height} is above the current chain tip {tip}. \
+                 A wallet born above the tip can never scan the block its funds are in \
+                 and would report a zero balance forever. Choose {tip} or lower."
+            );
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("[import] could not check the chain tip ({e}); continuing with {birthday_height}"),
+    }
+
     // 3. Save to database and clear old synced blocks
     // CRITICAL: A new wallet must be completely clean. Destroy any existing database.
-    preserve_replaced_file(&db_path)?;
+    let kept_db = preserve_replaced_file(&db_path)?;
+
+    // R4: the remainder can fail with the database already moved aside, leaving a wallet
+    // directory with an identity and no database. The closure body is synchronous, which
+    // is why the tip check above was moved ahead of it.
+    let built = (|| -> Result<()> {
     
     let mut wallet_db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, OsRng)
         .map_err(|e| anyhow::anyhow!("Failed to open wallet DB: {:?}", e))?;
@@ -3056,30 +3146,28 @@ pub async fn import_wallet(seed: &str, birthday: Option<u32>) -> Result<()> {
     // funds, and Settings offers the height as restore always did.
     let birthday_height = birthday.unwrap_or(SAPLING_ACTIVATION);
 
-    // Refuse a birthday above the chain, the same guard recover_wallet_from_seed carries:
-    // that value guarantees a wallet that can never scan the block its funds are in, and
-    // would report a zero balance forever. Say the tip rather than clamping, so the caller
-    // learns the real number.
-    match current_chain_tip().await {
-        Ok(tip) if birthday_height > tip => {
-            anyhow::bail!(
-                "birthday {birthday_height} is above the current chain tip {tip}. \
-                 A wallet born above the tip can never scan the block its funds are in \
-                 and would report a zero balance forever. Choose {tip} or lower."
-            );
-        }
-        Ok(_) => {}
-        Err(e) => eprintln!("[import] could not check the chain tip ({e}); continuing with {birthday_height}"),
-    }
 
     let chain_state = ChainState::empty(BlockHeight::from_u32(birthday_height), zcash_primitives::block::BlockHash([0; 32]));
     let birthday = AccountBirthday::from_parts(chain_state, None);
     wallet_db.create_account("Imported Wallet", &seed_secret, &birthday, None)
         .map_err(|e| anyhow::anyhow!("Failed to create account: {:?}", e))?;
     
+        Ok(())
+    })();
+
+    if let Err(e) = built {
+        let data_dir = crate::paths::as_string::app_data_dir()?;
+        return Err(unwind_replacements(
+            &[Replaced { path: db_path, kept: kept_db }],
+            e,
+            &data_dir,
+            "importing the wallet",
+        ));
+    }
+
     // Trigger the rescan in the UI by resetting the mock wallet height
     WALLET_HEIGHT.store(birthday_height as u64, Ordering::Relaxed);
-    
+
     Ok(())
 }
 
@@ -4075,6 +4163,99 @@ mod tests {
             assert_eq!(got, vec![i as u8; 64], "copy {i} was overwritten by a later one");
         }
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod unwind_tests {
+    use super::*;
+
+    /// A failed replacement must put every moved file back, and say so accurately.
+    ///
+    /// This is a UNIT test of the mechanism, not an end-to-end one, and the distinction is
+    /// worth stating rather than glossing. Inducing a genuine late failure in
+    /// `initialize_new_wallet` proved impractical: a directory left at `wallet.db` is simply
+    /// renamed aside by `preserve_replaced_file` and SQLite creates a fresh file, and
+    /// `create_account` accepts a birthday of `u32::MAX` without complaint. Four attempts,
+    /// none reliable.
+    ///
+    /// So this proves the unwind does what it claims. It does NOT prove the three callers
+    /// are wired to it correctly — that is covered only by reading them.
+    #[test]
+    fn a_failed_replacement_puts_every_file_back() {
+        let dir = std::env::temp_dir().join(format!("zb-unwind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let db = dir.join("wallet.db").to_string_lossy().into_owned();
+        let id = dir.join("encryption-identity.txt").to_string_lossy().into_owned();
+
+        std::fs::write(&db, b"ORIGINAL DATABASE").unwrap();
+        std::fs::write(&id, b"ORIGINAL IDENTITY").unwrap();
+        // A -wal belonging to the original. It must travel with it, or it is replayed into
+        // whatever file takes its place.
+        std::fs::write(format!("{db}-wal"), b"ORIGINAL LOG").unwrap();
+
+        let kept_db = preserve_replaced_file(&db).unwrap();
+        let kept_id = preserve_replaced_file(&id).unwrap();
+        assert!(kept_db.is_some() && kept_id.is_some(), "both should have been moved aside");
+
+        // What a half-built wallet looks like at the moment of failure.
+        std::fs::write(&db, b"half-built").unwrap();
+        std::fs::write(&id, b"new identity").unwrap();
+
+        let err = unwind_replacements(
+            &[
+                Replaced { path: id.clone(), kept: kept_id },
+                Replaced { path: db.clone(), kept: kept_db },
+            ],
+            anyhow::anyhow!("induced"),
+            &dir.to_string_lossy(),
+            "creating the wallet",
+        );
+
+        let msg = format!("{err:#}");
+        assert!(msg.contains("nothing was changed"), "expected a clean rollback: {msg}");
+        assert_eq!(std::fs::read(&db).unwrap(), b"ORIGINAL DATABASE");
+        assert_eq!(std::fs::read(&id).unwrap(), b"ORIGINAL IDENTITY");
+        assert_eq!(
+            std::fs::read(format!("{db}-wal")).unwrap(),
+            b"ORIGINAL LOG",
+            "the log must come back with its own database"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With nothing to restore, the NEW file must still go.
+    ///
+    /// An identity with no wallet beside it reads as an initialised install and sends
+    /// `check_initialization_status` the wrong answer — the user is shown an unlock screen
+    /// for a wallet that does not exist.
+    #[test]
+    fn a_first_ever_creation_leaves_nothing_behind() {
+        let dir = std::env::temp_dir().join(format!("zb-unwind-first-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = dir.join("encryption-identity.txt").to_string_lossy().into_owned();
+
+        // Nothing was there before, so preserve returns None.
+        let kept = preserve_replaced_file(&id).unwrap();
+        assert!(kept.is_none());
+        std::fs::write(&id, b"new identity").unwrap();
+
+        let _ = unwind_replacements(
+            &[Replaced { path: id.clone(), kept }],
+            anyhow::anyhow!("induced"),
+            &dir.to_string_lossy(),
+            "creating the wallet",
+        );
+
+        assert!(
+            !std::path::Path::new(&id).exists(),
+            "the new identity must be removed when there was no previous one to restore"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
