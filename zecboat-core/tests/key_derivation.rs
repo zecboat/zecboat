@@ -625,3 +625,70 @@ fn print_fixtures() {
         println!("  testnet_ufvk_as_main_hrp: {}", test.encode(&MainNetwork));
     }
 }
+
+// ─── F1t: the test the NFKD fix was owed ─────────────────────────────────────
+
+/// A phrase carrying compatibility characters must open the SAME wallet.
+///
+/// `known_issue_non_nfkd_phrase_is_accepted_but_opens_a_different_wallet` above pins the
+/// defect in `bip0039 0.12` — it calls `Mnemonic::from_phrase` DIRECTLY, so it describes
+/// the crate and can never say anything about Zecboat. The fix in `742ca6d` normalises at
+/// our own entry points instead, and that commit went in saying plainly that no test
+/// exercised it. This is that test.
+///
+/// **Why it matters.** BIP-39 requires NFKD before PBKDF2. The crate normalises for the
+/// checksum and then hashes the phrase as typed, so a contaminated phrase validates and
+/// derives a seed no other BIP-39 wallet derives — silently, with no error, into an empty
+/// wallet. The realistic route is a phrase copied out of a PDF whose renderer substituted
+/// ligatures; the affected words are ordinary (*fine finger finish fire firm first fish
+/// fit fix flag flame flash flat flavor flee effort*).
+///
+/// Fullwidth Latin is used rather than a ligature because it contaminates the fixture
+/// phrase without changing which words it contains: NFKD folds `ａｒｔ` onto `art` exactly
+/// as it folds `ﬁne` onto `fine`, and `abandon ×23 art` is a published vector.
+#[tokio::test]
+async fn a_non_nfkd_phrase_opens_the_same_wallet_through_our_entry_points() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    // Explicit, so nothing asks a node for the chain tip. Matches the constant used by
+    // database_backed_entry_points_agree_with_direct_derivation, which is function-scoped.
+    const BIRTHDAY: u32 = 3_400_000;
+    let w = &KNOWN_WALLETS[0];
+
+    // U+FF41 U+FF52 U+FF54 — fullwidth a, r, t.
+    let contaminated = w.phrase.replacen("art", "\u{ff41}\u{ff52}\u{ff54}", 1);
+    assert_ne!(contaminated, w.phrase, "the fixture must actually be contaminated");
+
+    // recover_wallet_from_seed — the path someone uses when they have lost everything else.
+    {
+        let sb = Sandbox::new("nfkd-recover");
+        zecboat_core::recover_wallet_from_seed(&contaminated, "pw".into(), Some(BIRTHDAY))
+            .await
+            .expect("a phrase that passes the checksum must be accepted");
+        let (ufvk, _addr) = stored_account(&sb.wallet_db());
+        assert_eq!(
+            ufvk, w.ufvk,
+            "recover_wallet_from_seed derived a DIFFERENT wallet from a phrase that differs \
+             only by compatibility characters — the user would see an empty wallet and no error"
+        );
+    }
+
+    // import_wallet — same phrase, same requirement, a different call site that had its own
+    // copy of the parsing.
+    {
+        let sb = Sandbox::new("nfkd-import");
+        zecboat_core::initialize_new_wallet("pw".into(), false, Some(BIRTHDAY))
+            .await
+            .expect("a wallet must exist before importing into it");
+        zecboat_core::unlock_wallet("pw".into(), false)
+            .await
+            .expect("unlock");
+        zecboat_core::import_wallet(&contaminated)
+            .await
+            .expect("import must accept the contaminated phrase");
+        let (ufvk, _addr) = stored_account(&sb.wallet_db());
+        assert_eq!(
+            ufvk, w.ufvk,
+            "import_wallet derived a different wallet from the same phrase"
+        );
+    }
+}
