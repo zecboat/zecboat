@@ -205,3 +205,73 @@ async fn restore_preserves_the_wallet_it_replaces() {
          which cannot be spent"
     );
 }
+
+/// The stored seed must belong to one of this database's accounts.
+///
+/// `ext_zecboat_keystore_mnemonics.hd_seed_fingerprint` is `BLOB NOT NULL UNIQUE` and exists
+/// to say WHICH seed the stored mnemonic belongs to. All three writers put `vec![0u8; 32]`
+/// there, so it said the same thing about every wallet and nothing compared it to anything.
+/// A database whose mnemonic and account disagree showed one wallet's balance and would sign
+/// with another's key — surfacing at the first spend, not at unlock.
+///
+/// The check compares against `accounts.hd_seed_fingerprint`, which the backend computes
+/// independently, rather than against our own column: a value we wrote ourselves could only
+/// prove we are self-consistent.
+///
+/// **Constructing a real mismatch takes care.** The obvious fixture — A's database beside
+/// B's identity — fails at `NoMatchingKeys` before the fingerprint is ever consulted, so it
+/// passes while proving nothing. That version was written first and discarded. This one goes
+/// through `import_wallet`, which leaves the mnemonic decryptable by the identity in place,
+/// and then removes the account it belongs to.
+#[tokio::test]
+async fn a_stored_seed_that_matches_no_account_is_refused() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let sb = Sandbox::new("fingerprint");
+
+    zecboat_core::initialize_new_wallet("pw".into(), false, Some(BIRTHDAY))
+        .await
+        .expect("wallet A");
+    zecboat_core::unlock_wallet("pw".into(), false).await.expect("unlock");
+
+    // A published vector, so nothing here is a seed that has held funds.
+    const OTHER: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote";
+    zecboat_core::import_wallet(OTHER).await.expect("import");
+
+    // Import ADDS an account, so the wallet now holds two and the stored mnemonic belongs
+    // to one of them. This must still work — an earlier draft compared against the first
+    // account only and would have refused every wallet that had ever imported.
+    zecboat_core::export_keys()
+        .await
+        .expect("a legitimately imported wallet must still open its own seed");
+
+    // Make the account's fingerprint the one a DIFFERENT seed would produce. That is
+    // exactly the state a mismatched restore leaves: an accounts row derived from one seed
+    // beside a stored mnemonic from another.
+    //
+    // Deleting the account instead does NOT work, and the attempt is worth recording:
+    // import_wallet REPLACES the account rather than adding one, so the wallet holds a
+    // single row, and removing it leaves nothing to compare against — which the check
+    // correctly treats as "no opinion" rather than as a mismatch.
+    {
+        let conn = rusqlite::Connection::open(sb.db()).unwrap();
+        let n = conn
+            .execute(
+                "UPDATE accounts SET hd_seed_fingerprint = ?1",
+                rusqlite::params![vec![0xABu8; 32]],
+            )
+            .unwrap();
+        assert_eq!(n, 1, "expected exactly one account to re-point");
+    }
+
+    let msg = format!(
+        "{:#}",
+        zecboat_core::export_keys().await.expect_err(
+            "a stored seed belonging to no account was accepted; the wallet would sign with \
+             the wrong key and say nothing"
+        )
+    );
+    assert!(
+        msg.contains("does not belong to any of its accounts"),
+        "refused, but for the wrong reason — the fingerprint check did not run: {msg}"
+    );
+}

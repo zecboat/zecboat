@@ -440,7 +440,13 @@ fn every_source_call_site_uses_the_same_parameters() {
 
     // The counts are the drift alarm. If either changes, a derivation site was added
     // or removed: read it, then update the number here.
-    assert_eq!(to_seed_sites.len(), 8, "to_seed sites: {to_seed_sites:?}");
+    //
+    // 8 -> 9 on 2026-09-24. The new site is `seed_fingerprint()` in rpc.rs, which derives
+    // the seed only to compute its ZIP-32 fingerprint — it produces no spending key. It was
+    // read before this number was changed, which is the whole point of the alarm: the
+    // assertions above still hold for it, since it passes the empty passphrase like every
+    // other site. One more `to_seed`, no more ways to derive a key.
+    assert_eq!(to_seed_sites.len(), 9, "to_seed sites: {to_seed_sites:?}");
     assert_eq!(from_seed_sites.len(), 5, "from_seed sites: {from_seed_sites:?}");
 }
 

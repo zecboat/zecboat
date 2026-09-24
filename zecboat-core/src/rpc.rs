@@ -92,6 +92,70 @@ pub(crate) fn phrase_to_mnemonic(phrase: &str) -> Result<Mnemonic<English>> {
     })
 }
 
+/// The real ZIP-32 seed fingerprint for a phrase.
+///
+/// The three writers of `ext_zecboat_keystore_mnemonics` each stored `vec![0u8; 32]` here,
+/// under the comment *"Use a dummy 32-byte array for the fingerprint to satisfy the schema
+/// constraint"*. The column is declared `BLOB NOT NULL UNIQUE` and exists to say WHICH seed
+/// the stored mnemonic belongs to; a constant says nothing, and a constant in a UNIQUE
+/// column says it about every wallet at once.
+///
+/// What it costs: nothing detects a database whose mnemonic and account disagree. A
+/// mismatched restore or a half-copied directory shows one wallet's balance and signs with
+/// another's key, and the failure surfaces at the first spend rather than at unlock.
+/// `zcash_client_sqlite` computes a genuine `SeedFingerprint` into `accounts` already — see
+/// `verify_seed_matches_account`, which compares against that rather than trusting this.
+fn seed_fingerprint(mnemonic: &Mnemonic<English>) -> Vec<u8> {
+    let seed = mnemonic.to_seed("");
+    zip32::fingerprint::SeedFingerprint::from_seed(&seed)
+        .expect("a BIP-39 seed is 64 bytes, within the 32..=252 the fingerprint accepts")
+        .to_bytes()
+        .to_vec()
+}
+
+/// Is the mnemonic this wallet stores the one its account was derived from?
+///
+/// Compares the fingerprint of the decrypted phrase against `accounts.hd_seed_fingerprint`,
+/// which the backend computed independently when the account was created. **Deliberately
+/// not compared against our own column**: trusting a value we wrote ourselves would only
+/// prove we are self-consistent, and every wallet created before this change has zeros
+/// there.
+///
+/// Returns Ok(()) when they agree or when the account carries no fingerprint to compare.
+fn verify_seed_matches_account(conn: &rusqlite::Connection, mnemonic: &Mnemonic<English>) -> Result<()> {
+    let ours = seed_fingerprint(mnemonic);
+
+    // EVERY account, not the first. `import_wallet` calls `create_account`, so a database
+    // that has ever been imported into holds two rows — the original and the imported —
+    // and the stored mnemonic legitimately belongs to only one of them. An earlier draft
+    // of this compared against `accounts LIMIT 1` and would have started refusing every
+    // wallet that had ever used import.
+    let mut stmt = conn.prepare("SELECT hd_seed_fingerprint FROM accounts")?;
+    let rows: Vec<Option<Vec<u8>>> = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
+
+    // Nothing to compare against: no accounts yet, or accounts carrying no fingerprint,
+    // which a view-only import legitimately has. Not an error.
+    let known: Vec<Vec<u8>> = rows
+        .into_iter()
+        .flatten()
+        .filter(|f| !f.iter().all(|b| *b == 0))
+        .collect();
+    if known.is_empty() || known.iter().any(|f| *f == ours) {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "this wallet's stored seed phrase does not belong to any of its accounts.\n\n\
+         The account(s) were derived from a different seed than the phrase stored beside \
+         them — a database and an encryption identity from different wallets have been put \
+         together, most often by restoring a backup over a newer wallet. The balance shown \
+         would be one wallet's and any signature another's.\n\n\
+         Do not send from this wallet. Recover from your 24-word phrase instead."
+    )
+}
+
 /// Is this wallet sealed to a YubiKey?
 ///
 /// The stub file is the mode — see [`unlock_wallet`]. The UI needs this so the unlock
@@ -2576,8 +2640,8 @@ pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday
         [],
     )?;
     
-    // Use a dummy 32-byte array for the fingerprint to satisfy the schema constraint
-    let dummy_fingerprint = vec![0u8; 32];
+    // The real ZIP-32 fingerprint, not a constant. See seed_fingerprint().
+    let dummy_fingerprint = seed_fingerprint(&mnemonic);
     conn.execute(
         "INSERT OR REPLACE INTO ext_zecboat_keystore_mnemonics (hd_seed_fingerprint, encrypted_mnemonic) VALUES (?1, ?2)",
         rusqlite::params![dummy_fingerprint, encrypted_mnemonic_bytes],
@@ -2815,7 +2879,7 @@ pub async fn recover_wallet_from_seed(
             )",
             [],
         )?;
-        let dummy_fingerprint = vec![0u8; 32];
+        let dummy_fingerprint = seed_fingerprint(&mnemonic);
         conn.execute(
             "INSERT OR REPLACE INTO ext_zecboat_keystore_mnemonics (hd_seed_fingerprint, encrypted_mnemonic) VALUES (?1, ?2)",
             rusqlite::params![dummy_fingerprint, encrypted_mnemonic_bytes],
@@ -2949,7 +3013,7 @@ pub async fn import_wallet(seed: &str) -> Result<()> {
         )?;
         
         // Use a dummy 32-byte array for the fingerprint to satisfy the schema constraint
-        let dummy_fingerprint = vec![0u8; 32];
+        let dummy_fingerprint = seed_fingerprint(&_mnemonic);
         conn.execute(
             "INSERT OR REPLACE INTO ext_zecboat_keystore_mnemonics (hd_seed_fingerprint, encrypted_mnemonic) VALUES (?1, ?2)",
             rusqlite::params![dummy_fingerprint, encrypted_mnemonic_bytes],
@@ -3771,8 +3835,25 @@ fn extract_mnemonic_internal() -> Result<String> {
     let mut decrypted_mnemonic = vec![];
     std::io::Read::read_to_end(&mut mnemonic_reader, &mut decrypted_mnemonic).unwrap();
 
-    String::from_utf8(decrypted_mnemonic)
-        .map_err(|e| anyhow::anyhow!("decrypted seed phrase is not valid UTF-8: {e}"))
+    let phrase = String::from_utf8(decrypted_mnemonic)
+        .map_err(|e| anyhow::anyhow!("decrypted seed phrase is not valid UTF-8: {e}"))?;
+
+    // THE CHECK NOTHING PERFORMED. Every caller of this function is about to use the seed
+    // for something consequential — exporting it, deriving a viewing key, signing. If the
+    // phrase stored here does not belong to the account this database describes, the wallet
+    // would show one wallet's balance and sign with another's key, and nothing would say so
+    // until a transaction went wrong.
+    //
+    // Checked here rather than at unlock because this is the narrowest place that covers
+    // every dangerous path, and because unlock does not decrypt the mnemonic at all.
+    {
+        let conn = rusqlite::Connection::open(&db_path)
+            .map_err(|e| anyhow::anyhow!("Failed to open DB to verify the seed: {:?}", e))?;
+        let m = phrase_to_mnemonic(&phrase)?;
+        verify_seed_matches_account(&conn, &m)?;
+    }
+
+    Ok(phrase)
 }
 
 pub async fn export_keys() -> Result<String> {
