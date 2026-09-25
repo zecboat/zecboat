@@ -38,8 +38,20 @@ fn main() -> anyhow::Result<()> {
         zcash_client_sqlite::util::SystemClock,
         rand::rngs::OsRng,
     )?;
+    // Expiry from the node's tip, not the (possibly stale) copy's view: WAKE_ZEBRAD, default local.
+    let expiry = {
+        let url = env::var("WAKE_ZEBRAD").unwrap_or_else(|_| "http://127.0.0.1:8232".into());
+        let out = std::process::Command::new("curl")
+            .args(["-s", "--max-time", "10", "-u", "x:x", "-H", "content-type: application/json",
+                   "--data", r#"{"jsonrpc":"2.0","id":1,"method":"getblockcount","params":[]}"#, &url])
+            .output()?;
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+        let tip = v["result"].as_u64().ok_or_else(|| anyhow::anyhow!("no tip from zebrad"))? as u32;
+        println!("node tip {tip}; expiry {}", tip + 40);
+        Some(zcash_protocol::consensus::BlockHeight::from_u32(tip + 40))
+    };
     let t = std::time::Instant::now();
-    let hex = zecboat_core::native_builder::send_zmap_asset(&mut wallet_db, &usk, asset_id, recipient)?;
+    let hex = zecboat_core::native_builder::send_zmap_asset(&mut wallet_db, &usk, asset_id, recipient, expiry)?;
     println!("built, proved, signed and stored in {:.1?}; {} bytes; NOT broadcast", t.elapsed(), hex.len() / 2);
     let out = format!("{home}/paired_tx.hex");
     std::fs::write(&out, &hex)?;

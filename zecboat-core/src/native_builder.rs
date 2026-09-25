@@ -486,6 +486,13 @@ pub fn build_and_sign_transaction(
 /// The ZIP-317 fee and change are still computed by the library's own change strategy, never by
 /// local arithmetic; only the *choice* of inputs is ours.
 ///
+/// # Expiry
+///
+/// `expiry_height`: `None` lets the builder derive it from the wallet's own view of the chain
+/// (target height + 40), right when the wallet has just synced. A caller that knows the node's
+/// tip may pass `Some(tip + 40)` so a build from a wallet that is a little behind is not
+/// expired before it is broadcast.
+///
 /// # Who pays the fee
 ///
 /// The sender, from separate notes. Fees are inputs minus outputs, so taking it from the carrier
@@ -496,6 +503,7 @@ pub fn send_zmap_asset(
     usk: &UnifiedSpendingKey,
     asset_id: &str,
     recipient: &str,
+    expiry_height: Option<BlockHeight>,
 ) -> Result<String> {
     use zcash_client_backend::data_api::wallet::input_selection::{
         LockFilter, LockedInputPolicy, NonEmptyBTreeSet, SpendPolicy,
@@ -778,7 +786,7 @@ pub fn send_zmap_asset(
             account_id,
             OvkPolicy::Sender,
             &proposal,
-            None,
+            expiry_height,
             zcash_primitives::transaction::builder::BundlePadding::DEFAULT,
         )
         .map_err(|e| anyhow!("could not build the asset transfer: {:?}", e))?;

@@ -401,7 +401,7 @@ pub fn send_transaction(
     // honouring a caller's version of either would let the UI change an asset's identity in flight.
     if let Some(id) = asset_id.map(str::trim).filter(|s| !s.is_empty()) {
         let usk = spending_key_from_phrase(&_spending_key)?;
-        let hex = crate::native_builder::send_zmap_asset(&mut wallet_db, &usk, id, address)?;
+        let hex = crate::native_builder::send_zmap_asset(&mut wallet_db, &usk, id, address, None)?;
         return Ok((hex, Vec::new()));
     }
 
