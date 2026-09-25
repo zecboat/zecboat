@@ -3044,9 +3044,12 @@ pub async fn import_wallet(seed: &str, birthday: Option<u32>) -> Result<()> {
     // the "I don't know" answer that cannot silently lose funds — the same constant and the
     // same reasoning as recover_wallet_from_seed.
     const SAPLING_ACTIVATION: u32 = 419_200;
-    // Basic validation of the seed phrase
-    let _mnemonic = phrase_to_mnemonic(seed)
-        // Deliberately discarded: bip39 errors can name the offending word or its
+    // Validation, and the string this wallet will KEEP: `mnemonic.phrase()` is the
+    // NFKD-normalised, single-spaced form, the same one recover_wallet_from_seed stores.
+    // The raw `seed` is never written anywhere — storing it as typed meant the export
+    // showed the paste artefacts back to the user (F6).
+    let mnemonic = phrase_to_mnemonic(seed)
+        // The bip39 error is deliberately discarded: it can name the offending word or its
         // position, and a seed phrase must never reach a log or an error dialog.
         .map_err(|_| anyhow::anyhow!("IMPORT_WALLET_ERROR: Invalid BIP-39 seed phrase"))?;
     
@@ -3062,7 +3065,7 @@ pub async fn import_wallet(seed: &str, birthday: Option<u32>) -> Result<()> {
     let mut encrypted_mnemonic_bytes = vec![];
     {
         let mut writer = seed_encryptor.wrap_output(&mut encrypted_mnemonic_bytes)?;
-        std::io::Write::write_all(&mut writer, seed.as_bytes())?;
+        std::io::Write::write_all(&mut writer, mnemonic.phrase().as_bytes())?;
         writer.finish()?;
     }
     
@@ -3119,7 +3122,7 @@ pub async fn import_wallet(seed: &str, birthday: Option<u32>) -> Result<()> {
             [],
         )?;
         
-        let seed_fp = seed_fingerprint(&_mnemonic);
+        let seed_fp = seed_fingerprint(&mnemonic);
         conn.execute(
             "INSERT OR REPLACE INTO ext_zecboat_keystore_mnemonics (hd_seed_fingerprint, encrypted_mnemonic) VALUES (?1, ?2)",
             rusqlite::params![seed_fp, encrypted_mnemonic_bytes],
@@ -3133,7 +3136,7 @@ pub async fn import_wallet(seed: &str, birthday: Option<u32>) -> Result<()> {
     use zcash_protocol::consensus::BlockHeight;
     use age::secrecy::SecretVec;
     
-    let seed_secret = SecretVec::new(_mnemonic.to_seed("").to_vec());
+    let seed_secret = SecretVec::new(mnemonic.to_seed("").to_vec());
 
     // An imported seed may have received funds at any past height. A birthday set later
     // than a note's block means that note is never scanned, and the wallet reports zero

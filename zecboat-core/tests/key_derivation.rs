@@ -698,3 +698,41 @@ async fn a_non_nfkd_phrase_opens_the_same_wallet_through_our_entry_points() {
         );
     }
 }
+
+/// F6. Deriving the right wallet from a contaminated phrase is half of it; the wallet also
+/// STORES the phrase, and hands it back through Settings → export. Storing the raw input
+/// means the export shows fullwidth or ligature characters the user never typed on purpose
+/// and, worse, a phrase that is not the one `recover_wallet_from_seed` would have stored
+/// for the same seed. Both entry points must keep the normalised phrase.
+#[tokio::test]
+async fn an_imported_phrase_is_stored_normalised_not_as_typed() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    const BIRTHDAY: u32 = 3_400_000;
+    let w = &KNOWN_WALLETS[0];
+    // Fullwidth a-r-t plus a run of spaces and a trailing newline: the shape of a paste.
+    let contaminated = format!(
+        "  {}\n",
+        w.phrase.replacen("art", "\u{ff41}\u{ff52}\u{ff54}", 1).replacen(' ', "   ", 3)
+    );
+    assert_ne!(contaminated.trim(), w.phrase, "the fixture must actually be contaminated");
+
+    let _sb = Sandbox::new("f6-import-stores-normalised");
+    zecboat_core::initialize_new_wallet("pw".into(), false, Some(BIRTHDAY))
+        .await
+        .expect("a wallet must exist before importing into it");
+    zecboat_core::unlock_wallet("pw".into(), false).await.expect("unlock");
+    zecboat_core::import_wallet(&contaminated, Some(BIRTHDAY))
+        .await
+        .expect("import must accept the contaminated phrase");
+
+    let exported = zecboat_core::export_keys().await.expect("export");
+    let stored = exported
+        .rsplit_once("Seed Phrase:\n")
+        .map(|(_, p)| p)
+        .expect("export_keys prints the phrase after a fixed header");
+    assert_eq!(
+        stored, w.phrase,
+        "import_wallet stored the phrase as typed; recover_wallet_from_seed stores it \
+         normalised, so the same seed would export two different strings"
+    );
+}
