@@ -50,11 +50,27 @@
   let verifyError = $state<string | null>(null);
   let isVerifying = $state(false);
 
+  // Card artwork, keyed by asset id, as hash-verified data: URIs from verify_asset_image.
+  //
+  // Cards used to build `${registryBase}/collection/${id}.png` client-side. That guessed the
+  // extension: Happy Birthday is served as .png and rendered, Barcelona is served as .jpg and
+  // every card 404'd to the fallback logo — while opening the asset worked, because the modal
+  // already goes through verify_asset_image, which tries the formats server-side and returns
+  // the bytes only if they hash to the asset id. Cards now take that same path, so what a
+  // tile shows is verified rather than merely fetched, and the extension is never guessed.
+  let cardImages = $state<Record<string, string>>({});
+
   onMount(async () => {
     try {
       assets = await invoke("get_zsas");
     } catch (e) {
       console.error("Failed to load ZSAs:", e);
+      return;
+    }
+    for (const a of assets) {
+      invoke<Verification>("verify_asset_image", { assetId: a.asset_id })
+        .then((v) => { if (v.verified && v.image) cardImages[a.asset_id] = v.image; })
+        .catch(() => { /* no image on the card; opening the asset shows the reason */ });
     }
   });
 
@@ -64,13 +80,6 @@
   let registryBase = $state("https://zecboat.com");
   invoke<string>("registry_base").then((b) => { if (b) registryBase = b; }).catch(() => {});
 
-  function getImageUrl(assetId: string) {
-    if (assetId && assetId.length > 20) {
-      return `${registryBase}/collection/${assetId}.png`;
-    }
-    return "";
-  }
-  
   async function showAssetDetails(assetId: string) {
     selectedAssetId = assetId;
     isLoadingMetadata = true;
@@ -136,20 +145,18 @@
       {@const n = splitName(asset.name)}
       <div class="asset-item" title="ID: {asset.asset_id}" onclick={() => showAssetDetails(asset.asset_id)}>
         <div class="asset-icon">
-          <!-- "preview", not "unverified". These bytes genuinely are unchecked — they come from the
-               registry by asset id and nothing has hashed them — but stamping "unverified" on every
-               tile reads as a fault rather than as a description. The note above states the
-               qualification once; the hover title keeps it on each tile; and opening the asset is
-               where the real check happens. -->
-          <span class="preview-chip" title="Preview fetched from the registry — nothing has verified these bytes. Open the asset to check it against the memo.">preview</span>
-          {#if getImageUrl(asset.asset_id)}
-            <img 
-              src={getImageUrl(asset.asset_id)} 
-              alt={asset.name} 
-              style="width: 100%; height: auto; border-radius: 8px; display: block;" 
-              onerror={(e) => { const t = e.currentTarget as HTMLImageElement; t.src = '/logo.png'; t.style.padding = '10px'; t.style.background = '#2a2a32'; }} 
+          {#if cardImages[asset.asset_id]}
+            <!-- These bytes hashed to the asset id — check 6 — before they were shown. -->
+            <img
+              src={cardImages[asset.asset_id]}
+              alt={asset.name}
+              title="Artwork verified: sha256 matches the asset id in the memo"
+              style="width: 100%; height: auto; border-radius: 8px; display: block;"
             />
           {:else}
+            <!-- Nothing verified yet: still loading, unreachable, or a hash mismatch. Open the
+                 asset for the specific reason; a placeholder must not pretend otherwise. -->
+            <span class="preview-chip" title="No verified artwork for this asset yet. Open it to see why.">unchecked</span>
             📦
           {/if}
         </div>
