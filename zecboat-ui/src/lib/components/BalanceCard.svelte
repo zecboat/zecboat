@@ -2,33 +2,35 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
 
-  let shieldedBalance = $state(0.00);
-  let transparentBalance = $state(0.00);
+  // Every zatoshi in one named bucket (A5). The headline is what a send can use, and the
+  // rows beneath it account for everything else the wallet holds — so a number that is
+  // smaller than expected always comes with the reason beside it.
+  type Breakdown = {
+    spendable_zat: number; locked_zat: number; pending_change_zat: number; awaiting_scan_zat: number;
+    unpositioned_zat: number; unpositioned_notes: number; unpositioned_from_height: number | null;
+    uneconomic_zat: number; transparent_zat: number; shielded_total_zat: number;
+  };
+  let b = $state<Breakdown | null>(null);
   let isShielding = $state(false);
   let shieldMsg = $state<{type: 'success'|'error', text: string} | null>(null);
 
+  const zec = (zat: number) => (zat / 100_000_000).toFixed(4);
+  let shieldedBalance = $derived(b ? b.spendable_zat / 100_000_000 : 0);
+  let transparentBalance = $derived(b ? b.transparent_zat / 100_000_000 : 0);
+  // Anything held back from the headline. Shown only when there is something to explain.
+  let heldBack = $derived(b ? b.locked_zat + b.pending_change_zat + b.awaiting_scan_zat + b.unpositioned_zat + b.uneconomic_zat : 0);
+
+  async function refresh() {
+    try {
+      b = await invoke<Breakdown>("get_balance_breakdown");
+    } catch (e) {
+      console.error("Failed to get balance breakdown", e);
+    }
+  }
+
   onMount(() => {
-    invoke<number>("get_balance").then(res => {
-      shieldedBalance = res;
-    }).catch(e => {
-      console.error("Failed to get balance", e);
-    });
-
-    invoke<number>("get_transparent_balance").then(res => {
-      transparentBalance = res;
-    }).catch(e => {
-      console.error("Failed to get transparent balance", e);
-    });
-    
-    const interval = setInterval(async () => {
-      try {
-        shieldedBalance = await invoke<number>("get_balance");
-        transparentBalance = await invoke<number>("get_transparent_balance");
-      } catch (e) {
-        console.error("Failed to update balances", e);
-      }
-    }, 5000);
-
+    refresh();
+    const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   });
 
@@ -65,6 +67,35 @@
       </div>
       <span class="value">{shieldedBalance.toFixed(4)}</span>
     </div>
+    {#if b && heldBack > 0}
+      <!-- Not part of the headline. Each row is money the wallet holds and cannot spend
+           right now, with the reason. Two kinds: rows that clear on their own, and one
+           that does not. -->
+      {#if b.pending_change_zat > 0}
+        <div class="balance-row held"><span class="label">Change awaiting confirmation</span><span class="value">{zec(b.pending_change_zat)}</span></div>
+      {/if}
+      {#if b.awaiting_scan_zat > 0}
+        <div class="balance-row held"><span class="label">Received, awaiting scan</span><span class="value">{zec(b.awaiting_scan_zat)}</span></div>
+      {/if}
+      {#if b.locked_zat > 0}
+        <div class="balance-row held" title="Held by a pending send, or an asset carrier that ordinary sends route around."><span class="label">Locked (pending send or assets)</span><span class="value">{zec(b.locked_zat)}</span></div>
+      {/if}
+      {#if b.uneconomic_zat > 0}
+        <div class="balance-row held" title="Worth less than the fee it would cost to spend."><span class="label">Below the fee</span><span class="value">{zec(b.uneconomic_zat)}</span></div>
+      {/if}
+      {#if b.unpositioned_zat > 0}
+        <div class="balance-row held warn">
+          <span class="label">Needs a rescan</span>
+          <span class="value">{zec(b.unpositioned_zat)}</span>
+        </div>
+        <p class="held-note">
+          {b.unpositioned_notes === 1 ? 'One note was' : `${b.unpositioned_notes} notes were`} recorded by an earlier
+          version without the data needed to spend {b.unpositioned_notes === 1 ? 'it' : 'them'}. Waiting will not fix this.
+          {#if b.unpositioned_from_height}A rescan from height {b.unpositioned_from_height.toLocaleString()} will.{:else}A rescan will.{/if}
+          Until Settings offers one, restoring this wallet from its seed phrase with a birthday at or below that height does the same.
+        </p>
+      {/if}
+    {/if}
     
     <div class="balance-row transparent">
       <div class="label-group">
@@ -244,4 +275,8 @@
     font-weight: 600;
     color: var(--text-primary, #fff);
   }
+  .balance-row.held { font-size: 0.85rem; padding-left: 1rem; }
+  .balance-row.held .label, .balance-row.held .value { color: var(--text-secondary, #999); font-weight: 500; }
+  .balance-row.held.warn .label, .balance-row.held.warn .value { color: #d29922; }
+  .held-note { margin: 0 0 0 1rem; font-size: 0.78rem; line-height: 1.4; color: var(--text-secondary, #999); }
 </style>

@@ -16,6 +16,11 @@ async fn get_balance() -> Result<f64, String> {
 }
 
 #[tauri::command]
+async fn get_balance_breakdown() -> Result<zecboat_core::BalanceBreakdown, String> {
+    zecboat_core::get_balance_breakdown().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_transparent_balance() -> Result<f64, String> {
     zecboat_core::get_transparent_balance().await.map_err(|e| e.to_string())
 }
@@ -263,7 +268,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            sync_status, set_provider_url, get_provider_url, get_balance, get_transparent_balance, send_transaction, get_addresses,
+            sync_status, set_provider_url, get_provider_url, get_balance, get_balance_breakdown, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
             registry_base, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, wallet_uses_yubikey, lock_wallet,

@@ -870,11 +870,19 @@ pub const ESTIMATED_FEE_ZAT: u64 = 20_000;
 
 pub fn fee_readiness(conn: &rusqlite::Connection) -> rusqlite::Result<FeeReadiness> {
     let mut stmt = conn.prepare(
+        // A shielded note with no commitment-tree position can never be an input: no
+        // witness can be built for it. Counting it here told the user they could pay a
+        // fee they could not pay (A5). Transparent outputs have no position and pass.
         "SELECT v.value
            FROM v_received_outputs v
            LEFT JOIN v_received_output_spends s
              ON v.id_within_pool_table = s.received_output_id AND v.pool = s.pool
-          WHERE s.transaction_id IS NULL",
+          WHERE s.transaction_id IS NULL
+            AND CASE v.pool
+                  WHEN 2 THEN (SELECT commitment_tree_position IS NOT NULL FROM sapling_received_notes  WHERE id = v.id_within_pool_table)
+                  WHEN 3 THEN (SELECT commitment_tree_position IS NOT NULL FROM orchard_received_notes  WHERE id = v.id_within_pool_table)
+                  WHEN 4 THEN (SELECT commitment_tree_position IS NOT NULL FROM ironwood_received_notes WHERE id = v.id_within_pool_table)
+                  ELSE 1 END",
     )?;
     let values = stmt.query_map([], |row| row.get::<_, i64>(0))?;
 

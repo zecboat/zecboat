@@ -57,22 +57,6 @@ impl WalletPool {
             .map_err(|e| anyhow::anyhow!("Interact error: {:?}", e))?
     }
 
-    pub async fn get_real_balance(&self) -> Result<f64> {
-        let conn = self.pool.get().await?;
-        conn.interact(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT SUM(v.value) 
-                 FROM v_received_outputs v
-                 LEFT JOIN v_received_output_spends s 
-                    ON v.id_within_pool_table = s.received_output_id 
-                    AND v.pool = s.pool
-                 WHERE s.transaction_id IS NULL AND v.value > 10000"
-            )?;
-            let balance_zats: i64 = stmt.query_row([], |row| row.get(0)).unwrap_or(0);
-            Ok(balance_zats as f64 / 100_000_000.0)
-        }).await.map_err(|e| anyhow::anyhow!("Interact error: {:?}", e))?
-    }
-
     /// Transaction history, with enough detail to be searchable and explainable.
     ///
     /// # What was wrong before

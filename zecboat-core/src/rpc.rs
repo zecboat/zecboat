@@ -2144,36 +2144,144 @@ pub async fn sync_status() -> Result<String> {
 /// `get_wallet_summary` is the backend's own accounting across all pools, and it
 /// already handles spends and confirmations, so there is no per-pool SQL left
 /// here to fall out of date when a pool is added.
-pub async fn get_balance() -> Result<f64> {
+/// Every zatoshi the wallet knows about, in exactly one named bucket (A5).
+///
+/// A real wallet showed one number on the card and a smaller one available to send, with
+/// nothing between them saying where the rest was. The backend's summary already sorts
+/// notes into buckets; this exposes them, and adds the one the backend cannot name:
+/// **unpositioned** notes — recorded without a commitment-tree position, so no witness
+/// can ever be built and no scan will place them. The backend files those under "pending
+/// spendability" indefinitely, which reads as "wait". It is not "wait"; it is a rescan.
+///
+/// Invariant: `spendable + locked + pending_change + awaiting_scan + unpositioned +
+/// uneconomic == shielded_total`. The card can show the sum and every part.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BalanceBreakdown {
+    /// Can be selected for a send now.
+    pub spendable_zat: u64,
+    /// Committed to a pending proposal, or a carrier locked by `lock_zmap_carriers`.
+    pub locked_zat: u64,
+    /// Change from our own sends, waiting for confirmations.
+    pub pending_change_zat: u64,
+    /// Received value the scan has not yet made witnessable (or confirmed). Will clear.
+    pub awaiting_scan_zat: u64,
+    /// Recorded with no tree position: never spendable without a rescan. Will NOT clear.
+    pub unpositioned_zat: u64,
+    pub unpositioned_notes: u64,
+    /// Lowest mined height among the unpositioned notes — where a rescan must start.
+    pub unpositioned_from_height: Option<u32>,
+    /// Worth less than the marginal fee; spendable only as a grace input.
+    pub uneconomic_zat: u64,
+    /// Unspent transparent outputs.
+    pub transparent_zat: u64,
+    pub shielded_total_zat: u64,
+}
+
+pub async fn get_balance_breakdown() -> Result<BalanceBreakdown> {
     use zcash_client_backend::data_api::wallet::ConfirmationsPolicy;
     use zcash_client_backend::data_api::WalletRead;
 
     let db_path = crate::paths::as_string::wallet_db_path()?;
 
-    let wallet_db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, OsRng)
-        .map_err(|e| anyhow::anyhow!("could not open wallet: {:?}", e))?;
+    // The backend's buckets. No summary (nothing scanned yet) is a wallet of zeros, not
+    // an error — but the unpositioned scan below still runs, because those rows exist
+    // independently of any summary.
+    let mut spendable = 0u64;
+    let mut locked = 0u64;
+    let mut pending_change = 0u64;
+    let mut pending_spendability = 0u64;
+    let mut uneconomic = 0u64;
+    let mut shielded_total = 0u64;
+    {
+        let wallet_db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, OsRng)
+            .map_err(|e| anyhow::anyhow!("could not open wallet: {:?}", e))?;
+        if let Some(summary) = wallet_db
+            .get_wallet_summary(ConfirmationsPolicy::MIN)
+            .map_err(|e| anyhow::anyhow!("could not read wallet summary: {:?}", e))?
+        {
+            for b in summary.account_balances().values() {
+                for p in [b.sapling_balance(), b.orchard_balance(), b.ironwood_balance()] {
+                    spendable += u64::from(p.spendable_value());
+                    locked += u64::from(p.locked_value());
+                    pending_change += u64::from(p.change_pending_confirmation());
+                    pending_spendability += u64::from(p.value_pending_spendability());
+                    uneconomic += u64::from(p.uneconomic_value());
+                    shielded_total += u64::from(p.total());
+                }
+            }
+        }
+    }
 
-    let Some(summary) = wallet_db
-        .get_wallet_summary(ConfirmationsPolicy::MIN)
-        .map_err(|e| anyhow::anyhow!("could not read wallet summary: {:?}", e))?
-    else {
-        // No summary yet — the wallet has not scanned enough to have one.
-        return Ok(0.0);
+    // The bucket the backend cannot name. Unspent, and no commitment-tree position: note
+    // selection requires a position to build a witness (it is the first thing
+    // select_spendable_notes filters on), so these can never be inputs. The backend counts
+    // them in `value_pending_spendability`; they are taken out of that bucket here so
+    // "awaiting scan" only holds what a scan will actually resolve.
+    let (unpositioned, unpositioned_notes, from_height, transparent) = {
+        let conn = rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|e| anyhow::anyhow!("could not open wallet: {:?}", e))?;
+        let mut stmt = conn.prepare(
+            "SELECT n.value, t.mined_height FROM sapling_received_notes n
+               JOIN transactions t ON t.id_tx = n.transaction_id
+              WHERE n.commitment_tree_position IS NULL
+                AND NOT EXISTS (SELECT 1 FROM sapling_received_note_spends s WHERE s.sapling_received_note_id = n.id)
+             UNION ALL
+             SELECT n.value, t.mined_height FROM orchard_received_notes n
+               JOIN transactions t ON t.id_tx = n.transaction_id
+              WHERE n.commitment_tree_position IS NULL
+                AND NOT EXISTS (SELECT 1 FROM orchard_received_note_spends s WHERE s.orchard_received_note_id = n.id)
+             UNION ALL
+             SELECT n.value, t.mined_height FROM ironwood_received_notes n
+               JOIN transactions t ON t.id_tx = n.transaction_id
+              WHERE n.commitment_tree_position IS NULL
+                AND NOT EXISTS (SELECT 1 FROM ironwood_received_note_spends s WHERE s.ironwood_received_note_id = n.id)",
+        )?;
+        let rows: Vec<(i64, Option<u32>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        let value: u64 = rows.iter().map(|(v, _)| (*v).max(0) as u64).sum();
+        let from = rows.iter().filter_map(|(_, h)| *h).min();
+        let transparent: u64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(value_zat), 0) FROM transparent_received_outputs
+                  WHERE id NOT IN (SELECT transparent_received_output_id FROM transparent_received_output_spends)",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|v| v.max(0) as u64)
+            .unwrap_or(0);
+        (value, rows.len() as u64, from, transparent)
     };
 
-    // Sum the shielded pools across every account. `spendable_value` excludes
-    // notes that are not yet spendable, which is what a balance should show.
-    let total: u64 = summary
-        .account_balances()
-        .values()
-        .map(|b| {
-            u64::from(b.sapling_balance().spendable_value())
-                + u64::from(b.orchard_balance().spendable_value())
-                + u64::from(b.ironwood_balance().spendable_value())
-        })
-        .sum();
+    // Rows that exist outside any summary (a wallet that has not scanned yet) still count
+    // toward the total, or the invariant breaks.
+    let shielded_total = shielded_total.max(
+        spendable + locked + pending_change + pending_spendability + uneconomic,
+    ).max(unpositioned + spendable + locked + pending_change + uneconomic);
+    let awaiting_scan = pending_spendability.saturating_sub(unpositioned);
 
-    Ok(total as f64 / 100_000_000.0)
+    Ok(BalanceBreakdown {
+        spendable_zat: spendable,
+        locked_zat: locked,
+        pending_change_zat: pending_change,
+        awaiting_scan_zat: awaiting_scan,
+        unpositioned_zat: unpositioned,
+        unpositioned_notes,
+        unpositioned_from_height: from_height,
+        uneconomic_zat: uneconomic,
+        transparent_zat: transparent,
+        shielded_total_zat: shielded_total,
+    })
+}
+
+/// Spendable shielded balance, in ZEC. One bucket of `get_balance_breakdown`; kept so
+/// the number on the card and the number a send can use are the same number by
+/// construction.
+pub async fn get_balance() -> Result<f64> {
+    Ok(get_balance_breakdown().await?.spendable_zat as f64 / 100_000_000.0)
 }
 
 /// The wallet's transparent receiving address, as a bare `t1…` string.
