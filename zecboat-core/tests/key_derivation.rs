@@ -395,6 +395,7 @@ async fn database_backed_entry_points_agree_with_direct_derivation() {
 fn every_source_call_site_uses_the_same_parameters() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut to_seed_sites = Vec::new();
+    let mut to_seed_lines: Vec<(String, String)> = Vec::new();
     let mut from_seed_sites = Vec::new();
 
     for entry in std::fs::read_dir(&src).unwrap() {
@@ -416,6 +417,7 @@ fn every_source_call_site_uses_the_same_parameters() {
             if let Some(pos) = line.find(".to_seed(") {
                 let arg = call_text(line, pos + ".to_seed".len());
                 to_seed_sites.push((format!("{name}:{}", i + 1), arg));
+                to_seed_lines.push((format!("{name}:{}", i + 1), line.to_string()));
             }
         }
         let mut from = 0;
@@ -429,6 +431,18 @@ fn every_source_call_site_uses_the_same_parameters() {
 
     for (site, args) in &to_seed_sites {
         assert_eq!(args.trim(), "(\"\")", "{site}: to_seed must use the empty passphrase, got {args}");
+    }
+    // F5. The 64 bytes `to_seed` returns ARE the wallet — every key derives from them.
+    // A bare `[u8; 64]` is dropped without being wiped and stays in the freed stack frame.
+    // Every site must wrap the result in `zeroize::Zeroizing` on the same line, so the
+    // array is overwritten when it goes out of scope. Best effort — Rust cannot promise
+    // no copy was made in between — but a site that does not even try is a defect.
+    for (site, line) in &to_seed_lines {
+        assert!(
+            line.contains("Zeroizing::new("),
+            "{site}: the seed bytes from to_seed must be wrapped in Zeroizing::new on the same line: {}",
+            line.trim()
+        );
     }
     for (site, args) in &from_seed_sites {
         assert!(args.contains("MainNetwork"), "{site}: from_seed must derive for MainNetwork: {args}");
@@ -452,8 +466,14 @@ fn every_source_call_site_uses_the_same_parameters() {
     // `wallet::spending_key_from_phrase`, which is now the only place a spending key is
     // derived for signing. Two fewer sites, no fewer ways to derive a key: the three
     // callers still derive, through the one function. Read before the numbers changed.
-    assert_eq!(to_seed_sites.len(), 7, "to_seed sites: {to_seed_sites:?}");
-    assert_eq!(from_seed_sites.len(), 3, "from_seed sites: {from_seed_sites:?}");
+    //
+    // 7 -> 5 and 3 -> 1 on 2026-09-25 (F5). shield_transparent and get_viewkey carried
+    // their own derivation; both now call wallet::spending_key_from_phrase. ONE from_seed
+    // site remains in src/ — the helper. The five to_seed sites: the helper, the ZIP-32
+    // fingerprint, and the three account-creation sites that hand a SecretVec to the
+    // backend. All five wrap the bytes in Zeroizing (checked above).
+    assert_eq!(to_seed_sites.len(), 5, "to_seed sites: {to_seed_sites:?}");
+    assert_eq!(from_seed_sites.len(), 1, "from_seed sites: {from_seed_sites:?}");
 }
 
 /// The text of a call's argument list, from the `(` at `open` to its matching `)`.

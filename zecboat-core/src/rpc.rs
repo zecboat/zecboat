@@ -106,8 +106,8 @@ pub(crate) fn phrase_to_mnemonic(phrase: &str) -> Result<Mnemonic<English>> {
 /// `zcash_client_sqlite` computes a genuine `SeedFingerprint` into `accounts` already — see
 /// `verify_seed_matches_account`, which compares against that rather than trusting this.
 fn seed_fingerprint(mnemonic: &Mnemonic<English>) -> Vec<u8> {
-    let seed = mnemonic.to_seed("");
-    zip32::fingerprint::SeedFingerprint::from_seed(&seed)
+    let seed = zeroize::Zeroizing::new(mnemonic.to_seed(""));
+    zip32::fingerprint::SeedFingerprint::from_seed(&*seed)
         .expect("a BIP-39 seed is 64 bytes, within the 32..=252 the fingerprint accepts")
         .to_bytes()
         .to_vec()
@@ -2766,7 +2766,7 @@ pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday
     use zcash_protocol::consensus::BlockHeight;
     use age::secrecy::SecretVec;
     
-    let seed_secret = SecretVec::new(mnemonic.to_seed("").to_vec());
+    let seed_secret = SecretVec::new(zeroize::Zeroizing::new(mnemonic.to_seed("")).to_vec());
 
 
     let chain_state = ChainState::empty(BlockHeight::from_u32(birthday_height), zcash_primitives::block::BlockHash([0; 32]));
@@ -2992,7 +2992,7 @@ pub async fn recover_wallet_from_seed(
         use age::secrecy::SecretVec;
         use zcash_protocol::consensus::BlockHeight;
 
-        let seed_secret = SecretVec::new(mnemonic.to_seed("").to_vec());
+        let seed_secret = SecretVec::new(zeroize::Zeroizing::new(mnemonic.to_seed("")).to_vec());
         let chain_state = ChainState::empty(
             BlockHeight::from_u32(birthday_height),
             zcash_primitives::block::BlockHash([0; 32]),
@@ -3136,7 +3136,7 @@ pub async fn import_wallet(seed: &str, birthday: Option<u32>) -> Result<()> {
     use zcash_protocol::consensus::BlockHeight;
     use age::secrecy::SecretVec;
     
-    let seed_secret = SecretVec::new(mnemonic.to_seed("").to_vec());
+    let seed_secret = SecretVec::new(zeroize::Zeroizing::new(mnemonic.to_seed("")).to_vec());
 
     // An imported seed may have received funds at any past height. A birthday set later
     // than a note's block means that note is never scanned, and the wallet reports zero
@@ -3597,7 +3597,6 @@ pub async fn shield_transparent() -> Result<String> {
     use zcash_client_backend::fees::standard::SingleOutputChangeStrategy;
     use zcash_client_backend::fees::{StandardFeeRule, DustOutputPolicy};
     use zcash_protocol::ShieldedPool;
-    use zcash_client_backend::keys::UnifiedSpendingKey;
     use zcash_client_backend::data_api::wallet::{SpendingKeys, ConfirmationsPolicy};
     use zcash_client_backend::data_api::WalletRead;
 
@@ -3639,12 +3638,9 @@ pub async fn shield_transparent() -> Result<String> {
     let mut decrypted_mnemonic = vec![];
     std::io::Read::read_to_end(&mut mnemonic_reader, &mut decrypted_mnemonic).unwrap();
 
-    let seed_str = String::from_utf8(decrypted_mnemonic)?;
-    // Deliberately discarded — the error can echo seed words. See the import path.
-    let mnemonic = phrase_to_mnemonic(&seed_str)?;
-    let seed_bytes = mnemonic.to_seed("");
-    let usk = UnifiedSpendingKey::from_seed(&MainNetwork, &seed_bytes, zip32::AccountId::try_from(0).unwrap())
-        .map_err(|e| anyhow::anyhow!("Failed to derive USK: {:?}", e))?;
+    let seed_str = zeroize::Zeroizing::new(String::from_utf8(decrypted_mnemonic)?);
+    // The one spend-path derivation (wallet.rs). Its error never echoes a seed word.
+    let usk = crate::wallet::spending_key_from_phrase(&seed_str)?;
     let spending_keys = SpendingKeys::new(usk);
 
     // Load Zcash parameters for proving
@@ -3960,7 +3956,7 @@ pub async fn list_backups() -> Result<Vec<String>> {
     Ok(backups)
 }
 
-fn extract_mnemonic_internal() -> Result<String> {
+fn extract_mnemonic_internal() -> Result<zeroize::Zeroizing<String>> {
     // Routed through decrypt_identity(): this is the function that hands back the seed
     // phrase, so it is the last place that should carry its own copy of the rule.
     let identity = decrypt_identity()?;
@@ -4000,8 +3996,12 @@ fn extract_mnemonic_internal() -> Result<String> {
     let mut decrypted_mnemonic = vec![];
     std::io::Read::read_to_end(&mut mnemonic_reader, &mut decrypted_mnemonic).unwrap();
 
-    let phrase = String::from_utf8(decrypted_mnemonic)
-        .map_err(|e| anyhow::anyhow!("decrypted seed phrase is not valid UTF-8: {e}"))?;
+    // F5. Wiped when the caller drops it. from_utf8 reuses the Vec's buffer, so there is
+    // no second, unwiped copy left behind here.
+    let phrase = zeroize::Zeroizing::new(
+        String::from_utf8(decrypted_mnemonic)
+            .map_err(|e| anyhow::anyhow!("decrypted seed phrase is not valid UTF-8: {e}"))?,
+    );
 
     // THE CHECK NOTHING PERFORMED. Every caller of this function is about to use the seed
     // for something consequential — exporting it, deriving a viewing key, signing. If the
@@ -4023,18 +4023,16 @@ fn extract_mnemonic_internal() -> Result<String> {
 
 pub async fn export_keys() -> Result<String> {
     let mnemonic = extract_mnemonic_internal()?;
-    Ok(format!("Keys exported safely.\nSeed Phrase:\n{}", mnemonic))
+    // The String handed to the UI is the one copy that cannot be wiped: it is displayed.
+    Ok(format!("Keys exported safely.\nSeed Phrase:\n{}", mnemonic.as_str()))
 }
 
 pub async fn get_viewkey() -> Result<String> {
     let phrase = extract_mnemonic_internal()?;
-    let mnemonic = phrase_to_mnemonic(&phrase)
-        .map_err(|e| anyhow::anyhow!("Invalid seed phrase: {:?}", e))?;
-    let seed_bytes = mnemonic.to_seed("");
-
     use zcash_protocol::consensus::MainNetwork;
-    let usk = zcash_keys::keys::UnifiedSpendingKey::from_seed(&MainNetwork, &seed_bytes, zip32::AccountId::ZERO)
-        .map_err(|e| anyhow::anyhow!("Invalid seed: {:?}", e))?;
+    // Same derivation a send uses — one function, wallet.rs — so what this shows is
+    // what a signature would be made with, not a second implementation of it.
+    let usk = crate::wallet::spending_key_from_phrase(&phrase)?;
     let derived = usk.to_unified_full_viewing_key().encode(&MainNetwork);
 
     // R6. Derivation alone says what the seed WOULD produce. The key the user is asking

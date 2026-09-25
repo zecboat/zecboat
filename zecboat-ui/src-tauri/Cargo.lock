@@ -8075,6 +8075,7 @@ dependencies = [
  "zcash_proofs",
  "zcash_protocol",
  "zcash_transparent",
+ "zeroize",
  "zip32",
 ]
 

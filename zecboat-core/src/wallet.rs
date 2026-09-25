@@ -23,10 +23,12 @@ pub struct ProposedInput {
 /// nothing else, and this only wraps the derivation error, which carries no phrase.
 pub fn spending_key_from_phrase(phrase: &str) -> Result<zcash_keys::keys::UnifiedSpendingKey> {
     let mnemonic = crate::rpc::phrase_to_mnemonic(phrase.trim())?;
-    let seed_bytes = mnemonic.to_seed("");
+    // F5. The array is wiped when it drops. The Mnemonic wipes itself (bip0039 impls
+    // Zeroize). Best effort by nature: Rust does not promise the compiler made no copy.
+    let seed_bytes = zeroize::Zeroizing::new(mnemonic.to_seed(""));
     zcash_keys::keys::UnifiedSpendingKey::from_seed(
         &zcash_protocol::consensus::MainNetwork,
-        &seed_bytes,
+        &*seed_bytes,
         zip32::AccountId::ZERO,
     )
     .map_err(|e| anyhow!("Invalid seed: {:?}", e))
@@ -154,8 +156,12 @@ pub fn batch_send_transaction(
     let mut decrypted_mnemonic = vec![];
     std::io::Read::read_to_end(&mut mnemonic_reader, &mut decrypted_mnemonic).unwrap();
 
-    let _spending_key = String::from_utf8(decrypted_mnemonic)
-        .map_err(|e| anyhow!("decrypted seed phrase is not valid UTF-8: {e}"))?;
+    // F5. from_utf8 reuses the Vec's allocation, so wrapping the String wipes the only
+    // copy of the decrypted phrase when it drops.
+    let _spending_key = zeroize::Zeroizing::new(
+        String::from_utf8(decrypted_mnemonic)
+            .map_err(|e| anyhow!("decrypted seed phrase is not valid UTF-8: {e}"))?,
+    );
         
     // 5. Dynamic Note Selection
     let mut proposed_inputs = Vec::new();
@@ -373,8 +379,12 @@ pub fn send_transaction(
     let mut decrypted_mnemonic = vec![];
     std::io::Read::read_to_end(&mut mnemonic_reader, &mut decrypted_mnemonic).unwrap();
 
-    let _spending_key = String::from_utf8(decrypted_mnemonic)
-        .map_err(|e| anyhow!("decrypted seed phrase is not valid UTF-8: {e}"))?;
+    // F5. from_utf8 reuses the Vec's allocation, so wrapping the String wipes the only
+    // copy of the decrypted phrase when it drops.
+    let _spending_key = zeroize::Zeroizing::new(
+        String::from_utf8(decrypted_mnemonic)
+            .map_err(|e| anyhow!("decrypted seed phrase is not valid UTF-8: {e}"))?,
+    );
         
     // ── ZMAP asset transfer ────────────────────────────────────────────────────────────────────
     //

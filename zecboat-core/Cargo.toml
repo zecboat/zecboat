@@ -61,6 +61,8 @@ bip0039 = "0.12.0"
 # to_seed hashes the stored text under a comment claiming "the phrase has been normalized".
 # It has not. We normalise before handing it over. See phrase_to_mnemonic in rpc.rs.
 unicode-normalization = "0.1"
+# F5: wipes seed bytes and decrypted phrases when they go out of scope.
+zeroize = "1"
 rand = "0.8.5"
 # `plugin` is not a default feature. It brings in the age plugin protocol, which is how
 # age-plugin-yubikey is driven — as a separate executable over stdio, so libpcsclite stays
