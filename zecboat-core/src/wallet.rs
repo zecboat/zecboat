@@ -11,6 +11,27 @@ pub struct ProposedInput {
     pub is_explicitly_selected_asset: bool,
 }
 
+/// The spending key this wallet signs with, from its stored seed phrase.
+///
+/// ONE derivation for every spend path. Batch, ordinary and asset sends each carried
+/// their own copy of the same three lines; one place means the parameters cannot drift
+/// between them, `tests/recovery_roundtrip.rs` can call the exact function a send calls
+/// rather than re-deriving beside it, and F5 (zeroising the 64-byte seed) becomes a
+/// change to one function instead of three.
+///
+/// The error never names a word of the phrase: `phrase_to_mnemonic` reports a count and
+/// nothing else, and this only wraps the derivation error, which carries no phrase.
+pub fn spending_key_from_phrase(phrase: &str) -> Result<zcash_keys::keys::UnifiedSpendingKey> {
+    let mnemonic = crate::rpc::phrase_to_mnemonic(phrase.trim())?;
+    let seed_bytes = mnemonic.to_seed("");
+    zcash_keys::keys::UnifiedSpendingKey::from_seed(
+        &zcash_protocol::consensus::MainNetwork,
+        &seed_bytes,
+        zip32::AccountId::ZERO,
+    )
+    .map_err(|e| anyhow!("Invalid seed: {:?}", e))
+}
+
 /// The Anti-Burn Safety Hook
 /// Iterates over all proposed inputs. If any input is exactly 10,000 Zats (the NFT standard)
 /// and was not explicitly selected by the user to be transferred, we abort.
@@ -202,17 +223,7 @@ pub fn batch_send_transaction(
     
     validate_anti_burn(&proposed_inputs)?;
 
-    let phrase = _spending_key.trim();
-    let mnemonic = crate::rpc::phrase_to_mnemonic(phrase)
-        // Was: anyhow!("WALLET_ERROR_SEED_PHRASE: '{}', error: {:?}", phrase, e) — which put
-        // the decrypted seed phrase into an error bound for a UI toast, a log, or a bug
-        // report. phrase_to_mnemonic already returns something safe and readable; the job
-        // here is simply not to undo that.
-        ?;
-    let seed_bytes = mnemonic.to_seed("");
-    
-    let usk = zcash_keys::keys::UnifiedSpendingKey::from_seed(&MainNetwork, &seed_bytes, zip32::AccountId::ZERO)
-        .map_err(|e| anyhow!("Invalid seed: {:?}", e))?;
+    let usk = spending_key_from_phrase(&_spending_key)?;
 
     let tx_hex = crate::native_builder::build_and_sign_batch_transaction(
         wallet_db,
@@ -379,16 +390,7 @@ pub fn send_transaction(
     // The amount and memo arguments are ignored: both are fixed by the carrier being moved, and
     // honouring a caller's version of either would let the UI change an asset's identity in flight.
     if let Some(id) = asset_id.map(str::trim).filter(|s| !s.is_empty()) {
-        let mnemonic = crate::rpc::phrase_to_mnemonic(&_spending_key)
-            // {:?} on the underlying error could render UnknownWord("<word>"), naming a
-            // word from the user's phrase. The helper's error names a count and nothing more.
-            ?;
-        let usk = zcash_keys::keys::UnifiedSpendingKey::from_seed(
-            &MainNetwork,
-            &mnemonic.to_seed(""),
-            zip32::AccountId::ZERO,
-        )
-        .map_err(|e| anyhow!("Invalid seed: {:?}", e))?;
+        let usk = spending_key_from_phrase(&_spending_key)?;
         let hex = crate::native_builder::send_zmap_asset(&mut wallet_db, &usk, id, address)?;
         return Ok((hex, Vec::new()));
     }
@@ -479,17 +481,7 @@ pub fn send_transaction(
 
     // 7. Execute builder
     // Convert string seed to usk
-    let phrase = _spending_key.trim();
-    let mnemonic = crate::rpc::phrase_to_mnemonic(phrase)
-        // Was: anyhow!("WALLET_ERROR_SEED_PHRASE: '{}', error: {:?}", phrase, e) — which put
-        // the decrypted seed phrase into an error bound for a UI toast, a log, or a bug
-        // report. phrase_to_mnemonic already returns something safe and readable; the job
-        // here is simply not to undo that.
-        ?;
-    let seed_bytes = mnemonic.to_seed("");
-    
-    let usk = zcash_keys::keys::UnifiedSpendingKey::from_seed(&MainNetwork, &seed_bytes, zip32::AccountId::ZERO)
-        .map_err(|e| anyhow!("Invalid seed: {:?}", e))?;
+    let usk = spending_key_from_phrase(&_spending_key)?;
 
     let tx_hex = crate::native_builder::build_and_sign_transaction(
         wallet_db,

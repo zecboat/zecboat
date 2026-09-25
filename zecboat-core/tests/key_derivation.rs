@@ -446,8 +446,14 @@ fn every_source_call_site_uses_the_same_parameters() {
     // read before this number was changed, which is the whole point of the alarm: the
     // assertions above still hold for it, since it passes the empty passphrase like every
     // other site. One more `to_seed`, no more ways to derive a key.
-    assert_eq!(to_seed_sites.len(), 9, "to_seed sites: {to_seed_sites:?}");
-    assert_eq!(from_seed_sites.len(), 5, "from_seed sites: {from_seed_sites:?}");
+    //
+    // 9 -> 7 and 5 -> 3 on 2026-09-25 (R7). wallet.rs held three copies of the spend-path
+    // derivation — batch, ordinary and asset sends. They collapsed into one function,
+    // `wallet::spending_key_from_phrase`, which is now the only place a spending key is
+    // derived for signing. Two fewer sites, no fewer ways to derive a key: the three
+    // callers still derive, through the one function. Read before the numbers changed.
+    assert_eq!(to_seed_sites.len(), 7, "to_seed sites: {to_seed_sites:?}");
+    assert_eq!(from_seed_sites.len(), 3, "from_seed sites: {from_seed_sites:?}");
 }
 
 /// The text of a call's argument list, from the `(` at `open` to its matching `)`.
