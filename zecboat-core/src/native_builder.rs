@@ -77,7 +77,8 @@ use rand::rngs::OsRng;
 
 use zcash_client_backend::data_api::wallet::input_selection::GreedyInputSelector;
 use zcash_client_backend::data_api::wallet::{
-    create_proposed_transactions, propose_transfer, ConfirmationsPolicy, SpendingKeys,
+    create_pczt_from_proposal, create_proposed_transactions, extract_and_store_transaction_from_pczt,
+    propose_transfer, ConfirmationsPolicy, SpendingKeys,
 };
 use zcash_client_backend::data_api::{WalletRead, WalletWrite};
 use zcash_client_backend::fees::standard::SingleOutputChangeStrategy;
@@ -208,6 +209,40 @@ fn lock_zmap_carriers(wallet_db: &mut Db, target_height: BlockHeight) -> Result<
             expected,
             expected - locked
         ));
+    }
+
+    // ── Second pass (ZMAP v0.5 §5.4): lineage notes ────────────────────────────────────────
+    //
+    // A carrier's lineage is the note whose `rho` is the carrier's nullifier, and before the
+    // send path paired Actions it could be the sender's own change: memo-less, unlocked, and
+    // one fee spend from silent destruction. Lock every such note under a distinct owner.
+    let lineage_rows = {
+        let conn = rusqlite::Connection::open_with_flags(
+            wallet_db_path()?,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|e| anyhow!("could not open the wallet to look for lineage notes: {}", e))?;
+        crate::zmap::read_lineage_rows(&conn)
+            .map_err(|e| anyhow!("could not read lineage notes: {}", e))?
+    };
+    let lineage_groups = crate::zmap::lineage_locks(&lineage_rows);
+    let lineage_expected: usize = lineage_groups.iter().map(|(_, refs)| refs.len()).sum();
+    let mut lineage_locked = 0usize;
+    for (owner, refs) in &lineage_groups {
+        lineage_locked += wallet_db.lock_outputs(refs, *owner, expiry).map_err(|e| {
+            anyhow!("could not protect {} lineage note(s): {:?}", refs.len(), e)
+        })?;
+    }
+    if lineage_locked != lineage_expected {
+        return Err(anyhow!(
+            "only {} of {} lineage note(s) could be protected from automatic input selection; \
+             refusing to continue for the same reason as for carriers",
+            lineage_locked,
+            lineage_expected
+        ));
+    }
+    if lineage_expected > 0 {
+        println!("[zsa] locked {lineage_expected} lineage note(s) carrying an asset chain without its memo");
     }
 
     Ok(locked)
@@ -661,6 +696,7 @@ pub fn send_zmap_asset(
     let mut ironwood_in: Vec<ReceivedNote<_, ::orchard::Note>> = fee_notes.ironwood().to_vec();
     let mut orchard_in: Vec<ReceivedNote<_, ::orchard::Note>> = fee_notes.orchard().to_vec();
     let carrier_typed = to_typed(carrier_note)?;
+    let carrier_typed_for_nf = carrier_typed.clone();
     match source_pool {
         ShieldedPool::Ironwood => ironwood_in.push(carrier_typed),
         ShieldedPool::Orchard => orchard_in.push(carrier_typed),
@@ -705,47 +741,155 @@ pub fn send_zmap_asset(
     )
     .map_err(|e| anyhow!("the asset transfer proposal is not valid: {:?}", e))?;
 
-    let prover = LocalTxProver::with_default_location()
+    // ── 7. Pair the carrier spend with the carrier output, THEN prove (ZMAP v0.5 §5.5) ──────
+    //
+    // Consensus binds each output note's rho to the nullifier of the spend in the SAME Action,
+    // so the carrier's lineage continues in whichever output shares the carrier spend's Action.
+    // The orchard builder pairs spends and outputs at random. A transfer that puts the
+    // recipient's carrier output in a different Action delivers the memo and loses the lineage
+    // to the sender's change, which cannot be undone.
+    //
+    // So the transaction is built as a PCZT first (no proving, no signing, no wallet writes),
+    // its Actions are inspected, and it is rebuilt until the carrier spend and the carrier output
+    // share an Action. Only then is it proved, signed, extracted and stored: the backend does the
+    // bookkeeping (`store_transactions_to_be_sent`) exactly as the one-shot path did.
+    //
+    // Pairing precedes proving, so a rebuild costs milliseconds. Two Actions: even odds per try.
+    let fvk = usk.to_unified_full_viewing_key();
+    let orchard_fvk = fvk
+        .orchard()
+        .ok_or_else(|| anyhow!("this wallet has no Orchard viewing key"))?
+        .clone();
+    let carrier_nf: [u8; 32] = carrier_typed_for_nf.note().nullifier(&orchard_fvk).to_bytes();
+    let recipient_raw: [u8; 43] = match zcash_keys::address::Address::decode(&network, recipient) {
+        Some(zcash_keys::address::Address::Unified(ua)) => ua
+            .orchard()
+            .map(|a| a.to_raw_address_bytes())
+            .ok_or_else(|| anyhow!("the recipient's unified address has no Orchard receiver"))?,
+        _ => return Err(anyhow!("a ZMAP carrier can only be sent to a unified address")),
+    };
+
+    const MAX_PAIRING_ATTEMPTS: usize = 64;
+    let mut paired: Option<(pczt::Pczt, usize, [u8; 32])> = None;
+    for attempt in 1..=MAX_PAIRING_ATTEMPTS {
+        let candidate = create_pczt_from_proposal::<_, _, std::convert::Infallible, _, std::convert::Infallible, _>(
+            wallet_db,
+            &network,
+            account_id,
+            OvkPolicy::Sender,
+            &proposal,
+            None,
+            zcash_primitives::transaction::builder::BundlePadding::DEFAULT,
+        )
+        .map_err(|e| anyhow!("could not build the asset transfer: {:?}", e))?;
+
+        match carrier_pairing(&candidate, &carrier_nf, &recipient_raw) {
+            Pairing::Paired { action_index, successor_cmx } => {
+                println!("[zsa] carrier spend and carrier output share Action {action_index} (attempt {attempt})");
+                paired = Some((candidate, action_index, successor_cmx));
+                break;
+            }
+            Pairing::Mispaired { action_index } => {
+                println!("[zsa] attempt {attempt}: carrier spend in Action {action_index} was paired with change; rebuilding");
+            }
+            Pairing::CarrierSpendMissing => {
+                return Err(anyhow!(
+                    "internal: the built transaction does not spend the asset's carrier"
+                ));
+            }
+        }
+    }
+    let (pczt, successor_action_index, successor_cmx) = paired.ok_or_else(|| {
+        anyhow!(
+            "could not pair the carrier spend with the carrier output in {} attempts; \
+             refusing to send an asset whose lineage would be lost",
+            MAX_PAIRING_ATTEMPTS
+        )
+    })?;
+
+    // ── 8. Prove, sign, extract, store ─────────────────────────────────────────────────────
+    let _ = LocalTxProver::with_default_location()
         .ok_or_else(|| anyhow!("{}", params_not_found()))?;
-    let spending_keys = SpendingKeys::from_unified_spending_key(usk.clone());
+    let pk = zcash_primitives::transaction::builder::cached_orchard_proving_key(
+        ::orchard::circuit::OrchardCircuitVersion::PostNu6_3,
+    );
+    let mut prover = pczt::roles::prover::Prover::new(pczt);
+    if prover.requires_sapling_proofs() {
+        return Err(anyhow!("internal: an asset transfer must not spend Sapling notes"));
+    }
+    if prover.requires_ironwood_proof() {
+        prover = prover
+            .create_ironwood_proof(pk)
+            .map_err(|e| anyhow!("could not prove the Ironwood bundle: {:?}", e))?;
+    }
+    if prover.requires_orchard_proof() {
+        prover = prover
+            .create_orchard_proof(pk)
+            .map_err(|e| anyhow!("could not prove the Orchard bundle: {:?}", e))?;
+    }
+    let pczt = prover.finish();
 
-    let txids = create_proposed_transactions::<_, _, std::convert::Infallible, _, std::convert::Infallible, _>(
+    let ask = ::orchard::keys::SpendAuthorizingKey::from(usk.orchard());
+    // Real spends still lack a signature; protocol padding dummies were signed by the IO
+    // Finalizer when the PCZT was created.
+    let unsigned = |actions: &[pczt::orchard::Action]| -> Vec<usize> {
+        actions
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.spend().spend_auth_sig().is_none())
+            .map(|(i, _)| i)
+            .collect()
+    };
+    let ironwood_unsigned = unsigned(pczt.ironwood().actions());
+    let orchard_unsigned = unsigned(pczt.orchard().actions());
+    let mut signer = pczt::roles::signer::Signer::new(pczt)
+        .map_err(|e| anyhow!("could not start signing the asset transfer: {:?}", e))?;
+    for i in ironwood_unsigned {
+        signer.sign_ironwood(i, &ask).map_err(|e| anyhow!("could not sign Ironwood spend {i}: {:?}", e))?;
+    }
+    for i in orchard_unsigned {
+        signer.sign_orchard(i, &ask).map_err(|e| anyhow!("could not sign Orchard spend {i}: {:?}", e))?;
+    }
+    let pczt = signer.finish();
+
+    let vk = orchard_verifying_key();
+    let txid = extract_and_store_transaction_from_pczt::<_, std::convert::Infallible>(
         wallet_db,
-        &network,
-        &prover,
-        &prover,
-        &spending_keys,
-        OvkPolicy::Sender,
-        &proposal,
+        pczt,
         None,
+        Some(vk),
     )
-    .map_err(|e| anyhow!("could not create the asset transfer: {:?}", e))?;
+    .map_err(|e| anyhow!("could not finalize the asset transfer: {:?}", e))?;
 
-    // Read the signed transaction back and return its **wire encoding**.
-    //
-    // This line used to be `Ok(hex::encode(txids.first().as_ref()))` — the txid,
-    // 32 bytes — while every caller treats the return value as the raw
-    // transaction and hands it straight to `rpc::broadcast_raw_tx`. So no ZSA
-    // transfer was ever broadcast: the node received 32 bytes of txid where a
-    // transaction should be.
-    //
-    // That is the whole of "P1-10". Three occurrences, on local zaino and on
-    // Port, all reported as
-    //
-    //     InternalServerError: error receiving data from backing node
-    //
-    // which is only zaino's unhelpful reaction to being handed 32 bytes that are
-    // not a transaction; zebrad says "parse error: bad tx header", which is what
-    // finally identified it. The transaction itself was always fine — built,
-    // signed, 9,166 bytes, sitting in `transactions.raw` with its inputs already
-    // marked spent. Both delivered HBD assets got there by a hand-run
-    // `sendrawtransaction` of exactly those stored bytes.
-    //
-    // `build_and_sign_transaction` above has always done this correctly. This is
-    // the same three lines.
-    let txid = txids.first();
+    // ── 9. Record where the lineage went, so a lost lading can be re-issued by the sender ──
+    {
+        let conn = rusqlite::Connection::open(wallet_db_path()?)
+            .map_err(|e| anyhow!("could not open the wallet to record the lineage: {}", e))?;
+        let mut successor_txid = [0u8; 32];
+        successor_txid.copy_from_slice(txid.as_ref());
+        let spent_index = u32::try_from(plan.carrier.output_index())
+            .map_err(|_| anyhow!("internal: carrier output index out of range"))?;
+        crate::zmap::record_lineage_out(
+            &conn,
+            &crate::zmap::LineageOut {
+                asset_id: asset_id.to_string(),
+                spent_txid: *plan.carrier.txid().as_ref(),
+                spent_action_index: spent_index,
+                spent_nf: carrier_nf,
+                successor_txid,
+                successor_action_index: successor_action_index as u32,
+                successor_cmx,
+                recipient: recipient.to_string(),
+            },
+        )
+        .map_err(|e| anyhow!("could not record the lineage of the sent asset: {}", e))?;
+    }
+
+    // Read the signed transaction back and return its **wire encoding**, which every caller
+    // hands straight to `rpc::broadcast_raw_tx` (see the P1-10 note in the git history: this
+    // once returned the txid, and no asset transfer was ever broadcast).
     let tx = wallet_db
-        .get_transaction(*txid)
+        .get_transaction(txid)
         .map_err(|e| anyhow!("could not read back the signed asset transfer: {:?}", e))?
         .ok_or_else(|| {
             anyhow!("signed asset transfer {} is missing from the wallet database", txid)
@@ -756,4 +900,44 @@ pub fn send_zmap_asset(
         .map_err(|e| anyhow!("could not serialize the asset transfer: {:?}", e))?;
 
     Ok(hex::encode(raw))
+}
+
+/// What inspecting a built-but-unproven asset transfer found (ZMAP v0.5 §5.5).
+enum Pairing {
+    /// The carrier spend's Action produces the recipient's carrier output.
+    Paired { action_index: usize, successor_cmx: [u8; 32] },
+    /// The carrier spend's Action produces some other output (the sender's change).
+    Mispaired { action_index: usize },
+    /// No Action spends the carrier at all.
+    CarrierSpendMissing,
+}
+
+/// Find the Action spending `carrier_nf` in the Ironwood bundle and say what its output is.
+fn carrier_pairing(pczt: &pczt::Pczt, carrier_nf: &[u8; 32], recipient_raw: &[u8; 43]) -> Pairing {
+    for (i, action) in pczt.ironwood().actions().iter().enumerate() {
+        if action.spend().nullifier() != carrier_nf {
+            continue;
+        }
+        let out = action.output();
+        let to_recipient = out.recipient().as_ref() == Some(recipient_raw);
+        let carrier_value = *out.value() == Some(crate::zmap::CARRIER_ZAT);
+        return if to_recipient && carrier_value {
+            let mut cmx = [0u8; 32];
+            if let Some(c) = out.cmx() {
+                cmx.copy_from_slice(c);
+            }
+            Pairing::Paired { action_index: i, successor_cmx: cmx }
+        } else {
+            Pairing::Mispaired { action_index: i }
+        };
+    }
+    Pairing::CarrierSpendMissing
+}
+
+/// The Orchard/Ironwood verifying key for the post-NU6.3 circuit, built once per process.
+fn orchard_verifying_key() -> &'static ::orchard::circuit::VerifyingKey {
+    static VK: std::sync::OnceLock<::orchard::circuit::VerifyingKey> = std::sync::OnceLock::new();
+    VK.get_or_init(|| {
+        ::orchard::circuit::VerifyingKey::build(::orchard::circuit::OrchardCircuitVersion::PostNu6_3)
+    })
 }

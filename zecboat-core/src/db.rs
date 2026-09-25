@@ -43,7 +43,12 @@ impl WalletPool {
         let conn = self.pool.get().await?;
         conn.interact(|conn| {
             let rows = crate::zmap::read_carrier_rows(conn)?;
-            Ok(crate::zmap::holdings_from_rows(rows))
+            let mut holdings = crate::zmap::holdings_from_rows(rows);
+            // ZMAP v0.5 §5.4: lineage notes without a memo are shown, not hidden, so the user
+            // knows they exist and why they are locked.
+            let lineage = crate::zmap::read_lineage_rows(conn)?;
+            crate::zmap::attach_lineage(&mut holdings, lineage);
+            Ok(holdings)
         })
         .await
         .map_err(|e| anyhow::anyhow!("Interact error: {:?}", e))?

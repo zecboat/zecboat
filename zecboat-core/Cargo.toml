@@ -25,8 +25,12 @@ tokio-stream = "0.1"
 #
 # zcash_address stays at 0.12 — 0.9 was yanked (core2).
 zcash_protocol = "0.10"
-zcash_client_sqlite = { version = "=0.22.0-rc.4", features = ["orchard", "transparent-inputs"] }
-zcash_client_backend = { version = "=0.24.0-rc.4", features = ["orchard", "transparent-inputs", "lightwalletd-tonic-transport", "lightwalletd-tonic-tls-webpki-roots"] }
+zcash_client_sqlite = { version = "=0.22.0-rc.4", features = ["orchard", "transparent-inputs", "serde"] }
+zcash_client_backend = { version = "=0.24.0-rc.4", features = ["orchard", "transparent-inputs", "lightwalletd-tonic-transport", "lightwalletd-tonic-tls-webpki-roots", "pczt"] }
+# Wake chapter 2 (2026-09-25): the carrier send builds a PCZT first, so Action pairing can be
+# checked and retried BEFORE proving; then proves, signs and extracts it. `serde` on the sqlite
+# crate is what lets the backend serialise the account id into the PCZT.
+pczt = { version = "0.9", features = ["prover", "signer"] }
 zcash_primitives = { version = "0.30", features = ["transparent-inputs"] }
 # 0.13, not 0.12: zip321 0.8 (pulled in by zcash_client_backend 0.24) builds its
 # Payment type against 0.13. Pinning 0.12 here put two incompatible ZcashAddress

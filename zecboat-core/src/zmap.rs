@@ -137,6 +137,10 @@ pub struct ZmapHolding {
     /// Number of unspent carrier notes. **Not assumed to be 1.**
     pub quantity: u64,
     pub carriers: Vec<CarrierRef>,
+    /// Notes carrying this asset's lineage without its memo (ZMAP v0.5 §5.4). Empty for every
+    /// asset whose transfers were paired correctly.
+    #[serde(default)]
+    pub lineage: Vec<LineageRow>,
 }
 
 /// Per-collection constants for legacy prose memos, which do not carry a metadata URI.
@@ -309,6 +313,7 @@ pub fn holdings_from_rows(rows: impl IntoIterator<Item = OutputRow>) -> Vec<Zmap
                 dialect: rec.dialect,
                 quantity: 1,
                 carriers: vec![carrier],
+                lineage: Vec::new(),
             });
     }
 
@@ -533,6 +538,245 @@ pub fn read_carrier_rows(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<Ou
     rows.collect()
 }
 
+
+// ── Lineage (ZMAP v0.5 §5.4, §5.5; Wake chapter 2, 2026-09-25) ─────────────────────────────
+//
+// Consensus gives every spent note exactly one successor: the output in the same Action, whose
+// `rho` is the spent note's nullifier. The asset's *identity* under v0.5 is that chain, not the
+// memo. Before the wallet paired Actions deliberately, a transfer could put the carrier's memo on
+// one output and its lineage on another (the sender's change); the lineage then sat in an
+// unlocked, memo-less note and the next fee spend burned it silently.
+//
+// Two things below close that:
+//   * `read_lineage_rows` finds every note of this wallet whose `rho` equals the nullifier of a
+//     carrier this wallet spent, walked forward through further spends, so they can be locked
+//     and shown ("lineage of <asset>, memo missing").
+//   * `zmap_lineage_out` records, per carrier send, the spent nullifier and the successor output,
+//     so the sender can regenerate a hop proof for a recipient who lost their lading.
+
+/// A note that carries an asset's lineage without necessarily carrying its memo.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineageRow {
+    pub pool: i64,
+    pub pool_name: String,
+    pub note_id: i64,
+    pub txid: String,
+    #[serde(skip)]
+    pub txid_bytes: [u8; 32],
+    pub output_index: i64,
+    /// The asset whose spent carrier this note descends from.
+    pub asset_id: String,
+    /// Whether this note also carries the asset's memo (then it is an ordinary carrier and is
+    /// locked by the memo pass; it is listed here only so the chain is complete).
+    pub is_carrier: bool,
+    /// Whether a mined transaction has spent it (then it is history, not a holding).
+    pub spent: bool,
+}
+
+/// Lock owner for lineage notes: distinct from the carrier owner so the UI can tell the two
+/// reasons apart, and derived so re-locking is idempotent.
+pub fn lineage_lock_owner(asset_id: &str) -> LockOwner {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(b"zecboat:zmap-lineage-lock:v1:");
+    h.update(asset_id.as_bytes());
+    LockOwner::new(h.finalize().into())
+}
+
+/// Every note of this wallet that descends, by `rho == nf`, from a carrier this wallet spent
+/// in a mined transaction, walked forward through further mined spends.
+///
+/// Works per pool table: the `rho` link never crosses bundles, so an Orchard carrier's lineage
+/// stays in `orchard_received_notes` and an Ironwood one in `ironwood_received_notes`.
+pub fn read_lineage_rows(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<LineageRow>> {
+    let mut out = Vec::new();
+    for (pool, table) in [(POOL_IRONWOOD, "ironwood"), (POOL_ORCHARD, "orchard")] {
+        // Seeds: the nullifiers of carriers this wallet spent, with their asset ids.
+        let seed_sql = format!(
+            "SELECT n.nf, n.memo
+               FROM {t}_received_notes n
+               JOIN {t}_received_note_spends s ON s.{t}_received_note_id = n.id
+               JOIN transactions st ON st.id_tx = s.transaction_id
+              WHERE st.mined_height IS NOT NULL
+                AND n.value = ?1 AND n.memo IS NOT NULL AND n.nf IS NOT NULL",
+            t = table
+        );
+        let mut frontier: Vec<(Vec<u8>, String)> = {
+            let mut stmt = conn.prepare(&seed_sql)?;
+            let rows = stmt.query_map([CARRIER_ZAT as i64], |r| {
+                Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?;
+            let mut v = Vec::new();
+            for r in rows {
+                let (nf, memo) = r?;
+                if let Some(rec) = parse_memo(&memo) {
+                    v.push((nf, rec.asset_id));
+                }
+            }
+            v
+        };
+
+        let hop_sql = format!(
+            "SELECT n.id, t.txid, n.action_index, n.nf, n.value, n.memo,
+                    EXISTS (SELECT 1 FROM {t}_received_note_spends s
+                              JOIN transactions st ON st.id_tx = s.transaction_id
+                             WHERE s.{t}_received_note_id = n.id
+                               AND st.mined_height IS NOT NULL) AS spent
+               FROM {t}_received_notes n
+               JOIN transactions t ON t.id_tx = n.transaction_id
+              WHERE n.rho = ?1",
+            t = table
+        );
+        let mut stmt = conn.prepare(&hop_sql)?;
+        let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        while !frontier.is_empty() {
+            let mut next = Vec::new();
+            for (nf, asset_id) in frontier.drain(..) {
+                let rows = stmt.query_map([nf.as_slice()], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, Vec<u8>>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, Option<Vec<u8>>>(3)?,
+                        r.get::<_, i64>(4)?,
+                        r.get::<_, Option<Vec<u8>>>(5)?,
+                        r.get::<_, i64>(6)? != 0,
+                    ))
+                })?;
+                for r in rows {
+                    let (id, txid, action_index, next_nf, value, memo, spent) = r?;
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    let is_carrier = value as u64 == CARRIER_ZAT
+                        && memo.as_deref().and_then(parse_memo).is_some();
+                    let mut txid_bytes = [0u8; 32];
+                    if txid.len() == 32 {
+                        txid_bytes.copy_from_slice(&txid);
+                    }
+                    out.push(LineageRow {
+                        pool,
+                        pool_name: pool_name(pool).to_string(),
+                        note_id: id,
+                        txid: hex::encode(txid_bytes.iter().rev().copied().collect::<Vec<u8>>()),
+                        txid_bytes,
+                        output_index: action_index,
+                        asset_id: asset_id.clone(),
+                        is_carrier,
+                        spent,
+                    });
+                    if spent {
+                        if let Some(nf) = next_nf {
+                            next.push((nf, asset_id.clone()));
+                        }
+                    }
+                }
+            }
+            frontier = next;
+        }
+    }
+    Ok(out)
+}
+
+/// Lineage notes that must be locked: unspent, and not already locked as carriers by the memo
+/// pass. Grouped by lock owner, one owner per asset.
+pub fn lineage_locks(rows: &[LineageRow]) -> Vec<(LockOwner, Vec<OutputRef>)> {
+    let mut by_asset: std::collections::BTreeMap<String, Vec<OutputRef>> = Default::default();
+    for r in rows.iter().filter(|r| !r.spent && !r.is_carrier) {
+        let Some(pool) = pool_type(r.pool) else { continue };
+        let Ok(idx) = u32::try_from(r.output_index) else { continue };
+        by_asset
+            .entry(r.asset_id.clone())
+            .or_default()
+            .push(OutputRef::new(TxId::from_bytes(r.txid_bytes), pool, idx));
+    }
+    by_asset
+        .into_iter()
+        .map(|(asset, refs)| (lineage_lock_owner(&asset), refs))
+        .collect()
+}
+
+/// Attach lineage notes to the holdings the UI shows. A memo-less lineage note of an asset the
+/// wallet also holds a carrier of joins that holding; one whose asset has no carrier here gets a
+/// holding of its own, quantity 0, named so the user knows what it is and why it is locked.
+pub fn attach_lineage(holdings: &mut Vec<ZmapHolding>, rows: Vec<LineageRow>) {
+    for r in rows.into_iter().filter(|r| !r.spent && !r.is_carrier) {
+        if let Some(h) = holdings.iter_mut().find(|h| h.asset_id == r.asset_id) {
+            h.lineage.push(r);
+        } else {
+            let short: String = r.asset_id.chars().take(10).collect();
+            holdings.push(ZmapHolding {
+                asset_id: r.asset_id.clone(),
+                name: format!("lineage of {short}… — memo missing"),
+                symbol: None,
+                decimals: 0,
+                metadata_uri: None,
+                image_hash: None,
+                dialect: Dialect::Json,
+                quantity: 0,
+                carriers: Vec::new(),
+                lineage: vec![r],
+            });
+        }
+    }
+}
+
+/// What a carrier send records about where the lineage went (`zmap_lineage_out`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineageOut {
+    pub asset_id: String,
+    pub spent_txid: [u8; 32],
+    pub spent_action_index: u32,
+    pub spent_nf: [u8; 32],
+    pub successor_txid: [u8; 32],
+    pub successor_action_index: u32,
+    pub successor_cmx: [u8; 32],
+    pub recipient: String,
+}
+
+/// Create the sender-side lineage table if it does not exist. Lives beside the wallet's own
+/// tables, prefixed like `ext_zecboat_*`, and is never read by the backend.
+pub fn ensure_lineage_out_table(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ext_zecboat_zmap_lineage_out (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asset_id TEXT NOT NULL,
+            spent_txid BLOB NOT NULL,
+            spent_action_index INTEGER NOT NULL,
+            spent_nf BLOB NOT NULL UNIQUE,
+            successor_txid BLOB NOT NULL,
+            successor_action_index INTEGER NOT NULL,
+            successor_cmx BLOB NOT NULL,
+            recipient TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Record one carrier send's lineage. Idempotent on the spent nullifier.
+pub fn record_lineage_out(conn: &rusqlite::Connection, rec: &LineageOut) -> rusqlite::Result<()> {
+    ensure_lineage_out_table(conn)?;
+    conn.execute(
+        "INSERT OR IGNORE INTO ext_zecboat_zmap_lineage_out
+            (asset_id, spent_txid, spent_action_index, spent_nf,
+             successor_txid, successor_action_index, successor_cmx, recipient)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            rec.asset_id,
+            rec.spent_txid.as_slice(),
+            rec.spent_action_index,
+            rec.spent_nf.as_slice(),
+            rec.successor_txid.as_slice(),
+            rec.successor_action_index,
+            rec.successor_cmx.as_slice(),
+            rec.recipient,
+        ],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,6 +825,108 @@ mod tests {
         let r = parse_memo(memo.as_bytes()).expect("should still parse");
         assert!(r.metadata_uri.is_none(), "must not guess a URI");
         assert_eq!(r.name, "Some Other Drop #7");
+    }
+
+    /// The two note tables and their spend tables, as `read_lineage_rows` reads them.
+    ///
+    /// Story: carrier A (note 1, memo, nf A) was spent in mined tx 20. Its lineage went to the
+    /// sender's change: note 2 (rho = A, no memo). Note 2 was then spent in mined tx 30, whose
+    /// successor is note 3 (rho = nf of note 2), still unspent. Note 4 is unrelated change.
+    /// Carrier B (note 5) was spent in tx 40, and its successor note 6 IS a memo carrier (a
+    /// correctly paired self-send), so it is listed but not lock-eligible here.
+    fn lineage_fixture() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE transactions (id_tx INTEGER PRIMARY KEY, txid BLOB, mined_height INTEGER);
+             CREATE TABLE ironwood_received_notes (
+                 id INTEGER PRIMARY KEY, transaction_id INTEGER, action_index INTEGER,
+                 value INTEGER, rho BLOB, nf BLOB, memo BLOB);
+             CREATE TABLE ironwood_received_note_spends (ironwood_received_note_id INTEGER, transaction_id INTEGER);
+             CREATE TABLE orchard_received_notes (
+                 id INTEGER PRIMARY KEY, transaction_id INTEGER, action_index INTEGER,
+                 value INTEGER, rho BLOB, nf BLOB, memo BLOB);
+             CREATE TABLE orchard_received_note_spends (orchard_received_note_id INTEGER, transaction_id INTEGER);
+             INSERT INTO transactions VALUES (10, x'0a', 100), (20, x'14', 200), (30, x'1e', 300), (40, x'28', 400);",
+        )
+        .unwrap();
+        let memo_a = format!(r#"{{"asset_id":"{}","name":"A"}}"#, "aa".repeat(32));
+        let memo_b = format!(r#"{{"asset_id":"{}","name":"B"}}"#, "bb".repeat(32));
+        let mut ins = |id: i64, tx: i64, idx: i64, value: i64, rho: &[u8], nf: &[u8], memo: Option<&str>| {
+            conn.execute(
+                "INSERT INTO ironwood_received_notes VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![id, tx, idx, value, rho, nf, memo.map(str::as_bytes)],
+            )
+            .unwrap();
+        };
+        // note 1: carrier A, memo, spent in tx 20
+        ins(1, 10, 0, 10000, &[0x00], &[0xaa], Some(&memo_a));
+        // note 2: change of tx 20 carrying A's lineage (rho = aa), no memo, spent in tx 30
+        ins(2, 20, 1, 15000, &[0xaa], &[0xbb], None);
+        // note 3: successor of note 2 (rho = bb), unspent, no memo
+        ins(3, 30, 0, 5000, &[0xbb], &[0xcc], None);
+        // note 4: unrelated change
+        ins(4, 20, 0, 999, &[0xee], &[0xff], None);
+        // note 5: carrier B, spent in tx 40; note 6: its paired successor WITH memo
+        ins(5, 10, 1, 10000, &[0x01], &[0xb5], Some(&memo_b));
+        ins(6, 40, 1, 10000, &[0xb5], &[0xb6], Some(&memo_b));
+        conn.execute_batch(
+            "INSERT INTO ironwood_received_note_spends VALUES (1, 20), (2, 30), (5, 40);",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn lineage_rows_follow_the_chain_and_locks_skip_carriers_and_spent() {
+        let conn = lineage_fixture();
+        let rows = read_lineage_rows(&conn).unwrap();
+        let mut ids: Vec<i64> = rows.iter().map(|r| r.note_id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![2, 3, 6], "notes 2 and 3 carry A's chain; 6 carries B's");
+        let by_id = |id: i64| rows.iter().find(|r| r.note_id == id).unwrap();
+        let a = "aa".repeat(32);
+        assert_eq!(by_id(2).asset_id, a);
+        assert!(by_id(2).spent && !by_id(2).is_carrier);
+        assert_eq!(by_id(3).asset_id, a);
+        assert!(!by_id(3).spent && !by_id(3).is_carrier);
+        assert_eq!(by_id(6).asset_id, "bb".repeat(32));
+        assert!(by_id(6).is_carrier);
+
+        // Only note 3 needs a lineage lock: unspent and memo-less.
+        let locks = lineage_locks(&rows);
+        assert_eq!(locks.len(), 1);
+        assert_eq!(locks[0].0, lineage_lock_owner(&a));
+        assert_eq!(locks[0].1.len(), 1);
+
+        // The UI gets a synthetic holding for "a" (no carrier held) with note 3 attached.
+        let mut holdings = Vec::new();
+        attach_lineage(&mut holdings, rows);
+        assert_eq!(holdings.len(), 1);
+        assert_eq!(holdings[0].asset_id, a);
+        assert_eq!(holdings[0].quantity, 0);
+        assert_eq!(holdings[0].lineage.len(), 1);
+        assert!(holdings[0].name.contains("memo missing"));
+    }
+
+    #[test]
+    fn lineage_out_table_round_trips_and_is_idempotent() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let rec = LineageOut {
+            asset_id: "a".into(),
+            spent_txid: [1; 32],
+            spent_action_index: 4,
+            spent_nf: [2; 32],
+            successor_txid: [3; 32],
+            successor_action_index: 1,
+            successor_cmx: [4; 32],
+            recipient: "u1…".into(),
+        };
+        record_lineage_out(&conn, &rec).unwrap();
+        record_lineage_out(&conn, &rec).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM ext_zecboat_zmap_lineage_out", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     /// Minimal stand-ins for the three wallet relations [`CARRIER_SQL`] reads.
