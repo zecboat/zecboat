@@ -62,17 +62,24 @@ use serde::{Deserialize, Serialize};
 /// landed in a wallet. §7.1 (one generation sequence per issuer key) is also why the two
 /// cannot share a manifest: two collections under one key collide on rollback detection.
 ///
-/// Happy Birthday keeps the legacy root path so the live published URL stays valid.
+/// The path is a FILE PREFIX under `/issuance/`, because that is the convention the server
+/// actually uses and has since 2026-09-15 — verified by listing `/var/www/webwallet/public/
+/// issuance/` on 2026-09-25: `issuance_manifest.*` (Happy Birthday, unprefixed, the legacy
+/// root), `barcelona_issuance_manifest.*`, `nomad_issuance_manifest.*`. The first version of
+/// this table invented a per-collection DIRECTORY, `issuance/barcelona_post_card/…`, and
+/// probed only that path — which is how "Barcelona has no manifest" got written into
+/// CLAUDE.md while a generation-2 manifest had been live for ten days. Read what is served
+/// before designing where it should be.
 const PINNED_ISSUERS: &[(&str, &str, &str)] = &[
     (
         "Happy Birthday Zcash",
         "98508d73ce15d3f2cdc3506b3a53da0f4bece0c51116e296057de2ea922ab0db",
-        "issuance",
+        "issuance/issuance_manifest",
     ),
     (
         "Barcelona Post Card",
         "ecc9f9a3b148f4066a09bb46a713c6dbac39571665a7783f9fd15d4ee8bf31c4",
-        "issuance/barcelona_post_card",
+        "issuance/barcelona_issuance_manifest",
     ),
 ];
 
@@ -370,11 +377,11 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
     let mut tampered: Vec<String> = Vec::new();
 
     for (label, key_hex, path) in PINNED_ISSUERS {
-        let body = match fetch(format!("{base}/{path}/issuance_manifest.json")).await {
+        let body = match fetch(format!("{base}/{path}.json")).await {
             Ok(b) => b,
             Err(e) => { unreachable.push(format!("{label} ({e})")); continue; }
         };
-        let sig = match fetch(format!("{base}/{path}/issuance_manifest.sig")).await {
+        let sig = match fetch(format!("{base}/{path}.sig")).await {
             Ok(b) => b,
             Err(e) => { unreachable.push(format!("{label} ({e})")); continue; }
         };
