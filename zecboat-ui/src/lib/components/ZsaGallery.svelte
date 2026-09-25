@@ -134,12 +134,6 @@
 </script>
 
 <div class="zsa-gallery card">
-  {#if assets.length}
-    <p class="preview-note">
-      Thumbnails are <strong>unverified previews</strong> fetched by asset id. Open an asset to check
-      its artwork against the hash committed in the memo.
-    </p>
-  {/if}
   <div class="asset-grid">
     {#each assets as asset}
       {@const n = splitName(asset.name)}
@@ -200,14 +194,16 @@
               <div class="verify-badge checking">Checking issuance against a pinned issuer key…</div>
             {:else if badge?.state === 'verified'}
               <div class="verify-badge ok">
-                ✓ Design verified — genuinely from {badge.issuer}
-                <span class="verify-detail">
+                ✓ Verified — issued by {badge.issuer}
+                <!-- One line is the verdict. The checks, the anchor and the caveat are one click
+                     away, not gone: the caveat still travels with the tick, so the badge states
+                     its own limits to anyone who asks what "verified" covered. -->
+                <details class="verify-details">
+                  <summary>what was checked</summary>
                   {#each badge.checks as c}<span class="check-line">✓ {c}</span>{/each}
                   <span class="check-line mono">issuance {badge.issuance_txid.slice(0, 16)}… · height {badge.issuance_height.toLocaleString()}</span>
-                </span>
-                <!-- The caveat ships WITH the tick, not beneath a fold. A badge that states its
-                     own limits is the difference between a claim and an overclaim. -->
-                <span class="verify-detail caveat">{badge.caveat}</span>
+                  <span class="check-line caveat">{badge.caveat}</span>
+                </details>
               </div>
             {:else if badge?.state === 'not_listed'}
               <div class="verify-badge bad">
@@ -385,6 +381,8 @@
     gap: 0.25rem;
   }
 
+  .verify-details { margin-top: 0.35rem; font-size: 0.8em; opacity: 0.85; }
+  .verify-details summary { cursor: pointer; font-weight: normal; }
   .check-line {
     display: block;
     margin-top: 0.15rem;
