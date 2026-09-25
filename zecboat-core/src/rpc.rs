@@ -77,11 +77,13 @@ pub(crate) fn phrase_to_mnemonic(phrase: &str) -> Result<Mnemonic<English>> {
 
     // NFKD first, then collapse whitespace. Order matters: some compatibility characters
     // decompose to sequences containing spaces.
-    let normalized: String = phrase.nfkd().collect();
-    let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    // F5. Both intermediates hold the phrase; both are wiped on drop. `from_phrase` takes
+    // its own owned copy, which the Mnemonic wipes when it drops (bip0039 impls Zeroize).
+    let nfkd = zeroize::Zeroizing::new(phrase.nfkd().collect::<String>());
+    let normalized = zeroize::Zeroizing::new(nfkd.split_whitespace().collect::<Vec<_>>().join(" "));
     let words = normalized.split_whitespace().count();
 
-    Mnemonic::<English>::from_phrase(normalized).map_err(|_| {
+    Mnemonic::<English>::from_phrase(normalized.as_str()).map_err(|_| {
         if words != 24 {
             anyhow::anyhow!("A recovery phrase is 24 words. This one has {words}.")
         } else {
@@ -3746,6 +3748,12 @@ pub async fn create_new_account() -> Result<String> {
     )
 }
 
+/// `wallet_backup_<stamp>.db` → `wallet_backup_<stamp><suffix>`. `strip_suffix` rather than
+/// `replace(".db", …)`, which would rewrite every occurrence of `.db` in the path.
+fn backup_sidecar(db_backup_path: &str, suffix: &str) -> String {
+    format!("{}{}", db_backup_path.strip_suffix(".db").unwrap_or(db_backup_path), suffix)
+}
+
 pub async fn backup_wallet() -> Result<String> {
     let backup_dir = crate::paths::as_string::backup_dir()?;
     std::fs::create_dir_all(&backup_dir)?;
@@ -3792,7 +3800,17 @@ pub async fn backup_wallet() -> Result<String> {
             identity_path
         );
     }
-    let identity_backup = backup_path.replace(".db", ".identity.txt");
+    let identity_backup = backup_sidecar(&backup_path, ".identity.txt");
+
+    // THE THIRD FILE. `paths::yubikey_stub_path` has said since it was written that the
+    // stub "is as much a pair with identity_path as that file is with wallet_db_path":
+    // unlock decides its MODE by whether the stub exists. A YubiKey wallet's identity is
+    // encrypted to the card; restored without the stub it is opened by the password
+    // branch and refused with a message about a damaged file — to a user holding the
+    // right key and PIN. Found by review 2026-09-25, in the function R1–R3 had just fixed.
+    let stub_path = crate::paths::as_string::yubikey_stub_path()?;
+    let has_stub = std::path::Path::new(&stub_path).exists();
+    let stub_backup = backup_sidecar(&backup_path, ".yubikey.txt");
 
     // CHECKPOINT FIRST, OR THE COPY IS INCOMPLETE.
     //
@@ -3822,8 +3840,9 @@ pub async fn backup_wallet() -> Result<String> {
             anyhow::bail!(
                 "backup aborted: the wallet's write-ahead log could not be folded into the \
                  database (busy={busy}, {log_frames} frames left). A copy taken now would \
-                 silently omit recent transactions. Close any other window using this \
-                 wallet and try again."
+                 silently omit recent transactions. This usually means the wallet is \
+                 mid-sync or another window has it open; wait for sync to settle, or close \
+                 the other window, and try again."
             );
         }
     }
@@ -3838,17 +3857,55 @@ pub async fn backup_wallet() -> Result<String> {
              The partial copy has been removed rather than left looking like a usable backup."
         ));
     }
+    if has_stub {
+        if let Err(e) = std::fs::copy(&stub_path, &stub_backup) {
+            let _ = std::fs::remove_file(&backup_path);
+            let _ = std::fs::remove_file(&identity_backup);
+            return Err(anyhow::anyhow!(
+                "backup aborted: the database and identity copied but the YubiKey stub did \
+                 not ({e}). Without it the backup would restore into password mode and could \
+                 not be unlocked, so the partial copy has been removed."
+            ));
+        }
+    }
 
-    Ok(format!(
-        "Wallet backed up to {} (with its encryption identity beside it)",
-        backup_path
-    ))
+    Ok(if has_stub {
+        format!(
+            "Wallet backed up to {} (with its encryption identity and YubiKey stub beside it)",
+            backup_path
+        )
+    } else {
+        format!(
+            "Wallet backed up to {} (with its encryption identity beside it)",
+            backup_path
+        )
+    })
 }
 
 pub async fn restore_backup(backup_name: String) -> Result<String> {
+    // The name is joined onto the backup directory. The UI only ever passes what
+    // `list_backups` returned, but this command accepts any string, and a name carrying a
+    // path would install an arbitrary file as the wallet database. Accept exactly the
+    // shape `list_backups` produces: a bare filename ending in `.db`.
+    let is_bare = std::path::Path::new(&backup_name)
+        .file_name()
+        .map(|f| f == backup_name.as_str())
+        .unwrap_or(false);
+    if backup_name.is_empty()
+        || !is_bare
+        || backup_name.contains('/')
+        || backup_name.contains('\\')
+        || !backup_name.ends_with(".db")
+    {
+        anyhow::bail!(
+            "{:?} is not a backup name. Expected a bare filename ending in .db, as listed \
+             by the backup picker.",
+            backup_name
+        );
+    }
     let backup_dir = crate::paths::as_string::backup_dir()?;
     let backup_path = format!("{}/{}", backup_dir, backup_name);
-    
+
     if !std::path::Path::new(&backup_path).exists() {
         return Err(anyhow::anyhow!("Backup file not found: {}", backup_path));
     }
@@ -3878,11 +3935,25 @@ pub async fn restore_backup(backup_name: String) -> Result<String> {
     // over the current identity would produce precisely the mismatch this pairing exists
     // to prevent, so the two cases are handled differently and the user is told which
     // one happened.
-    let identity_backup = backup_path.replace(".db", ".identity.txt");
+    let identity_backup = backup_sidecar(&backup_path, ".identity.txt");
     let has_identity = std::path::Path::new(&identity_backup).exists();
 
     let kept_identity = if has_identity {
         preserve_replaced_file(&identity_path)?
+    } else {
+        None
+    };
+
+    // The YubiKey stub travels with the identity, and its presence IS the unlock mode. A
+    // backup that carries one puts it back; a backup that carries none must not inherit
+    // whatever stub this machine happens to have, or unlock tries the card on a
+    // passphrase-encrypted identity. Either way the stub currently here is moved aside,
+    // never deleted — same rule as everything else this function replaces.
+    let stub_path = crate::paths::as_string::yubikey_stub_path()?;
+    let stub_backup = backup_sidecar(&backup_path, ".yubikey.txt");
+    let has_stub_backup = std::path::Path::new(&stub_backup).exists();
+    let kept_stub = if has_identity && std::path::Path::new(&stub_path).exists() {
+        preserve_replaced_file(&stub_path)?
     } else {
         None
     };
@@ -3895,6 +3966,9 @@ pub async fn restore_backup(backup_name: String) -> Result<String> {
         std::fs::copy(&backup_path, &db_path)?;
         if has_identity {
             std::fs::copy(&identity_backup, &identity_path)?;
+            if has_stub_backup {
+                std::fs::copy(&stub_backup, &stub_path)?;
+            }
         }
         Ok(())
     })();
@@ -3909,6 +3983,10 @@ pub async fn restore_backup(backup_name: String) -> Result<String> {
             if let Some(k) = &kept_identity {
                 let _ = std::fs::rename(k, &identity_path);
             }
+            let _ = std::fs::remove_file(&stub_path);
+            if let Some(k) = &kept_stub {
+                let _ = std::fs::rename(k, &stub_path);
+            }
         }
         return Err(anyhow::anyhow!(
             "restore failed and the previous wallet has been put back: {e}"
@@ -3917,9 +3995,16 @@ pub async fn restore_backup(backup_name: String) -> Result<String> {
 
     if has_identity {
         Ok(format!(
-            "Restored wallet and encryption identity from {}. The previous wallet was \
+            "Restored wallet and encryption identity from {}{}. The previous wallet was \
              moved aside, not deleted.",
-            backup_name
+            backup_name,
+            if has_stub_backup {
+                " (YubiKey mode, stub restored)"
+            } else if kept_stub.is_some() {
+                " (password mode; this machine's YubiKey stub was moved aside)"
+            } else {
+                ""
+            }
         ))
     } else {
         // Deliberately not an error: the database is still the right one to restore, and

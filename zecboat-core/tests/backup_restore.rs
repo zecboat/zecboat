@@ -378,3 +378,111 @@ async fn a_backup_contains_writes_still_in_the_write_ahead_log() {
 
     drop(held);
 }
+
+// ─── YubiKey stub: the third file in the pair ────────────────────────────────
+
+/// `paths::yubikey_stub_path` says the stub "is as much a pair with identity_path as
+/// that file is with wallet_db_path". Unlock decides its MODE by whether the stub exists:
+/// with it, the identity is opened on the card; without it, with the password. So a
+/// backup of a YubiKey wallet restored without its stub is refused by the wrong branch,
+/// with a message about a damaged identity file, to a user holding the right key and PIN.
+#[tokio::test]
+async fn backup_carries_the_yubikey_stub_and_restore_puts_it_back() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let sb = Sandbox::new("stub-carried");
+    zecboat_core::initialize_new_wallet("pw".into(), false, Some(BIRTHDAY))
+        .await
+        .expect("wallet should initialise");
+    // A stub as the plugin writes it: one identity line. Its contents are opaque here;
+    // only its presence and byte-exact survival matter.
+    let stub = sb.data().join("yubikey-identity.txt");
+    let stub_bytes = b"# created by age-plugin-yubikey (test)\nAGE-PLUGIN-YUBIKEY-1TESTSTUB\n";
+    std::fs::write(&stub, stub_bytes).unwrap();
+
+    zecboat_core::backup_wallet().await.expect("backup should succeed");
+
+    let names: Vec<String> = std::fs::read_dir(sb.backups())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    let db_name = names.iter().find(|n| n.ends_with(".db")).expect("a .db backup").clone();
+    let stub_backup = names.iter().find(|n| n.ends_with(".yubikey.txt"));
+    assert!(
+        stub_backup.is_some(),
+        "backup of a YubiKey-mode wallet carried no stub — restore would open the identity \
+         in password mode and refuse: {names:?}"
+    );
+    assert_eq!(
+        std::fs::read(sb.backups().join(stub_backup.unwrap())).unwrap(),
+        stub_bytes,
+        "the backed-up stub is not byte-identical"
+    );
+
+    // Lose the stub (recover_wallet_from_seed removes it deliberately), then restore.
+    std::fs::remove_file(&stub).unwrap();
+    zecboat_core::restore_backup(db_name).await.expect("restore should succeed");
+    assert_eq!(
+        std::fs::read(&stub).ok().as_deref(),
+        Some(&stub_bytes[..]),
+        "restore did not put the YubiKey stub back beside the identity it unlocks"
+    );
+}
+
+/// The other direction: a password-mode backup restored onto a machine that currently
+/// runs a YubiKey wallet must not leave the old stub behind, or unlock tries the card on
+/// a passphrase-encrypted identity. The stale stub is moved aside, not deleted.
+#[tokio::test]
+async fn restoring_a_password_backup_removes_a_stale_yubikey_stub() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let sb = Sandbox::new("stub-stale");
+    zecboat_core::initialize_new_wallet("pw".into(), false, Some(BIRTHDAY))
+        .await
+        .expect("wallet should initialise");
+    zecboat_core::backup_wallet().await.expect("backup should succeed");
+    let db_name = std::fs::read_dir(sb.backups())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.ends_with(".db"))
+        .expect("a .db backup");
+
+    let stub = sb.data().join("yubikey-identity.txt");
+    std::fs::write(&stub, b"AGE-PLUGIN-YUBIKEY-1STALE\n").unwrap();
+
+    zecboat_core::restore_backup(db_name).await.expect("restore should succeed");
+    assert!(
+        !stub.exists(),
+        "a stale YubiKey stub survived a password-mode restore; unlock would try the card"
+    );
+    assert!(
+        sb.replaced_copies().iter().any(|n| n.starts_with("yubikey-identity.txt.replaced-")),
+        "the stale stub was deleted rather than moved aside: {:?}",
+        sb.replaced_copies()
+    );
+}
+
+/// `restore_backup` joins the caller's string onto the backup directory. The UI only ever
+/// passes a name from `list_backups`, but the command accepts anything, and a name with a
+/// path in it would install an arbitrary file as the wallet database.
+#[tokio::test]
+async fn restore_refuses_a_name_that_is_not_a_bare_backup_filename() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let sb = Sandbox::new("restore-name");
+    zecboat_core::initialize_new_wallet("pw".into(), false, Some(BIRTHDAY))
+        .await
+        .expect("wallet should initialise");
+    let before = std::fs::read(sb.db()).unwrap();
+
+    for bad in ["../wallet.db", "sub/wallet_backup_1.db", "/etc/passwd", "wallet_backup_1.identity.txt", ""] {
+        let err = zecboat_core::restore_backup(bad.to_string())
+            .await
+            .expect_err(&format!("{bad:?} must be refused"));
+        assert!(
+            err.to_string().contains("not a backup name"),
+            "{bad:?}: refused for the wrong reason: {err}"
+        );
+    }
+    assert_eq!(std::fs::read(sb.db()).unwrap(), before, "a refused restore touched the wallet");
+    assert!(sb.replaced_copies().is_empty(), "a refused restore moved files aside");
+}
