@@ -4031,14 +4031,48 @@ pub async fn get_viewkey() -> Result<String> {
     let mnemonic = phrase_to_mnemonic(&phrase)
         .map_err(|e| anyhow::anyhow!("Invalid seed phrase: {:?}", e))?;
     let seed_bytes = mnemonic.to_seed("");
-    
+
     use zcash_protocol::consensus::MainNetwork;
     let usk = zcash_keys::keys::UnifiedSpendingKey::from_seed(&MainNetwork, &seed_bytes, zip32::AccountId::ZERO)
         .map_err(|e| anyhow::anyhow!("Invalid seed: {:?}", e))?;
-    let ufvk = usk.to_unified_full_viewing_key();
-    let ufvk_encoded = ufvk.encode(&MainNetwork);
-    
-    Ok(ufvk_encoded)
+    let derived = usk.to_unified_full_viewing_key().encode(&MainNetwork);
+
+    // R6. Derivation alone says what the seed WOULD produce. The key the user is asking
+    // for is the one this wallet scans and spends with, and that lives in accounts.ufvk.
+    // F4 (in extract_mnemonic_internal) already refuses a phrase from a different seed, by
+    // fingerprint; it cannot see an account row whose UFVK is not what that seed derives.
+    // So compare, and hand out the stored key only when derivation agrees with it — a
+    // wallet where the two differ has no single answer, and showing either would be wrong.
+    let db_path = crate::paths::as_string::wallet_db_path()?;
+    let conn = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to open DB to check the view key: {:?}", e))?;
+    let mut stmt = conn.prepare("SELECT hd_account_index, ufvk FROM accounts")?;
+    let rows: Vec<(Option<u32>, Option<String>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+    if rows.is_empty() {
+        anyhow::bail!("this wallet has no account yet, so there is no viewing key to show");
+    }
+    // This wallet is single-account by design (create_new_account refuses), and every
+    // derivation site uses account 0. An account row that says otherwise did not come
+    // from this code, and its key is not the one derived above.
+    let matched = rows.iter().any(|(idx, ufvk)| {
+        idx.unwrap_or(0) == 0 && ufvk.as_deref() == Some(derived.as_str())
+    });
+    if !matched {
+        anyhow::bail!(
+            "the viewing key derived from this wallet's seed phrase does not match the \
+             account stored in its database.\n\n\
+             The account was created from a different key than the phrase stored beside it, \
+             most often by combining a database and an encryption identity from two different \
+             wallets. The key this wallet scans with is not one its seed can reproduce.\n\n\
+             Do not send from this wallet. Recover from your 24-word phrase instead."
+        );
+    }
+    Ok(derived)
 }
 
 

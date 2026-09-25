@@ -736,3 +736,44 @@ async fn an_imported_phrase_is_stored_normalised_not_as_typed() {
          normalised, so the same seed would export two different strings"
     );
 }
+
+/// R6. `get_viewkey` derived a key from the stored phrase and showed it, without ever
+/// asking whether that key is the one in `accounts.ufvk` — the key this wallet actually
+/// scans and spends with. F4 catches a phrase from a different SEED, by fingerprint; it
+/// says nothing about an account row whose UFVK is not what that seed derives. Settings →
+/// Get Viewkey would then hand out a key for a wallet the user is not looking at.
+#[tokio::test]
+async fn the_view_key_shown_is_the_one_the_wallet_scans_with() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    const BIRTHDAY: u32 = 3_400_000;
+    let w = &KNOWN_WALLETS[0];
+    let sb = Sandbox::new("r6-viewkey");
+    zecboat_core::recover_wallet_from_seed(w.phrase, "pw".into(), Some(BIRTHDAY))
+        .await
+        .expect("recover");
+    zecboat_core::unlock_wallet("pw".into(), false).await.expect("unlock");
+
+    // Healthy wallet: the key shown is the account's key.
+    let shown = zecboat_core::get_viewkey().await.expect("a healthy wallet shows its view key");
+    let (stored, _) = stored_account(&sb.wallet_db());
+    assert_eq!(shown, stored, "the view key shown differs from the account's stored UFVK");
+    assert_eq!(shown, w.ufvk);
+
+    // Same seed fingerprint, different account key: F4 stays silent, so only a check
+    // against accounts.ufvk can notice. A wallet in this state must not hand out a key.
+    let other = KNOWN_WALLETS[1].ufvk;
+    assert_ne!(other, w.ufvk);
+    rusqlite::Connection::open(sb.wallet_db())
+        .unwrap()
+        .execute("UPDATE accounts SET ufvk = ?1", [other])
+        .unwrap();
+    let err = zecboat_core::get_viewkey()
+        .await
+        .expect_err("the seed does not derive the account's UFVK; get_viewkey must refuse");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("does not match"),
+        "the refusal must say the derived key does not match the account: {msg}"
+    );
+    assert!(!msg.contains(w.phrase) && !msg.contains("abandon"), "the refusal echoed the phrase");
+}
