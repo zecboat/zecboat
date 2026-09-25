@@ -48,14 +48,31 @@ use serde::{Deserialize, Serialize};
 ///
 /// A key here is a claim this binary makes about who Zecboat is. Adding one is a release
 /// decision, not a configuration change, which is the entire point of pinning.
-const PINNED_ISSUERS: &[(&str, &str)] = &[
+/// `(range, issuer key, manifest path under the registry base)`.
+///
+/// ONE KEY PER COLLECTION, AND ONE MANIFEST PATH PER KEY. The path is pinned beside the key
+/// on purpose: the wallet then knows exactly where each collection's manifest lives without
+/// trusting anything in a memo, and a manifest fetched from a collection's path is verified
+/// against THAT collection's key only — location and key are bound together.
+///
+/// Before 2026-09-25 this table had two keys and the badge fetched one fixed path,
+/// `/issuance/issuance_manifest.json`. That single path is Happy Birthday's, so a Barcelona
+/// asset could never be listed no matter what was published — the badge was
+/// single-collection by construction, and it surfaced the day the first Barcelona card
+/// landed in a wallet. §7.1 (one generation sequence per issuer key) is also why the two
+/// cannot share a manifest: two collections under one key collide on rollback detection.
+///
+/// Happy Birthday keeps the legacy root path so the live published URL stays valid.
+const PINNED_ISSUERS: &[(&str, &str, &str)] = &[
     (
         "Happy Birthday Zcash",
         "98508d73ce15d3f2cdc3506b3a53da0f4bece0c51116e296057de2ea922ab0db",
+        "issuance",
     ),
     (
         "Barcelona Post Card",
         "ecc9f9a3b148f4066a09bb46a713c6dbac39571665a7783f9fd15d4ee8bf31c4",
+        "issuance/barcelona_post_card",
     ),
 ];
 
@@ -67,7 +84,7 @@ const PINNED_ISSUERS: &[(&str, &str)] = &[
 pub fn pinned_issuers() -> Vec<serde_json::Value> {
     PINNED_ISSUERS
         .iter()
-        .map(|(label, key)| serde_json::json!({ "range": label, "key": key }))
+        .map(|(label, key, path)| serde_json::json!({ "range": label, "key": key, "manifest": path }))
         .collect()
 }
 
@@ -146,6 +163,8 @@ fn verify_manifest(
     body: &[u8],
     sig: &[u8],
     asset_id: &str,
+    issuer_label: &str,
+    key_hex: &str,
 ) -> std::result::Result<(String, Issuance, u64), BadgeState> {
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
@@ -157,24 +176,23 @@ fn verify_manifest(
     })?;
     let signature = Signature::from_bytes(&sig);
 
-    // CHECK 1 -- against every pinned key, because one wallet holds assets from several ranges.
-    let mut matched: Option<&str> = None;
-    for (label, key_hex) in PINNED_ISSUERS {
-        let Some(raw) = hex32(key_hex) else { continue };
-        let Ok(vk) = VerifyingKey::from_bytes(&raw) else {
-            continue;
-        };
-        if vk.verify(body, &signature).is_ok() {
-            matched = Some(label);
-            break;
-        }
-    }
-    let issuer_label = matched.ok_or_else(|| BadgeState::SignatureFailed {
-        detail:
-            "the manifest is not signed by any issuer key pinned in this wallet. Either it is \
-             not ours, or it was tampered with in transit."
-                .to_string(),
+    // CHECK 1 -- against the ONE key pinned for the path this manifest was fetched from.
+    // It used to try every pinned key, which let a manifest at collection A's path pass
+    // if signed by collection B's key. Binding path to key closes that.
+    let raw = hex32(key_hex).ok_or_else(|| BadgeState::CouldNotCheck {
+        detail: format!("the pinned key for {issuer_label} is malformed in this build"),
     })?;
+    let vk = VerifyingKey::from_bytes(&raw).map_err(|e| BadgeState::CouldNotCheck {
+        detail: format!("the pinned key for {issuer_label} is not a valid ed25519 key: {e}"),
+    })?;
+    if vk.verify(body, &signature).is_err() {
+        return Err(BadgeState::SignatureFailed {
+            detail: format!(
+                "the manifest at {issuer_label}'s path is not signed by {issuer_label}'s pinned \
+                 key. Either it is not ours, or it was tampered with in transit."
+            ),
+        });
+    }
 
     let manifest: Manifest =
         serde_json::from_slice(body).map_err(|e| BadgeState::CouldNotCheck {
@@ -342,18 +360,52 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
         }
     };
 
-    let body = match fetch(format!("{base}/issuance/issuance_manifest.json")).await {
-        Ok(b) => b,
-        Err(e) => return Ok(BadgeState::CouldNotCheck { detail: e }),
-    };
-    let sig = match fetch(format!("{base}/issuance/issuance_manifest.sig")).await {
-        Ok(b) => b,
-        Err(e) => return Ok(BadgeState::CouldNotCheck { detail: e }),
-    };
+    // Every pinned collection, at its own path, against its own key. The first manifest
+    // that verifies AND lists this asset wins; the others are consulted only if none does,
+    // and then the outcome is ranked: a tampered pinned manifest outranks an unreachable one,
+    // which outranks "simply not listed" — because those call for different responses.
+    let mut found: Option<(String, Issuance, u64)> = None;
+    let mut not_listed: Vec<String> = Vec::new();
+    let mut unreachable: Vec<String> = Vec::new();
+    let mut tampered: Vec<String> = Vec::new();
 
-    let (issuer, issuance, _generation) = match verify_manifest(&body, &sig, &asset_id) {
-        Ok(v) => v,
-        Err(state) => return Ok(state),
+    for (label, key_hex, path) in PINNED_ISSUERS {
+        let body = match fetch(format!("{base}/{path}/issuance_manifest.json")).await {
+            Ok(b) => b,
+            Err(e) => { unreachable.push(format!("{label} ({e})")); continue; }
+        };
+        let sig = match fetch(format!("{base}/{path}/issuance_manifest.sig")).await {
+            Ok(b) => b,
+            Err(e) => { unreachable.push(format!("{label} ({e})")); continue; }
+        };
+        match verify_manifest(&body, &sig, &asset_id, label, key_hex) {
+            Ok(v) => { found = Some(v); break; }
+            Err(BadgeState::NotListed { detail, .. }) => not_listed.push(detail),
+            Err(BadgeState::SignatureFailed { detail }) => tampered.push(detail),
+            Err(other) => return Ok(other),
+        }
+    }
+
+    let (issuer, issuance, _generation) = match found {
+        Some(v) => v,
+        None if !tampered.is_empty() => {
+            return Ok(BadgeState::SignatureFailed { detail: tampered.join("; ") })
+        }
+        None if !unreachable.is_empty() => {
+            return Ok(BadgeState::CouldNotCheck {
+                detail: format!(
+                    "not listed in any manifest that could be reached, and {} could not be: {}",
+                    unreachable.len(),
+                    unreachable.join("; ")
+                ),
+            })
+        }
+        None => {
+            return Ok(BadgeState::NotListed {
+                issuer: "no pinned issuer".into(),
+                detail: not_listed.join("; "),
+            })
+        }
     };
 
     if let Err(state) = verify_disclosure(&issuance, &asset_id).await {
@@ -388,9 +440,41 @@ mod tests {
         assert_eq!(hex32(&"ab".repeat(32)).unwrap()[0], 0xab);
     }
 
+    /// A manifest served at collection A's path must be signed by collection A's key.
+    ///
+    /// Before per-collection paths, check 1 tried EVERY pinned key, so a manifest at one
+    /// collection's location signed by another collection's key would pass. Binding the path
+    /// to the key closes that: a valid signature from the wrong pinned key is a failure.
+    #[test]
+    fn a_manifest_signed_by_the_wrong_collections_key_is_refused() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let body = br#"{"network":"main","generation":1,"issuer":{"name":"x"},"assets":[]}"#;
+
+        // A genuine signature — just not from the key pinned for this path.
+        let other = SigningKey::from_bytes(&[7u8; 32]);
+        let sig = other.sign(body).to_bytes();
+
+        let (label, key, _) = PINNED_ISSUERS[0];
+        match verify_manifest(body, &sig, &"a".repeat(64), label, key) {
+            Err(BadgeState::SignatureFailed { detail }) => {
+                assert!(detail.contains(label), "the refusal must name the collection: {detail}")
+            }
+            other => panic!("a correctly-formed signature from the WRONG key was accepted: {other:?}"),
+        }
+
+        // And the same signature IS accepted when the pinned key is the one that made it:
+        // check 1 passes, and it proceeds to fail at check 4 (not listed) instead.
+        let hex = hex::encode(other.verifying_key().to_bytes());
+        match verify_manifest(body, &sig, &"a".repeat(64), "test", &hex) {
+            Err(BadgeState::NotListed { .. }) => {}
+            other => panic!("expected check 1 to pass and check 4 to fail, got {other:?}"),
+        }
+    }
+
     #[test]
     fn a_wrong_length_signature_is_a_failure_not_a_panic() {
-        let s = verify_manifest(b"{}", &[0u8; 63], &"a".repeat(64)).unwrap_err();
+        let (label, key, _) = PINNED_ISSUERS[0];
+        let s = verify_manifest(b"{}", &[0u8; 63], &"a".repeat(64), label, key).unwrap_err();
         match s {
             BadgeState::SignatureFailed { detail } => assert!(detail.contains("64")),
             other => panic!("expected SignatureFailed, got {other:?}"),
@@ -401,7 +485,9 @@ mod tests {
     /// stops verifying that range, which is worse than failing loudly.
     #[test]
     fn every_pinned_key_is_well_formed() {
-        for (label, key) in PINNED_ISSUERS {
+        for (label, key, path) in PINNED_ISSUERS {
+            assert!(!path.is_empty() && !path.starts_with('/') && !path.ends_with('/'),
+                "{label}: manifest path must be a bare relative path, got {path:?}");
             let raw = hex32(key).unwrap_or_else(|| panic!("{label}: key is not 64 hex chars"));
             ed25519_dalek::VerifyingKey::from_bytes(&raw)
                 .unwrap_or_else(|e| panic!("{label}: not a valid ed25519 key: {e}"));
