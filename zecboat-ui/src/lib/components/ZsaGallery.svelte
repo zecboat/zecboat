@@ -255,41 +255,6 @@
                 <span class="verify-detail">{badge.detail}</span>
               </div>
             {/if}
-            <!-- Lineage (Wake). Kept apart from the two badges above for the same reason they
-                 are kept apart from each other: a merged tick would claim what none of them
-                 checked. Verified here means: proofs, chain rule, anchors on a full node this
-                 wallet chose, and a genesis output the issuer's manifest names. -->
-            {#if isCheckingLineage}
-              <div class="verify-badge checking">Verifying lineage against your node…</div>
-            {:else if wake?.state === 'verified'}
-              <div class="verify-badge ok">
-                ✓ Lineage verified — {wake.hops} proof{wake.hops === 1 ? '' : 's'} back to the issuance output
-                <details class="verify-details">
-                  <summary>what was checked</summary>
-                  <span class="check-line">✓ every proof verifies under the pinned Wake keys</span>
-                  <span class="check-line">✓ each note's ρ is the previous note's nullifier (consensus-bound)</span>
-                  <span class="check-line">✓ every anchor is a tree root on your node, shallowest {wake.min_anchor_depth.toLocaleString()} blocks deep</span>
-                  <span class="check-line">✓ the genesis output {wake.genesis_txid.slice(0, 16)}… #{wake.genesis_action_index} is the one the {wake.genesis_source === 'local_manifest' ? 'local test manifest' : "issuer's pinned manifest"} names</span>
-                  <span class="check-line mono">lading sha256 {wake.consignment_hash.slice(0, 16)}…</span>
-                  <span class="check-line caveat">Wake is a draft circuit without external review (WAKE-v1 §11). This badge is exploratory.</span>
-                </details>
-              </div>
-            {:else if wake?.state === 'no_wake'}
-              <div class="verify-badge unknown">
-                No lineage proof for this unit
-                <span class="verify-detail">{wake.detail} Unproven is not forged: the memo and artwork checks above still apply.</span>
-              </div>
-            {:else if wake?.state === 'unverified'}
-              <div class="verify-badge unknown">
-                Lineage could not be verified right now
-                <span class="verify-detail">{wake.detail}</span>
-              </div>
-            {:else if wake?.state === 'broken'}
-              <div class="verify-badge bad">
-                ✕ Lineage proof is broken ({wake.failure})
-                <span class="verify-detail">{wake.detail}</span>
-              </div>
-            {/if}
           {:else if verification && !verification.verified}
             <div class="verify-badge bad">
               ✕ Artwork does NOT match the memo
@@ -299,6 +264,42 @@
             <div class="verify-badge unknown">
               Artwork could not be verified
               <span class="verify-detail">{verifyError}</span>
+            </div>
+          {/if}
+          <!-- Lineage (Wake). Rendered on its own, outside the artwork branch: a unit with no
+               registry artwork (the throwaway collection) still has a lineage to show. Kept apart
+               from the two badges above for the same reason they are kept apart from each other: a merged tick would claim what none of them
+               checked. Verified here means: proofs, chain rule, anchors on a full node this
+               wallet chose, and a genesis output the issuer's manifest names. -->
+          {#if isCheckingLineage}
+            <div class="verify-badge checking">Verifying lineage against your node…</div>
+          {:else if wake?.state === 'verified'}
+            <div class="verify-badge ok">
+              ✓ Lineage verified — {wake.hops} proof{wake.hops === 1 ? '' : 's'} back to the issuance output
+              <details class="verify-details">
+                <summary>what was checked</summary>
+                <span class="check-line">✓ every proof verifies under the pinned Wake keys</span>
+                <span class="check-line">✓ each note's ρ is the previous note's nullifier (consensus-bound)</span>
+                <span class="check-line">✓ every anchor is a tree root on your node, shallowest {wake.min_anchor_depth.toLocaleString()} blocks deep</span>
+                <span class="check-line">✓ the genesis output {wake.genesis_txid.slice(0, 16)}… #{wake.genesis_action_index} is the one the {wake.genesis_source === 'local_manifest' ? 'local test manifest' : "issuer's pinned manifest"} names</span>
+                <span class="check-line mono">lading sha256 {wake.consignment_hash.slice(0, 16)}…</span>
+                <span class="check-line caveat">Wake is a draft circuit without external review (WAKE-v1 §11). This badge is exploratory.</span>
+              </details>
+            </div>
+          {:else if wake?.state === 'no_wake'}
+            <div class="verify-badge unknown">
+              No lineage proof for this unit
+              <span class="verify-detail">{wake.detail} Unproven is not forged: the memo and artwork checks above still apply.</span>
+            </div>
+          {:else if wake?.state === 'unverified'}
+            <div class="verify-badge unknown">
+              Lineage could not be verified right now
+              <span class="verify-detail">{wake.detail}</span>
+            </div>
+          {:else if wake?.state === 'broken'}
+            <div class="verify-badge bad">
+              ✕ Lineage proof is broken ({wake.failure})
+              <span class="verify-detail">{wake.detail}</span>
             </div>
           {/if}
           {#if isLoadingMetadata}
