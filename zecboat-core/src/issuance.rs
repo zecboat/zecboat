@@ -108,6 +108,9 @@ pub enum BadgeState {
         issuer: String,
         issuance_txid: String,
         issuance_height: u32,
+        /// The Action index of the issuance output: with `issuance_txid`, the asset's genesis
+        /// output for Wake (chapter 8). Additive; the badge UI ignores it.
+        issuance_action_index: u32,
         checks: Vec<String>,
         caveat: String,
     },
@@ -423,6 +426,7 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
         issuer,
         issuance_txid: issuance.txid,
         issuance_height: issuance.height,
+        issuance_action_index: issuance.action_index as u32,
         checks: vec![
             "1 issuer signature, against a key pinned in this wallet".into(),
             "3 network is mainnet".into(),
@@ -434,6 +438,19 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
                  cannot be — see ZMAP-v0.3 §13."
             .into(),
     })
+}
+
+/// The genesis output of `asset_id` according to a pinned, verified manifest:
+/// `(txid in display order, action_index)`. `None` when no pinned manifest lists it or none
+/// could be verified. Wake chapter 8 uses this to decide whether a carrier is a first-holder
+/// note (genesis proof) and to confirm a delivered lading's genesis against the issuer.
+pub async fn genesis_outpoint(asset_id: &str) -> Option<(String, u32)> {
+    match verify_issuance(asset_id.to_string()).await {
+        Ok(BadgeState::Verified { issuance_txid, issuance_action_index, .. }) => {
+            Some((issuance_txid.to_ascii_lowercase(), issuance_action_index))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

@@ -486,3 +486,42 @@ async fn restore_refuses_a_name_that_is_not_a_bare_backup_filename() {
     assert_eq!(std::fs::read(sb.db()).unwrap(), before, "a refused restore touched the wallet");
     assert!(sb.replaced_copies().is_empty(), "a refused restore moved files aside");
 }
+
+/// Wake chapter 8: consignments live in `wallet.db`, so a backup must carry them (ZMAP v0.5
+/// §15 "wallets MUST include them in backups"). The row is written through a second
+/// connection after the wallet's pool has opened, so it sits in the write-ahead log until the
+/// backup checkpoints — which is exactly the case the WAL fix exists for.
+#[tokio::test]
+async fn backup_carries_consignments_written_after_the_pool_opened() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let sb = Sandbox::new("consignments");
+
+    zecboat_core::initialize_new_wallet("pw".into(), false, Some(BIRTHDAY))
+        .await
+        .expect("wallet should initialise");
+
+    let lading = br#"{"wake_lading":1,"genesis":{"txid":"14b8","action_index":3},"hops":[]}"#;
+    let hash = {
+        let conn = rusqlite::Connection::open(sb.db()).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        zecboat_core::zmap::store_consignment(&conn, "asset-x", Some(3), Some(1), lading).unwrap()
+    };
+
+    zecboat_core::backup_wallet().await.expect("backup should succeed");
+
+    let backup = std::fs::read_dir(sb.backups())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| p.extension().map(|x| x == "db").unwrap_or(false))
+        .expect("a backup database");
+    let conn = rusqlite::Connection::open_with_flags(
+        &backup,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let rows = zecboat_core::zmap::list_consignments(&conn).unwrap();
+    assert_eq!(rows.len(), 1, "the backup does not carry the consignment");
+    assert_eq!(rows[0].sha256, hash);
+    assert_eq!(rows[0].json, lading);
+}

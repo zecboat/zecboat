@@ -1532,7 +1532,7 @@ async fn try_broadcast_grpc(tx_bytes: &[u8]) -> std::result::Result<String, Broa
 /// This is the path ZecBoat Glass used for everything — six stock zebrad
 /// JSON-RPC methods, no indexer. Here it is narrowed to the single call that
 /// matters when the indexer is the thing that is broken.
-fn zebrad_rpc_endpoint() -> String {
+pub(crate) fn zebrad_rpc_endpoint() -> String {
     std::env::var("ZECBOAT_ZEBRAD_RPC").unwrap_or_else(|_| "http://127.0.0.1:8232".to_string())
 }
 
@@ -2459,6 +2459,12 @@ fn zec_to_zatoshis(amount: f64) -> Result<u64> {
 }
 
 pub async fn send_transaction(address: &str, amount: f64, memo: &str, asset_id: Option<&str>) -> Result<String> {
+    send_transaction_with_wake(address, amount, memo, asset_id, false).await
+}
+
+/// [`send_transaction`] with the Wake acknowledgement (chapter 8): when `acknowledge_unproven`
+/// is false and the unit has no lading, the send is refused with [`crate::wake::UNPROVEN_PREFIX`].
+pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, asset_id: Option<&str>, acknowledge_unproven: bool) -> Result<String> {
     // 1. Validate and convert to zatoshis — on the value path only.
     //
     // A ZSA transfer moves a carrier note whose value is fixed at CARRIER_ZAT and
@@ -2536,6 +2542,15 @@ pub async fn send_transaction(address: &str, amount: f64, memo: &str, asset_id: 
     //
     // `spawn_blocking` moves it to tokio's blocking pool, which exists for exactly this.
     // The arguments are owned first because the closure crosses a thread boundary.
+    // Wake: the genesis lookup talks to the registry, so it happens here, before the
+    // blocking builder, and its answer travels down as data.
+    let wake = crate::wake::SendOptions {
+        genesis: match asset_id {
+            Some(id) => crate::wake::genesis_outpoint(id).await.map(|(t, i, _)| (t, i)),
+            None => None,
+        },
+        acknowledge_unproven,
+    };
     let (raw_tx_hex, proposed_inputs) = {
         let address = address.to_string();
         let memo = memo.to_string();
@@ -2547,6 +2562,7 @@ pub async fn send_transaction(address: &str, amount: f64, memo: &str, asset_id: 
                 &memo,
                 asset_id.as_deref(),
                 target_height,
+                &wake,
             )
         })
         .await
@@ -3336,13 +3352,42 @@ pub async fn add_invoice(invoice_id: String, date: String, items: String, total_
 /// carrier count. The remaining fields are additive.
 pub async fn get_zsas() -> Result<Vec<Value>> {
     let db_path = crate::paths::as_string::wallet_db_path()?;
+    // Wake (chapter 8): pick up any lading the drop-box holds for a carrier whose memo commits
+    // to one. Best effort; a fetch failure must not hide the holdings.
+    {
+        let p = db_path.clone();
+        match tokio::task::spawn_blocking(move || crate::wake::fetch_missing_consignments(&p)).await {
+            Ok(Ok(r)) if r.fetched > 0 || !r.failed.is_empty() => println!("[wake] consignments: {r:?}"),
+            Ok(Err(e)) => eprintln!("[wake] consignment fetch skipped: {e}"),
+            _ => {}
+        }
+    }
     let pool = crate::db::WalletPool::new(&db_path)?;
     let holdings = pool.get_zmap_holdings().await?;
+    let ladings: std::collections::HashMap<String, crate::zmap::Consignment> = {
+        let p = db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<_> {
+            let conn = rusqlite::Connection::open(&p)?;
+            Ok(crate::zmap::list_consignments(&conn)?
+                .into_iter()
+                .map(|c| (c.asset_id.clone(), c))
+                .collect())
+        })
+        .await??
+    };
 
     Ok(holdings
         .into_iter()
         .map(|h| {
+            let lading = ladings.get(&h.asset_id);
+            let committed = h.carriers.iter().filter_map(|c| c.consignment_hash.clone()).next();
             serde_json::json!({
+                "wake": {
+                    "has_lading":       lading.is_some(),
+                    "consignment_hash": committed,
+                    "verified_at_height": lading.and_then(|c| c.verified_at_height),
+                    "hops": lading.and_then(|c| zmap_wake::lading::Lading::parse(&c.json).ok()).map(|l| l.hops.len()),
+                },
                 "asset_id":     h.asset_id,
                 "name":         h.name,
                 "amount":       h.quantity,
@@ -4101,10 +4146,13 @@ pub async fn restore_backup(backup_name: String) -> Result<String> {
         ));
     }
 
+    // Wake (chapter 8): "restore re-verifies consignments against the node".
+    let wake_note = crate::wake::reverify_after_restore().await;
+
     if has_identity {
         Ok(format!(
             "Restored wallet and encryption identity from {}{}. The previous wallet was \
-             moved aside, not deleted.",
+             moved aside, not deleted.{wake_note}",
             backup_name,
             if has_stub_backup {
                 " (YubiKey mode, stub restored)"

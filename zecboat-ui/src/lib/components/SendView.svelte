@@ -60,6 +60,13 @@
   let isSending = $state(false);
   let showConfirmation = $state(false);
 
+  // Wake (chapter 8). An asset send is refused when this wallet holds no lineage proof for
+  // the unit and no trusted manifest names its carrier as the issuance output: the recipient
+  // would receive it unproven. The backend says so with a WAKE_UNPROVEN: error; the user can
+  // acknowledge that and send anyway. Nothing is sent until they do.
+  let unprovenNotice = $state<string | null>(null);
+  let acknowledgeUnproven = $state(false);
+
   // Fee readiness -- asked before a send, not discovered during one.
   //
   // A carrier is exactly CARRIER_ZAT = 10,000 zat and the fee cannot come out of it: shaving
@@ -138,6 +145,8 @@
 
   function cancelSend() {
     showConfirmation = false;
+    unprovenNotice = null;
+    acknowledgeUnproven = false;
   }
 
   async function confirmAndSend() {
@@ -163,7 +172,8 @@
           address: toAddress,
           amount: parseFloat(amount),
           memo: memo,
-          assetId: assetId || undefined
+          assetId: assetId || undefined,
+          acknowledgeUnproven: assetId ? acknowledgeUnproven : undefined
         });
         
         txResult = {
@@ -177,11 +187,20 @@
       amount = "";
       memo = "";
       showConfirmation = false;
+      unprovenNotice = null;
+      acknowledgeUnproven = false;
     } catch (err: any) {
+      const raw = String(err);
+      // Wake: not a failure, a question. Keep the confirmation open with the acknowledgement
+      // control so the same review can be resent with it ticked.
+      if (raw.includes("WAKE_UNPROVEN:")) {
+        unprovenNotice = raw.split("WAKE_UNPROVEN:")[1]?.trim() || raw;
+        isSending = false;
+        return;
+      }
       // Translate the one error users actually hit. The backend message is correct and
       // unreadable; leaving it raw is how "InsufficientFunds" gets reported against a healthy
       // balance with no explanation of why.
-      const raw = String(err);
       const insufficient = raw.includes("InsufficientFunds");
       txResult = {
         success: false,
@@ -333,8 +352,20 @@
           <label for="hardware-wallet">Sign with YubiKey</label>
         </div>
         -->
+        {#if unprovenNotice}
+          <!-- Chapter 8: "send flow refuses a unit with no lading unless the user acknowledges
+               'arrives unproven'". The refusal is the default; this is the acknowledgement. -->
+          <div class="fee-warning" style="margin-top: 0.75rem;">
+            <strong>This unit would arrive unproven.</strong>
+            <span>{unprovenNotice}</span>
+            <label style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem; cursor: pointer;">
+              <input type="checkbox" bind:checked={acknowledgeUnproven} />
+              I understand the recipient receives it without a lineage proof. Send anyway.
+            </label>
+          </div>
+        {/if}
         <button class="btn secondary" onclick={cancelSend} disabled={isSending}>Cancel</button>
-        <button class="btn primary" onclick={confirmAndSend} disabled={isSending}>
+        <button class="btn primary" onclick={confirmAndSend} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven)}>
           {#if isSending}
             <span>Processing...</span>
           {:else}

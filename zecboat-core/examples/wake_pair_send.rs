@@ -50,8 +50,14 @@ fn main() -> anyhow::Result<()> {
         println!("node tip {tip}; expiry {}", tip + 40);
         Some(zcash_protocol::consensus::BlockHeight::from_u32(tip + 40))
     };
+    // Wake (chapter 8): the genesis outpoint from ZECBOAT_WAKE_MANIFEST if set; the unit may
+    // travel unproven only with WAKE_ALLOW_UNPROVEN=1. The lading goes to ZECBOAT_DROPBOX.
+    let wake = zecboat_core::wake::SendOptions {
+        genesis: zecboat_core::wake::genesis_from_local_manifest(asset_id),
+        acknowledge_unproven: env::var("WAKE_ALLOW_UNPROVEN").map(|v| v == "1").unwrap_or(false),
+    };
     let t = std::time::Instant::now();
-    let hex = zecboat_core::native_builder::send_zmap_asset(&mut wallet_db, &usk, asset_id, recipient, expiry)?;
+    let hex = zecboat_core::native_builder::send_zmap_asset(&mut wallet_db, &usk, asset_id, recipient, expiry, &wake)?;
     println!("built, proved, signed and stored in {:.1?}; {} bytes; NOT broadcast", t.elapsed(), hex.len() / 2);
     let out = format!("{home}/paired_tx.hex");
     std::fs::write(&out, &hex)?;

@@ -26,8 +26,28 @@ async fn get_transparent_balance() -> Result<f64, String> {
 }
 
 #[tauri::command]
-async fn send_transaction(address: String, amount: f64, memo: String, asset_id: Option<String>) -> Result<String, String> {
-    zecboat_core::send_transaction(&address, amount, &memo, asset_id.as_deref()).await.map_err(|e| e.to_string())
+// `acknowledge_unproven` (Wake, chapter 8): an asset send whose unit has no lineage proof is
+// refused with a `WAKE_UNPROVEN:` error unless the user has acknowledged that the recipient
+// receives it unproven. Absent means not acknowledged.
+async fn send_transaction(address: String, amount: f64, memo: String, asset_id: Option<String>, acknowledge_unproven: Option<bool>) -> Result<String, String> {
+    zecboat_core::send_transaction_with_wake(&address, amount, &memo, asset_id.as_deref(), acknowledge_unproven.unwrap_or(false))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+// Wake lineage badge (ZMAP v0.5 §9 check 7): the lading held for this asset, verified against
+// the node named by ZECBOAT_ZEBRAD_RPC. Four states; see zecboat_core::WakeState.
+async fn verify_lineage(asset_id: String) -> Result<serde_json::Value, String> {
+    let state = zecboat_core::verify_lineage(asset_id).await.map_err(|e| e.to_string())?;
+    serde_json::to_value(state).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+// Fetch any lading the drop-box holds for a carrier whose memo commits to one.
+async fn fetch_consignments() -> Result<serde_json::Value, String> {
+    let r = zecboat_core::fetch_consignments().await.map_err(|e| e.to_string())?;
+    serde_json::to_value(r).map_err(|e| e.to_string())
 }
 
 /// Transactions the wallet built and signed but never saw confirmed.
@@ -270,7 +290,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sync_status, set_provider_url, get_provider_url, get_balance, get_balance_breakdown, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
-            registry_base, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, fee_readiness, wallet_about,
+            registry_base, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, wallet_uses_yubikey, lock_wallet,
             create_new_account, backup_wallet, list_backups, restore_backup, export_keys, get_viewkey, check_yubikey,
             get_roster, add_roster_contact, delete_roster_contact, validate_address

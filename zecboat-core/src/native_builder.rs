@@ -504,6 +504,7 @@ pub fn send_zmap_asset(
     asset_id: &str,
     recipient: &str,
     expiry_height: Option<BlockHeight>,
+    wake: &crate::wake::SendOptions,
 ) -> Result<String> {
     use zcash_client_backend::data_api::wallet::input_selection::{
         LockFilter, LockedInputPolicy, NonEmptyBTreeSet, SpendPolicy,
@@ -525,6 +526,48 @@ pub fn send_zmap_asset(
         crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?)
     };
     let plan = crate::zmap::plan_asset_send(&holdings, asset_id)?;
+
+    // ── 1a. Wake (chapter 8): prove THIS carrier before anything is built ───────────────────
+    //
+    // The lading's hash goes into the memo, so the proof must exist before the payment does.
+    // A genesis proof if a trusted manifest names this note as the issuance output; otherwise
+    // a hop appended to the lading this wallet received. Neither possible: the unit can only
+    // travel unproven, and only if the user said so.
+    let wake_lading = {
+        let conn = rusqlite::Connection::open_with_flags(
+            wallet_db_path()?,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let oracle = crate::wake::oracle();
+        let spent_index = u32::try_from(plan.carrier.output_index())
+            .map_err(|_| anyhow!("internal: carrier output index out of range"))?;
+        crate::wake::prepare_send_lading(
+            &*wallet_db,
+            &conn,
+            asset_id,
+            plan.carrier.txid().as_ref(),
+            spent_index,
+            wake.genesis.as_ref(),
+            &oracle,
+        )?
+    };
+    match &wake_lading {
+        Some(l) => println!("[wake] lading of {} proof(s) ready, sha256 {}…", l.hops, &l.hash_hex[..16]),
+        None if wake.acknowledge_unproven => println!("[wake] no lading for this unit; sending it UNPROVEN as acknowledged"),
+        None => {
+            return Err(anyhow!(
+                "{} this wallet holds no lineage proof for {} and no trusted manifest names its \
+                 carrier as the issuance output, so the recipient would receive it unproven. \
+                 Acknowledge that to send anyway.",
+                crate::wake::UNPROVEN_PREFIX,
+                asset_id
+            ))
+        }
+    }
+    let memo_bytes: Vec<u8> = match &wake_lading {
+        Some(l) => crate::zmap::memo_with_consignment_hash(&plan.memo, &l.hash_hex)?,
+        None => plan.memo.clone(),
+    };
 
     let network = MainNetwork;
     let account_id = wallet_db
@@ -653,7 +696,7 @@ pub fn send_zmap_asset(
         .map_err(|e| anyhow!("invalid recipient address {}: {}", recipient, e))?;
     let amount = Zatoshis::from_u64(plan.amount)
         .map_err(|e| anyhow!("internal: bad carrier value: {:?}", e))?;
-    let memo = MemoBytes::from_bytes(&plan.memo)
+    let memo = MemoBytes::from_bytes(&memo_bytes)
         .map_err(|e| anyhow!("the carrier's memo will not fit a memo field: {:?}", e))?;
     let payment = Payment::new(recipient_addr, Some(amount), Some(memo), None, None, vec![])
         .map_err(|e| anyhow!("could not construct the asset payment: {:?}", e))?;
@@ -891,6 +934,18 @@ pub fn send_zmap_asset(
             },
         )
         .map_err(|e| anyhow!("could not record the lineage of the sent asset: {}", e))?;
+
+        // ── 9a. Keep the lading and deliver it (chapter 8) ─────────────────────────────────
+        // The sender's copy makes a lost delivery re-issuable. Delivery failure is reported,
+        // not fatal: the transfer is built and the recipient can ask for the lading again.
+        if let Some(l) = &wake_lading {
+            crate::zmap::store_consignment(&conn, asset_id, None, None, &l.bytes)
+                .map_err(|e| anyhow!("could not keep a copy of the lading: {}", e))?;
+            match crate::wake::deliver(recipient, l) {
+                Ok(()) => println!("[wake] lading sealed to the recipient and delivered to {}", crate::wake::dropbox_base()),
+                Err(e) => eprintln!("[wake] WARNING: the lading was NOT delivered ({e}); it is kept in this wallet under sha256 {}", l.hash_hex),
+            }
+        }
     }
 
     // Read the signed transaction back and return its **wire encoding**, which every caller

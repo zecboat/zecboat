@@ -7,7 +7,22 @@
     asset_id: string; name: string; amount: number; quantity: number;
     symbol: string | null; decimals: number; image_hash: string | null;
     metadata_uri: string | null; dialect: string; pools: string[];
+    // Wake (chapter 8): whether a lading is held for this asset, what the memo commits to,
+    // and when it last verified. The verdict itself comes from verify_lineage on open.
+    wake?: { has_lading: boolean; consignment_hash: string | null; verified_at_height: number | null; hops: number | null };
   };
+
+  // Lineage badge -- ZMAP v0.5 §9 check 7, WAKE-v1 §8. Four states, never one tick:
+  // verified is a proof chain checked against a full node AND a genesis the issuer's manifest
+  // names; unverified is "could not confirm" (no verdict); no_wake is "no lading held"
+  // (unproven, not forged); broken is evidence of forgery or tampering.
+  type Wake =
+    | { state: 'verified'; hops: number; min_anchor_depth: number; genesis_txid: string; genesis_action_index: number; genesis_source: string; consignment_hash: string }
+    | { state: 'unverified'; detail: string; consignment_hash: string | null }
+    | { state: 'no_wake'; detail: string }
+    | { state: 'broken'; failure: string; detail: string };
+  let wake = $state<Wake | null>(null);
+  let isCheckingLineage = $state(false);
   type Verification = {
     verified: boolean; expected_hash: string; actual_hash: string;
     source_url: string; bytes: number; image: string | null;
@@ -96,6 +111,15 @@
       .catch((e: any) => { badge = { state: 'could_not_check', detail: String(e) }; })
       .finally(() => { isCheckingIssuance = false; });
 
+    // Lineage, independent of both: the issuance badge says who minted the design; this says
+    // this unit descends from that minting. One can pass while the other fails.
+    wake = null;
+    isCheckingLineage = true;
+    invoke<Wake>("verify_lineage", { assetId })
+      .then((w) => { wake = w; })
+      .catch((e: any) => { wake = { state: 'unverified', detail: String(e), consignment_hash: null }; })
+      .finally(() => { isCheckingLineage = false; });
+
     // Metadata is descriptive and host-trusted. The image check is the part that needs no trust,
     // so it runs independently — one failing must not hide the other's result.
     invoke<Verification>("verify_asset_image", { assetId })
@@ -118,6 +142,7 @@
     verification = null;
     verifyError = null;
     badge = null;
+    wake = null;
   }
 
   // Straight parse of the published metadata. The previous version also base64-decoded an
@@ -159,6 +184,13 @@
             {n.range}{#if n.design}<span class="design-no" title="Design number within the range — not an edition size">{n.design}</span>{/if}
           </span>
           <span class="asset-balance">{asset.amount} {asset.amount === 1 ? 'unit' : 'units'}</span>
+          {#if asset.wake?.has_lading}
+            <span class="wake-chip held" title="A lineage proof is held for this unit. Open it to verify against your node.">lineage {asset.wake.hops ?? ''} {asset.wake.hops === 1 ? 'proof' : 'proofs'}</span>
+          {:else if asset.wake?.consignment_hash}
+            <span class="wake-chip pending" title="The sender committed to a lineage proof that has not been fetched yet.">lineage pending</span>
+          {:else}
+            <span class="wake-chip none" title="No lineage proof travels with this unit. Unproven, not forged.">no lineage proof</span>
+          {/if}
         </div>
       </div>
     {:else}
@@ -221,6 +253,41 @@
               <div class="verify-badge unknown">
                 Issuance could not be checked
                 <span class="verify-detail">{badge.detail}</span>
+              </div>
+            {/if}
+            <!-- Lineage (Wake). Kept apart from the two badges above for the same reason they
+                 are kept apart from each other: a merged tick would claim what none of them
+                 checked. Verified here means: proofs, chain rule, anchors on a full node this
+                 wallet chose, and a genesis output the issuer's manifest names. -->
+            {#if isCheckingLineage}
+              <div class="verify-badge checking">Verifying lineage against your node…</div>
+            {:else if wake?.state === 'verified'}
+              <div class="verify-badge ok">
+                ✓ Lineage verified — {wake.hops} proof{wake.hops === 1 ? '' : 's'} back to the issuance output
+                <details class="verify-details">
+                  <summary>what was checked</summary>
+                  <span class="check-line">✓ every proof verifies under the pinned Wake keys</span>
+                  <span class="check-line">✓ each note's ρ is the previous note's nullifier (consensus-bound)</span>
+                  <span class="check-line">✓ every anchor is a tree root on your node, shallowest {wake.min_anchor_depth.toLocaleString()} blocks deep</span>
+                  <span class="check-line">✓ the genesis output {wake.genesis_txid.slice(0, 16)}… #{wake.genesis_action_index} is the one the {wake.genesis_source === 'local_manifest' ? 'local test manifest' : "issuer's pinned manifest"} names</span>
+                  <span class="check-line mono">lading sha256 {wake.consignment_hash.slice(0, 16)}…</span>
+                  <span class="check-line caveat">Wake is a draft circuit without external review (WAKE-v1 §11). This badge is exploratory.</span>
+                </details>
+              </div>
+            {:else if wake?.state === 'no_wake'}
+              <div class="verify-badge unknown">
+                No lineage proof for this unit
+                <span class="verify-detail">{wake.detail} Unproven is not forged: the memo and artwork checks above still apply.</span>
+              </div>
+            {:else if wake?.state === 'unverified'}
+              <div class="verify-badge unknown">
+                Lineage could not be verified right now
+                <span class="verify-detail">{wake.detail}</span>
+              </div>
+            {:else if wake?.state === 'broken'}
+              <div class="verify-badge bad">
+                ✕ Lineage proof is broken ({wake.failure})
+                <span class="verify-detail">{wake.detail}</span>
               </div>
             {/if}
           {:else if verification && !verification.verified}
@@ -335,6 +402,10 @@
   .verify-badge.bad     { background: rgba(248, 81, 73, 0.15); color: #f85149; border: 1px solid rgba(248, 81, 73, 0.4); }
   .verify-badge.unknown { background: rgba(210, 153, 34, 0.12); color: #d29922; border: 1px solid rgba(210, 153, 34, 0.35); }
   .verify-badge.checking { background: rgba(139, 148, 158, 0.12); color: #8b949e; border: 1px solid rgba(139, 148, 158, 0.3); }
+  .wake-chip { display: inline-block; margin-top: 0.25rem; font-size: 0.7em; padding: 0.1rem 0.45rem; border-radius: 999px; border: 1px solid; }
+  .wake-chip.held    { color: #3fb950; border-color: rgba(46, 160, 67, 0.4); }
+  .wake-chip.pending { color: #d29922; border-color: rgba(210, 153, 34, 0.35); }
+  .wake-chip.none    { color: #8b949e; border-color: rgba(139, 148, 158, 0.3); }
   .verify-detail {
     font-weight: 400;
     font-size: 0.75rem;

@@ -100,6 +100,9 @@ pub struct ZmapRecord {
     /// SHA-256 of the artwork, when the memo commits to one. Enables zero-trust verification.
     pub image_hash: Option<String>,
     pub dialect: Dialect,
+    /// ZMAP v0.5 §15: SHA-256 of the lading delivered with this carrier, when the sender
+    /// committed to one. Absent means **unproven**, never invalid.
+    pub consignment_hash: Option<String>,
 }
 
 /// A carrier note backing a holding.
@@ -122,6 +125,8 @@ pub struct CarrierRef {
     /// different memo is a different asset. Not serialised; the UI has the parsed form.
     #[serde(skip)]
     pub memo: Vec<u8>,
+    /// The memo's `consignment_hash`, if the sender committed to a lading (§15).
+    pub consignment_hash: Option<String>,
 }
 
 /// An aggregated holding: one asset, however many carriers back it.
@@ -212,6 +217,7 @@ struct JsonMemo {
     decimals: Option<u8>,
     metadata_uri: Option<String>,
     image_hash: Option<String>,
+    consignment_hash: Option<String>,
 }
 
 /// Parse one memo into a ZMAP record, or `None` if it is not a ZMAP memo.
@@ -235,6 +241,10 @@ pub fn parse_memo(memo: &[u8]) -> Option<ZmapRecord> {
                     decimals: j.decimals.unwrap_or(0),
                     asset_id: j.asset_id,
                     dialect: Dialect::Json,
+                    consignment_hash: j
+                        .consignment_hash
+                        .filter(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()))
+                        .map(|h| h.to_ascii_lowercase()),
                 });
             }
         }
@@ -259,7 +269,50 @@ pub fn parse_memo(memo: &[u8]) -> Option<ZmapRecord> {
         metadata_uri: legacy_metadata_uri(text.as_str()),
         image_hash: Some(hash),
         dialect: Dialect::LegacyProse,
+        consignment_hash: None,
     })
+}
+
+/// The carrier memo to write on a transfer that carries a lading (ZMAP v0.5 §15).
+///
+/// The JSON dialect gains (or replaces) `consignment_hash`; every other field is carried over
+/// as parsed, so `asset_id`, and hence the asset's identity, is unchanged. The legacy prose
+/// dialect has no room for the field: the memo is returned unchanged and the lading travels
+/// unbound, which the verifier accepts (it hashes the delivered bytes but has nothing in the
+/// memo to compare against).
+///
+/// Before chapter 8 the memo was copied byte for byte. §15 says the memo MUST carry the hash,
+/// so a JSON memo now changes on every hop, by exactly this one field.
+pub fn memo_with_consignment_hash(memo: &[u8], hash_hex: &str) -> Result<Vec<u8>> {
+    let Some(text) = memo_text(memo) else {
+        return Err(anyhow::anyhow!("the carrier memo is empty"));
+    };
+    if !text.starts_with('{') {
+        return Ok(memo.to_vec());
+    }
+    let mut v: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("the carrier memo is not valid JSON: {e}"))?;
+    let obj = v
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("the carrier memo is not a JSON object"))?;
+    obj.insert(
+        "consignment_hash".to_string(),
+        serde_json::Value::String(hash_hex.to_ascii_lowercase()),
+    );
+    let out = serde_json::to_vec(&v)?;
+    if out.len() > 512 {
+        return Err(anyhow::anyhow!(
+            "the carrier memo with its consignment hash is {} bytes; the limit is 512",
+            out.len()
+        ));
+    }
+    // The identity must survive the edit, or the transfer would re-declare a different asset.
+    let before = parse_memo(memo).map(|r| r.asset_id);
+    let after = parse_memo(&out).map(|r| r.asset_id);
+    if before.is_none() || before != after {
+        return Err(anyhow::anyhow!("adding the consignment hash changed the asset's identity"));
+    }
+    Ok(out)
 }
 
 /// One unspent output as read from `v_received_outputs`.
@@ -295,6 +348,7 @@ pub fn holdings_from_rows(rows: impl IntoIterator<Item = OutputRow>) -> Vec<Zmap
             txid_bytes: row.txid,
             output_index: row.output_index,
             memo: memo.to_vec(),
+            consignment_hash: rec.consignment_hash.clone(),
         };
 
         by_asset
@@ -777,9 +831,209 @@ pub fn record_lineage_out(conn: &rusqlite::Connection, rec: &LineageOut) -> rusq
     Ok(())
 }
 
+/// A stored lading (ZMAP v0.5 §15 "consignment"), one row per delivered or produced lading.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Consignment {
+    pub id: i64,
+    pub asset_id: String,
+    pub unit: Option<u32>,
+    /// The carrier note this lading arrived with, when it was received; `None` for the copy a
+    /// sender keeps of what it delivered.
+    pub received_note_id: Option<i64>,
+    #[serde(skip)]
+    pub json: Vec<u8>,
+    /// SHA-256 of `json` exactly as delivered; the memo's `consignment_hash`.
+    pub sha256: String,
+    pub verified_at_height: Option<u32>,
+    pub created_at: String,
+}
+
+/// Create the consignment table if it does not exist. Lives in `wallet.db` beside the
+/// wallet's own tables so backups carry it (§15: wallets MUST include consignments in backups).
+pub fn ensure_consignments_table(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ext_zecboat_zmap_consignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asset_id TEXT NOT NULL,
+            unit INTEGER,
+            received_note_id INTEGER,
+            json BLOB NOT NULL,
+            sha256 BLOB NOT NULL UNIQUE,
+            verified_at_height INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Store a lading. Idempotent on its hash. Returns the hash, lower-case hex.
+pub fn store_consignment(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    unit: Option<u32>,
+    received_note_id: Option<i64>,
+    json: &[u8],
+) -> rusqlite::Result<String> {
+    ensure_consignments_table(conn)?;
+    let hash = zmap_wake::lading::lading_hash(json);
+    conn.execute(
+        "INSERT OR IGNORE INTO ext_zecboat_zmap_consignments
+            (asset_id, unit, received_note_id, json, sha256)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![asset_id, unit, received_note_id, json, hash.as_slice()],
+    )?;
+    Ok(hex::encode(hash))
+}
+
+fn consignment_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Consignment> {
+    let sha: Vec<u8> = r.get(5)?;
+    Ok(Consignment {
+        id: r.get(0)?,
+        asset_id: r.get(1)?,
+        unit: r.get::<_, Option<i64>>(2)?.map(|u| u as u32),
+        received_note_id: r.get(3)?,
+        json: r.get(4)?,
+        sha256: hex::encode(sha),
+        verified_at_height: r.get::<_, Option<i64>>(6)?.map(|h| h as u32),
+        created_at: r.get(7)?,
+    })
+}
+
+const CONSIGNMENT_COLS: &str =
+    "id, asset_id, unit, received_note_id, json, sha256, verified_at_height, created_at";
+
+/// Whether the table exists. Readers use this instead of [`ensure_consignments_table`] so a
+/// read-only connection (the send path's lookup) never tries to create it.
+fn consignments_table_exists(conn: &rusqlite::Connection) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ext_zecboat_zmap_consignments'",
+        [],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+}
+
+/// The most recently stored lading for `asset_id`, if any.
+pub fn latest_consignment(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+) -> rusqlite::Result<Option<Consignment>> {
+    if !consignments_table_exists(conn)? {
+        return Ok(None);
+    }
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {CONSIGNMENT_COLS} FROM ext_zecboat_zmap_consignments
+          WHERE asset_id = ?1 ORDER BY id DESC LIMIT 1"
+    ))?;
+    let mut rows = stmt.query([asset_id])?;
+    match rows.next()? {
+        Some(r) => Ok(Some(consignment_from_row(r)?)),
+        None => Ok(None),
+    }
+}
+
+/// The lading with this hash (hex), if stored.
+pub fn consignment_by_hash(
+    conn: &rusqlite::Connection,
+    sha256_hex: &str,
+) -> rusqlite::Result<Option<Consignment>> {
+    if !consignments_table_exists(conn)? {
+        return Ok(None);
+    }
+    let Ok(raw) = hex::decode(sha256_hex) else { return Ok(None) };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {CONSIGNMENT_COLS} FROM ext_zecboat_zmap_consignments WHERE sha256 = ?1"
+    ))?;
+    let mut rows = stmt.query([raw.as_slice()])?;
+    match rows.next()? {
+        Some(r) => Ok(Some(consignment_from_row(r)?)),
+        None => Ok(None),
+    }
+}
+
+/// Every stored lading, oldest first.
+pub fn list_consignments(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<Consignment>> {
+    if !consignments_table_exists(conn)? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {CONSIGNMENT_COLS} FROM ext_zecboat_zmap_consignments ORDER BY id"
+    ))?;
+    let rows = stmt.query_map([], consignment_from_row)?;
+    rows.collect()
+}
+
+/// Record that a lading verified against the node at `height` (or clear it with `None`).
+pub fn mark_consignment_verified(
+    conn: &rusqlite::Connection,
+    sha256_hex: &str,
+    height: Option<u32>,
+) -> rusqlite::Result<()> {
+    ensure_consignments_table(conn)?;
+    let raw = hex::decode(sha256_hex).unwrap_or_default();
+    conn.execute(
+        "UPDATE ext_zecboat_zmap_consignments SET verified_at_height = ?2 WHERE sha256 = ?1",
+        rusqlite::params![raw.as_slice(), height.map(|h| h as i64)],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memo_gains_a_consignment_hash_and_keeps_its_identity() {
+        let id = "a21c64a9012d95a0b923f825f3d16b483a76804393948ff085715509f278c837";
+        let memo = format!(r#"{{"asset_id":"{id}","name":"Wake Test #002","symbol":"WKT","decimals":0}}"#);
+        let h = "0cc8e1c098d1d992e15e56067b0edafefcb855d8b681ed9bb26fa652c92427e1";
+        let out = memo_with_consignment_hash(memo.as_bytes(), &h.to_uppercase()).unwrap();
+        let rec = parse_memo(&out).unwrap();
+        assert_eq!(rec.asset_id, id);
+        assert_eq!(rec.consignment_hash.as_deref(), Some(h));
+        assert_eq!(rec.name, "Wake Test #002");
+        // A second hop replaces, not appends.
+        let h2 = "1".repeat(64);
+        let out2 = memo_with_consignment_hash(&out, &h2).unwrap();
+        assert_eq!(parse_memo(&out2).unwrap().consignment_hash.as_deref(), Some(h2.as_str()));
+        assert_eq!(String::from_utf8_lossy(&out2).matches("consignment_hash").count(), 1);
+    }
+
+    #[test]
+    fn legacy_memo_is_left_alone() {
+        let out = memo_with_consignment_hash(NOMAD_042.as_bytes(), &"2".repeat(64)).unwrap();
+        assert_eq!(out, NOMAD_042.as_bytes());
+        assert_eq!(parse_memo(&out).unwrap().consignment_hash, None);
+    }
+
+    #[test]
+    fn malformed_consignment_hash_in_a_memo_reads_as_absent() {
+        let id = "a21c64a9012d95a0b923f825f3d16b483a76804393948ff085715509f278c837";
+        let memo = format!(r#"{{"asset_id":"{id}","consignment_hash":"nope"}}"#);
+        assert_eq!(parse_memo(memo.as_bytes()).unwrap().consignment_hash, None);
+    }
+
+    #[test]
+    fn consignments_store_and_read_back() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let json = br#"{"wake_lading":1,"genesis":{"txid":"00","action_index":0},"hops":[]}"#;
+        let h = store_consignment(&conn, "asset-a", Some(1), Some(7), json).unwrap();
+        assert_eq!(h.len(), 64);
+        // idempotent on the hash
+        let h2 = store_consignment(&conn, "asset-a", Some(1), Some(7), json).unwrap();
+        assert_eq!(h, h2);
+        assert_eq!(list_consignments(&conn).unwrap().len(), 1);
+        let c = latest_consignment(&conn, "asset-a").unwrap().unwrap();
+        assert_eq!(c.json, json);
+        assert_eq!(c.received_note_id, Some(7));
+        assert_eq!(c.verified_at_height, None);
+        mark_consignment_verified(&conn, &h, Some(3_497_364)).unwrap();
+        let c = consignment_by_hash(&conn, &h).unwrap().unwrap();
+        assert_eq!(c.verified_at_height, Some(3_497_364));
+        assert!(latest_consignment(&conn, "asset-b").unwrap().is_none());
+        assert!(consignment_by_hash(&conn, "zz").unwrap().is_none());
+    }
 
     /// Real memo from `FULL_NOMAD_MANIFEST.txt`, asset #042.
     const NOMAD_042: &str = "ZecBoat Cyber-Nomad #042. Image Hash: \
@@ -1253,4 +1507,5 @@ pub fn fee_readiness(conn: &rusqlite::Connection) -> rusqlite::Result<FeeReadine
         fee_zat: ESTIMATED_FEE_ZAT,
         can_pay_fee: spendable_zat >= ESTIMATED_FEE_ZAT,
     })
+
 }
