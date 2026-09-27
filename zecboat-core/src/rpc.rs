@@ -347,8 +347,15 @@ pub async fn unlock_wallet(password: String, _use_yubikey: bool) -> Result<()> {
     // Any string unlocked the wallet, so the unlock screen was decoration.
     // The bypass existed to reach the "auto-recovery" code below it, which has
     // also been removed; see the note further down.
-    verify_wallet_passphrase(&final_password)?;
-
+    //
+    // 2026-09-27: the verification happens INSIDE each branch above. The password branch
+    // calls `verify_wallet_passphrase`; the YubiKey branch proves the PIN by decrypting the
+    // identity on the device, which is the only check that file admits. A trailing
+    // `verify_wallet_passphrase(&final_password)` stood here and ran for both, so a YubiKey
+    // wallet whose key had just opened the identity was refused with "wallet identity is
+    // not passphrase-encrypted". Found by the v0.7.0 A4 refusal demo
+    // (`examples/yubikey_refusal.rs`), the first time a YubiKey wallet was unlocked through
+    // this function.
     *WALLET_PASSWORD.lock().unwrap() = Some(final_password);
 
     // The "AUTO-NULLIFIER RECOVERY" block that stood here has been deleted.
