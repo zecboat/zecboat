@@ -1,5 +1,5 @@
 pub mod issuance;
-pub mod identity_v1;
+pub mod issuance_v1;
 pub mod paths;
 pub mod db;
 pub mod wallet;

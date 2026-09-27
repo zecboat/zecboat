@@ -357,7 +357,7 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
     }
 
     // A1b: a collection minted under identity v1 is checked by its own rules first.
-    if let Some(state) = crate::identity_v1::verify(&asset_id).await {
+    if let Some(state) = crate::issuance_v1::verify(&asset_id).await {
         return Ok(state);
     }
 
