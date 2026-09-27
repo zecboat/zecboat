@@ -92,7 +92,7 @@
           {b.unpositioned_notes === 1 ? 'One note was' : `${b.unpositioned_notes} notes were`} recorded by an earlier
           version without the data needed to spend {b.unpositioned_notes === 1 ? 'it' : 'them'}. Waiting will not fix this.
           {#if b.unpositioned_from_height}A rescan from height {b.unpositioned_from_height.toLocaleString()} will.{:else}A rescan will.{/if}
-          Until Settings offers one, restoring this wallet from its seed phrase with a birthday at or below that height does the same.
+          Settings &rarr; Wallet Management &rarr; Rescan from Height does that.
         </p>
       {/if}
     {/if}

@@ -506,6 +506,18 @@ pub fn start_sync_engine() {
         let mut retreat: usize = 0;
 
         loop {
+            // B8: a user-requested rescan, applied between passes so it never races a scan.
+            let requested = RESCAN_REQUEST.lock().unwrap().take();
+            if let Some(h) = requested {
+                match truncate_wallet_to(&db_path, h) {
+                    Ok(actual) => {
+                        println!("[sync] user rescan: rewound to {} (asked {})", u32::from(actual), h);
+                        WALLET_HEIGHT.store(u32::from(actual) as u64, Ordering::Relaxed);
+                        retreat = 0;
+                    }
+                    Err(e) => println!("[sync] user rescan: rewind to {} failed: {}", h, e),
+                }
+            }
             match sync_pass(&db_path).await {
                 Ok(SyncStep::AtTip(height)) => {
                     retreat = 0;
@@ -1339,6 +1351,78 @@ pub fn lock_wallet() {
 
 // Global state to mock wallet scanning progress
 static WALLET_HEIGHT: AtomicU64 = AtomicU64::new(0);
+
+/// B8 (v0.7.0): a rescan the user asked for, honoured by the sync engine between passes so
+/// the truncation never races a scan in progress. `None` when nothing is pending.
+pub static RESCAN_REQUEST: Mutex<Option<u32>> = Mutex::new(None);
+
+/// Rescan the wallet from `height` (Settings → Wallet Management → Rescan from Height).
+///
+/// The wallet is rewound with the backend's own `truncate_to_height`, the same call the
+/// engine makes when it detects a chain divergence: transactions above the height are
+/// un-mined, blocks and tree state above it are dropped, the scan queue is trimmed, and the
+/// engine scans forward again. Note rows are not deleted; the rescan writes each note back
+/// with its tree position, which is what a note recorded without one (A5's "unpositioned"
+/// bucket) needs.
+///
+/// Guards: the wallet must be unlocked; the height must be below what the wallet has already
+/// scanned (otherwise there is nothing to rescan); a height below the wallet's birthday is
+/// raised to the birthday, since no block before it can hold this wallet's notes. The
+/// backend may choose a slightly lower height than asked, the nearest retained checkpoint;
+/// the message says which.
+///
+/// If the engine is running the request is queued and applied before its next pass; if it
+/// is not, the rewind happens now and scanning resumes when the engine starts.
+pub async fn rescan_from_height(height: u32) -> Result<String> {
+    if WALLET_PASSWORD.lock().unwrap().is_none() {
+        anyhow::bail!("Unlock the wallet before asking for a rescan.");
+    }
+    let db_path = crate::paths::as_string::wallet_db_path()?;
+    let (birthday, scanned) = {
+        use zcash_client_backend::data_api::WalletRead;
+        let db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, OsRng)
+            .map_err(|e| anyhow::anyhow!("could not open wallet: {:?}", e))?;
+        let birthday = db.get_wallet_birthday().map_err(|e| anyhow::anyhow!("{e:?}"))?.map(u32::from);
+        let scanned = db
+            .block_max_scanned()
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?
+            .map(|m| u32::from(m.block_height()));
+        (birthday, scanned)
+    };
+    let Some(scanned) = scanned else {
+        anyhow::bail!("This wallet has not scanned any blocks yet, so there is nothing to rescan.");
+    };
+    if height >= scanned {
+        anyhow::bail!(
+            "The wallet has scanned up to block {scanned}; a rescan has to start below that. \
+             Enter a lower height."
+        );
+    }
+    let (target, clamped) = match birthday {
+        Some(b) if height < b => (b, Some(b)),
+        _ => (height, None),
+    };
+    let clamp_note = clamped
+        .map(|b| format!(" (raised from {height} to the wallet's birthday {b}: no earlier block can hold its notes)"))
+        .unwrap_or_default();
+
+    if SYNC_ENGINE_STARTED.load(Ordering::SeqCst) {
+        *RESCAN_REQUEST.lock().unwrap() = Some(target);
+        Ok(format!(
+            "Rescan from block {target} queued{clamp_note}. The wallet's height will drop to {target} \
+             within a minute and climb back as the sync engine rescans; balances and the \
+             \"needs a rescan\" line settle when it reaches the tip again."
+        ))
+    } else {
+        let actual = truncate_wallet_to(&db_path, target)?;
+        WALLET_HEIGHT.store(u32::from(actual) as u64, Ordering::Relaxed);
+        Ok(format!(
+            "Wallet rewound to block {}{clamp_note}. Scanning resumes from there when the sync \
+             engine starts.",
+            u32::from(actual)
+        ))
+    }
+}
 
 // Global state for Provider/Node URL
 //

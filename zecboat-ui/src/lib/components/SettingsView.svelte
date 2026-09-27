@@ -89,6 +89,13 @@
   let selectedBackup = $state("");
   let isRestoring = $state(false);
 
+  // B8: rescan from a height. Prefilled from the balance card's "needs a rescan" height when
+  // there is one, since that is the case that sends people here; otherwise left for the user.
+  let showRescanInput = $state(false);
+  let rescanHeight = $state<number | null>(null);
+  let rescanHint = $state<string | null>(null);
+  let isRescanning = $state(false);
+
   // The Rust side keeps PROVIDER_URL in memory only, so it resets to its default
   // on every app start. Re-apply the user's saved choice on mount.
   onMount(async () => {
@@ -226,6 +233,23 @@
       return;
     }
 
+    if (action === 'Rescan from Height') {
+      showRescanInput = true;
+      showImportInput = false;
+      showRestoreInput = false;
+      actionFeedback = null;
+      try {
+        const b: any = await invoke("get_balance_breakdown");
+        if (b?.unpositioned_from_height) {
+          rescanHeight = b.unpositioned_from_height;
+          rescanHint = `${b.unpositioned_notes} note${b.unpositioned_notes === 1 ? '' : 's'} recorded without tree data; a rescan from ${b.unpositioned_from_height.toLocaleString()} repositions ${b.unpositioned_notes === 1 ? 'it' : 'them'}.`;
+        } else {
+          rescanHint = null;
+        }
+      } catch { rescanHint = null; }
+      return;
+    }
+
     if (action === 'Setup YubiKey') {
       isWaitingForYubiKey = true;
       actionFeedback = { type: 'info', message: 'Please touch your YubiKey to register it.' };
@@ -290,6 +314,21 @@
       actionFeedback = { type: 'error', message: `Import Failed: ${e}` };
     } finally {
       isImporting = false;
+    }
+  }
+
+  async function confirmRescan() {
+    if (rescanHeight === null || !Number.isFinite(rescanHeight) || rescanHeight < 0) return;
+    isRescanning = true;
+    actionFeedback = { type: 'info', message: `Rewinding the wallet to block ${rescanHeight.toLocaleString()}…` };
+    try {
+      const res: string = await invoke("rescan_from_height", { height: Math.floor(rescanHeight) });
+      actionFeedback = { type: 'success', message: res };
+      showRescanInput = false;
+    } catch (e: any) {
+      actionFeedback = { type: 'error', message: `Rescan not started: ${e}` };
+    } finally {
+      isRescanning = false;
     }
   }
 
@@ -424,6 +463,24 @@
           </button>
         </div>
       </div>
+    {:else if showRescanInput}
+      <div class="import-section slide-in">
+        <label for="rescan-height">Rescan from block height</label>
+        <input id="rescan-height" type="number" min="0" placeholder="block height" bind:value={rescanHeight} disabled={isRescanning} />
+        {#if rescanHint}<p class="hint">{rescanHint}</p>{/if}
+        <p class="hint">
+          The wallet forgets everything it scanned from this block on and scans it again from the
+          node. Nothing is deleted from the chain and no keys change; your balance will drop
+          while the rescan runs and return as it catches up. Use a height at or below the block
+          your missing funds arrived in. Too low only costs time; too high misses them.
+        </p>
+        <div class="import-actions">
+          <button class="btn secondary" onclick={() => { showRescanInput = false; }} disabled={isRescanning}>Cancel</button>
+          <button class="btn primary" onclick={confirmRescan} disabled={isRescanning || rescanHeight === null}>
+            {isRescanning ? "Rewinding..." : "Rescan"}
+          </button>
+        </div>
+      </div>
     {:else if showRestoreInput}
       <div class="import-section slide-in">
         <label for="restore-file">Select Database Backup File</label>
@@ -448,6 +505,7 @@
         <button class="btn action-btn" onclick={() => handleAction('Create New Account')}>👥 Create New Account</button>
         <button class="btn action-btn" onclick={() => handleAction('Backup Wallet')}>💾 Backup Wallet</button>
         <button class="btn action-btn" onclick={() => handleAction('Restore Backup')}>🔄 Restore Backup</button>
+        <button class="btn action-btn" onclick={() => handleAction('Rescan from Height')}>🔍 Rescan from Height</button>
         <button class="btn action-btn" onclick={() => handleAction('Import Keys')}>♻️ Replace Wallet with Seed</button>
         <button class="btn action-btn" onclick={() => handleAction('Export Keys')}>📤 Export Keys</button>
         <button class="btn action-btn" onclick={() => handleAction('Get Viewkey')}>👁️ Get Viewkey</button>

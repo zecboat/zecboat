@@ -217,6 +217,13 @@ async fn backup_wallet() -> Result<String, String> {
 }
 
 #[tauri::command]
+// B8 (v0.7.0): rescan from a height the user chooses. Rewinds through the backend's own
+// truncation and lets the sync engine scan forward; see zecboat_core::rescan_from_height.
+async fn rescan_from_height(height: u32) -> Result<String, String> {
+    zecboat_core::rescan_from_height(height).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn list_backups() -> Result<Vec<String>, String> {
     zecboat_core::list_backups().await.map_err(|e| e.to_string())
 }
@@ -292,7 +299,7 @@ pub fn run() {
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
             registry_base, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, wallet_uses_yubikey, lock_wallet,
-            create_new_account, backup_wallet, list_backups, restore_backup, export_keys, get_viewkey, check_yubikey,
+            create_new_account, backup_wallet, list_backups, restore_backup, rescan_from_height, export_keys, get_viewkey, check_yubikey,
             get_roster, add_roster_contact, delete_roster_contact, validate_address
         ])
         .run(tauri::generate_context!())
