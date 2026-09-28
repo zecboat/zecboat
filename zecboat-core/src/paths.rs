@@ -86,6 +86,16 @@ pub fn identity_path() -> Result<PathBuf> {
     Ok(app_data_dir()?.join("encryption-identity.txt"))
 }
 
+/// `$HOME/.AppVault/data/registry.db`: a view-only wallet for the Zecboat Registry (A3b).
+///
+/// Public data only: the registry's published viewing key, the registrations it received, and
+/// the collections found through it. Deliberately a separate file from [`wallet_db_path`], so
+/// reading the registry can never touch the user's own wallet. Deleting it loses nothing; the
+/// next scan rebuilds it from the chain.
+pub fn registry_db_path() -> Result<PathBuf> {
+    Ok(app_data_dir()?.join("registry.db"))
+}
+
 /// `$HOME/.AppVault/data/yubikey-identity.txt`
 ///
 /// Present only in a wallet that opted into YubiKey protection. Holds the plugin

@@ -12,6 +12,7 @@
   import UnlockWallet from "$lib/components/UnlockWallet.svelte";
   import WelcomeWizard from "$lib/components/WelcomeWizard.svelte";
   import RosterView from "$lib/components/RosterView.svelte";
+  import CollectionsView from "$lib/components/CollectionsView.svelte";
   // import InvoicesView from "$lib/components/InvoicesView.svelte";
   import PendingBroadcasts from "$lib/components/PendingBroadcasts.svelte";
   import { invoke } from "@tauri-apps/api/core";
@@ -130,6 +131,7 @@
         <button class="nav-item {currentView === 'Receive' ? 'active' : ''}" onclick={() => setView('Receive')}>Receive</button>
         <button class="nav-item {currentView === 'Transactions' ? 'active' : ''}" onclick={() => setView('Transactions')}>🧾 Transactions</button>
         <button class="nav-item {currentView === 'Shielded Assets' ? 'active' : ''}" onclick={() => setView('Shielded Assets')}>📦 Shielded Assets</button>
+        <button class="nav-item {currentView === 'Collections' ? 'active' : ''}" onclick={() => setView('Collections')}>🔎 Collections</button>
         <button class="nav-item {currentView === 'Roster' ? 'active' : ''}" onclick={() => setView('Roster')}>👥 Roster</button>
         <button class="nav-item {currentView === 'Settings' ? 'active' : ''}" onclick={() => setView('Settings')}>⚙️ Settings</button>
       </nav>
@@ -193,6 +195,10 @@
             <InvoicesView />
           </div>
         -->
+        {:else if currentView === 'Collections'}
+          <div class="full-col">
+            <CollectionsView />
+          </div>
         {:else if currentView === 'Roster'}
           <div class="full-col">
             <RosterView />

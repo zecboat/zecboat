@@ -7,6 +7,17 @@ not the diff.
 
 ### Added
 
+- **Collections (A3b): the Zecboat Registry, read by the wallet itself.** A new 🔎 Collections page
+  lists every collection registered in the Zecboat Registry, read from the chain with the
+  registry's viewing key that is pinned in the wallet: nothing comes from zecboat.com. Each
+  collection shows one mark (✓ genuine, ✗ failed, ? not checked yet) and a **Check** button that
+  audits it from its published viewing key, against your own node: supply, closure, every unit's
+  id bound to the collection's key, and every zatoshi the issuer spent. A collection you hold
+  units of shows "✦ N yours". Search by name, key or asset id; filter to Mine. Registrations and
+  audit results are kept in `registry.db` and `collection_audits/` beside the wallet, public data
+  only; your `wallet.db` is only read. Written independently of the mint tool, from the published
+  format, and checked to reach the same verdict on Lagos Post Card.
+
 - **YubiKey protection for the wallet identity file.** `encryption-identity.txt` can now be
   encrypted to a PIV key that cannot leave the device, so no copy of the wallet directory is
   useful without the physical key — decryption happens on the card. The unlock box asks for

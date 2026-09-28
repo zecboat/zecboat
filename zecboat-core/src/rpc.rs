@@ -448,10 +448,10 @@ const SYNC_CHUNKS_PER_PASS: u32 = 10;
 /// from a pre-Ironwood scanner that followed a different chain (deep). Retreat
 /// gently first so a one-block reorg does not discard thousands of scanned
 /// blocks, then escalate.
-const SYNC_RETREAT_STEPS: [u32; 5] = [10, 100, 1_000, 10_000, 100_000];
+pub(crate) const SYNC_RETREAT_STEPS: [u32; 5] = [10, 100, 1_000, 10_000, 100_000];
 
 /// Outcome of one sync pass.
-enum SyncStep {
+pub(crate) enum SyncStep {
     /// Scanned up to this height; more remains.
     Advanced(u32),
     /// Wallet is level with the indexer at this height.
@@ -1124,7 +1124,7 @@ fn ensure_wallet_migrated(db_path: &str) -> Result<()> {
 }
 
 /// Rewind the wallet to `height` so a divergent range can be rescanned.
-fn truncate_wallet_to(db_path: &str, height: u32) -> Result<BlockHeight> {
+pub(crate) fn truncate_wallet_to(db_path: &str, height: u32) -> Result<BlockHeight> {
     use zcash_client_backend::data_api::WalletWrite;
     let mut wallet_db = WalletDb::for_path(db_path, MainNetwork, SystemClock, OsRng)
         .map_err(|e| anyhow::anyhow!("could not open wallet: {:?}", e))?;
@@ -1138,7 +1138,7 @@ fn truncate_wallet_to(db_path: &str, height: u32) -> Result<BlockHeight> {
 /// Scans at most `SYNC_CHUNKS_PER_PASS * SYNC_CHUNK` blocks and returns, so the
 /// caller can refresh status and react to divergence rather than blocking on a
 /// full sync.
-async fn sync_pass(db_path: &str) -> Result<SyncStep> {
+pub(crate) async fn sync_pass(db_path: &str) -> Result<SyncStep> {
     use zcash_client_backend::data_api::WalletWrite;
 
     use zcash_client_backend::data_api::WalletRead;
