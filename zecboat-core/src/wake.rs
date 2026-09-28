@@ -46,6 +46,9 @@ pub enum GenesisSource {
     LocalManifest,
     /// A pinned issuer's manifest, signature verified (`issuance.rs`).
     PinnedManifest,
+    /// A3b phase 4: the manifest etched on chain, from a collection found in the pinned Zecboat
+    /// Registry whose audit passed; signature verified the same way.
+    Registry,
 }
 
 /// `(txid display hex, action_index, source)` of the asset's genesis output, or `None` if no
@@ -57,7 +60,7 @@ pub async fn genesis_outpoint(asset_id: &str) -> Option<(String, u32, GenesisSou
     }
     crate::issuance::genesis_outpoint(asset_id)
         .await
-        .map(|(t, i)| (t, i, GenesisSource::PinnedManifest))
+        .map(|(t, i, via_registry)| (t, i, if via_registry { GenesisSource::Registry } else { GenesisSource::PinnedManifest }))
 }
 
 /// The local manifest override alone (`ZECBOAT_WAKE_MANIFEST`), for headless callers.

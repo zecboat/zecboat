@@ -113,6 +113,9 @@ pub enum BadgeState {
         issuance_action_index: u32,
         checks: Vec<String>,
         caveat: String,
+        /// A3b phase 4: set when the trust came from the pinned Zecboat Registry plus a passed
+        /// audit (the block the audit ran to), not from a key pinned for this collection.
+        found_in_registry_at: Option<u32>,
     },
     /// The manifest verified, but this `asset_id` is not in it. This is the forgery answer.
     NotListed { issuer: String, detail: String },
@@ -442,6 +445,7 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
                  so a rolled-back manifest would not be detected. Supply is not checked and \
                  cannot be — see ZMAP-v0.3 §13."
             .into(),
+        found_in_registry_at: None,
     })
 }
 
@@ -449,10 +453,10 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
 /// `(txid in display order, action_index)`. `None` when no pinned manifest lists it or none
 /// could be verified. Wake chapter 8 uses this to decide whether a carrier is a first-holder
 /// note (genesis proof) and to confirm a delivered lading's genesis against the issuer.
-pub async fn genesis_outpoint(asset_id: &str) -> Option<(String, u32)> {
+pub async fn genesis_outpoint(asset_id: &str) -> Option<(String, u32, bool)> {
     match verify_issuance(asset_id.to_string()).await {
-        Ok(BadgeState::Verified { issuance_txid, issuance_action_index, .. }) => {
-            Some((issuance_txid.to_ascii_lowercase(), issuance_action_index))
+        Ok(BadgeState::Verified { issuance_txid, issuance_action_index, found_in_registry_at, .. }) => {
+            Some((issuance_txid.to_ascii_lowercase(), issuance_action_index, found_in_registry_at.is_some()))
         }
         _ => None,
     }

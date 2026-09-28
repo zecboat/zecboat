@@ -56,7 +56,7 @@
   // binary. Deliberately separate from the artwork check: §12.1 forbids presenting checks
   // 1-4 and 6 as "genuine" without 5, so the two results are never merged into one tick.
   type Badge =
-    | { state: 'verified'; issuer: string; issuance_txid: string; issuance_height: number; checks: string[]; caveat: string }
+    | { state: 'verified'; issuer: string; issuance_txid: string; issuance_height: number; checks: string[]; caveat: string; found_in_registry_at?: number | null }
     | { state: 'not_listed'; issuer: string; detail: string }
     | { state: 'signature_failed'; detail: string }
     | { state: 'could_not_check'; detail: string };
@@ -226,7 +226,7 @@
               <div class="verify-badge checking">Checking issuance against a pinned issuer key…</div>
             {:else if badge?.state === 'verified'}
               <div class="verify-badge ok">
-                ✓ Verified — issued by {badge.issuer}
+                ✓ Verified — issued by {badge.issuer}{#if badge.found_in_registry_at}<span class="via-registry" title={`Found in the Zecboat Registry and audited to block ${badge.found_in_registry_at}, from the chain. zecboat.com was not needed.`}> · via Zecboat Registry</span>{/if}
                 <!-- One line is the verdict. The checks, the anchor and the caveat are one click
                      away, not gone: the caveat still travels with the tick, so the badge states
                      its own limits to anyone who asks what "verified" covered. -->
@@ -281,7 +281,7 @@
                 <span class="check-line">✓ every proof verifies under the pinned Wake keys</span>
                 <span class="check-line">✓ each note's ρ is the previous note's nullifier (consensus-bound)</span>
                 <span class="check-line">✓ every anchor is a tree root on your node, shallowest {wake.min_anchor_depth.toLocaleString()} blocks deep</span>
-                <span class="check-line">✓ the genesis output {wake.genesis_txid.slice(0, 16)}… #{wake.genesis_action_index} is the one the {wake.genesis_source === 'local_manifest' ? 'local test manifest' : "issuer's pinned manifest"} names</span>
+                <span class="check-line">✓ the genesis output {wake.genesis_txid.slice(0, 16)}… #{wake.genesis_action_index} is the one the {wake.genesis_source === 'local_manifest' ? 'local test manifest' : wake.genesis_source === 'registry' ? 'Zecboat Registry (audited, from the chain)' : "issuer's pinned manifest"} names</span>
                 <span class="check-line mono">lading sha256 {wake.consignment_hash.slice(0, 16)}…</span>
                 <span class="check-line caveat">Wake is a draft circuit without external review (WAKE-v1 §11). This badge is exploratory.</span>
               </details>
@@ -629,4 +629,5 @@
   border-radius: 8px;
   overflow-x: auto;
 }
+  .via-registry { opacity: 0.75; font-weight: 500; cursor: help; }
 </style>

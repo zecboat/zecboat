@@ -18,6 +18,12 @@ not the diff.
   only; your `wallet.db` is only read. Written independently of the mint tool, from the published
   format, and checked to reach the same verdict on Lagos Post Card.
 
+  **The registry is now a source of trust.** Once a collection is checked and passes, its units
+  get the "✓ Verified — issued by …" badge, marked "via Zecboat Registry", and their lineage can
+  reach Verified, using the manifest recorded on chain. No per-collection line in the wallet is
+  needed, and it works with zecboat.com unreachable. Only a complete, passed check counts; a
+  registered collection that has not been checked shows grey "not checked yet", never red.
+
 - **YubiKey protection for the wallet identity file.** `encryption-identity.txt` can now be
   encrypted to a PIV key that cannot leave the device, so no copy of the wallet directory is
   useful without the physical key — decryption happens on the card. The unlock box asks for

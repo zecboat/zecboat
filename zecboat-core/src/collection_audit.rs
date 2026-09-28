@@ -127,6 +127,13 @@ pub struct AuditReport {
     pub audited_to: u32,
     pub node: String,
     pub audited_at: String,
+    /// The manifest exactly as etched in the closing transaction (hex), and its BIP-340
+    /// signature (hex). Phase 4: the issuance badge verifies these instead of a copy from
+    /// zecboat.com. Absent in audits cached before phase 4.
+    #[serde(default)]
+    pub manifest_hex: Option<String>,
+    #[serde(default)]
+    pub signature_hex: Option<String>,
 }
 
 /// One decrypted output of a transaction the account took part in.
@@ -476,6 +483,7 @@ pub async fn audit(reg: &Registration) -> Result<AuditReport> {
     let tip = sync_to_tip(&db, birthday).await?;
     let (outs, flows) = decrypted(&db, &ufvk).await?;
     let (checks, units, close) = run_checks(reg, &ufvk_str, &outs, &flows);
+    let etched = close.as_ref().map(|c| etched_manifest(&outs, &c.1));
     let passed = checks.len() == 17 && checks.iter().all(|c| c.pass);
     let report = AuditReport {
         ik: reg.ik.clone(),
@@ -490,8 +498,40 @@ pub async fn audit(reg: &Registration) -> Result<AuditReport> {
         audited_to: tip,
         node: crate::rpc::grpc_endpoint(),
         audited_at: chrono_now(),
+        manifest_hex: etched.as_ref().map(|e| hex::encode(&e.0)),
+        signature_hex: etched.as_ref().map(|e| hex::encode(&e.1)),
     };
     Ok(report)
+}
+
+/// The manifest and signature reassembled from the closing transaction's chunks.
+fn etched_manifest(outs: &[Out], close_txid: &str) -> (Vec<u8>, Vec<u8>) {
+    let memos: Vec<Vec<u8>> = outs.iter().filter(|o| o.txid == close_txid).map(|o| o.memo.clone()).collect();
+    let manifest = crate::collections::reassemble(KIND_MANIFEST, &memos).unwrap_or_default();
+    let mut sig = crate::collections::reassemble(KIND_SIGNATURE, &memos).unwrap_or_default();
+    if !sig.is_empty() && sig.len() < 64 {
+        sig.resize(64, 0);
+    }
+    (manifest, sig)
+}
+
+/// Phase 4: the registered collection whose **passed** audit lists `asset_id`, with the manifest
+/// and signature it rebuilt from the chain. `None` if no passed audit lists it. No network.
+pub fn audited_collection_listing(asset_id: &str) -> Option<AuditReport> {
+    pick_listing(cached_audits().ok()?.into_iter().map(|(_, a)| a), asset_id)
+}
+
+/// The selection rule, pure: a report counts only if every one of the 17 checks passed, it kept
+/// the etched manifest and signature, and it lists the unit.
+pub fn pick_listing(reports: impl IntoIterator<Item = AuditReport>, asset_id: &str) -> Option<AuditReport> {
+    reports.into_iter().find(|a| {
+        a.passed
+            && a.checks.len() == 17
+            && a.checks.iter().all(|c| c.pass)
+            && a.manifest_hex.is_some()
+            && a.signature_hex.is_some()
+            && a.units.iter().any(|u| u.asset_id.eq_ignore_ascii_case(asset_id))
+    })
 }
 
 /// Seconds since the Unix epoch, as text; the UI formats it.
@@ -618,6 +658,47 @@ mod tests {
         let mut bad = close_memo(0, &cmx);
         bad[13] = 9;
         assert!(parse_close(&bad).is_none(), "unknown mode");
+    }
+
+    fn report(passed: bool, failing: Option<u32>, with_manifest: bool, unit: &str) -> AuditReport {
+        AuditReport {
+            ik: "ab".repeat(32),
+            name: "Lagos Post Card".into(),
+            passed,
+            checks: (1..=17).map(|n| Check { n, label: String::new(), pass: Some(n) != failing, detail: None }).collect(),
+            units: vec![Unit {
+                unit: 7,
+                asset_id: unit.into(),
+                desc: String::new(),
+                name: String::new(),
+                image_sha256: String::new(),
+                genesis_txid: String::new(),
+                genesis_action: 6,
+                genesis_cmx: String::new(),
+            }],
+            close_height: Some(1),
+            close_txid: None,
+            count: Some(10),
+            birthday: 1,
+            audited_to: 2,
+            node: String::new(),
+            audited_at: String::new(),
+            manifest_hex: with_manifest.then(|| "7b7d".into()),
+            signature_hex: with_manifest.then(|| "00".repeat(64)),
+        }
+    }
+
+    /// Phase 4 trusts a registry collection only on a complete, passed audit that kept the
+    /// etched manifest and lists the unit. Anything less must not become a Verified badge.
+    #[test]
+    fn only_a_fully_passed_audit_with_its_manifest_listing_the_unit_is_trusted() {
+        let id = "5b742dc8".repeat(8);
+        assert!(pick_listing(vec![report(true, None, true, &id)], &id).is_some());
+        assert!(pick_listing(vec![report(false, Some(9), true, &id)], &id).is_none(), "a failed audit");
+        assert!(pick_listing(vec![report(true, Some(14), true, &id)], &id).is_none(), "passed flag set but a check failed");
+        assert!(pick_listing(vec![report(true, None, false, &id)], &id).is_none(), "audit cached before phase 4");
+        assert!(pick_listing(vec![report(true, None, true, &"00".repeat(32))], &id).is_none(), "unit not listed");
+        assert_eq!(pick_listing(vec![report(false, Some(9), true, &id), report(true, None, true, &id)], &id).map(|a| a.passed), Some(true));
     }
 
     #[test]

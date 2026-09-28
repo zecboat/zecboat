@@ -142,18 +142,49 @@ pub async fn verify(asset_id: &str) -> Option<BadgeState> {
         let Some(asset) = v["assets"].as_array().and_then(|a| a.iter().find(|x| x["asset_id"].as_str().map(|s| s.eq_ignore_ascii_case(asset_id)).unwrap_or(false))).cloned() else {
             continue; // not this collection; try the next pin
         };
-        return Some(check(&pin, &body, &v, &asset, asset_id).await);
+        let sig = match fetch(&pin.source, ".sig").await {
+            Ok(s) => s,
+            Err(e) => return Some(BadgeState::CouldNotCheck { detail: format!("{}: signature: {e}", pin.label) }),
+        };
+        return Some(check(&pin, &body, &v, &sig, &asset, asset_id, None).await);
     }
-    None
+    // A3b phase 4: no pin lists the asset. A collection found in the pinned Zecboat Registry and
+    // audited in full (17/17, cached with the manifest and signature rebuilt from the chain) is
+    // checked by exactly the same rules, with the registered key in place of a pinned one. The
+    // trust root is the registry's key, pinned above; zecboat.com is not consulted.
+    let Some(a) = crate::collection_audit::audited_collection_listing(asset_id) else {
+        // Registered, but not (or not since phase 4) checked: say so in grey. Falling through
+        // would reach the pre-v1 badge, whose answer for an unknown asset is "not issued by",
+        // the forgery verdict, for a collection that is merely unchecked.
+        let memo_ik = holder_memo(asset_id).and_then(|m| m["ik"].as_str().map(str::to_ascii_lowercase));
+        let registered = memo_ik.and_then(|ik| {
+            crate::collections::registry_view().ok()?.registrations.into_iter().find(|r| r.valid && r.ik.eq_ignore_ascii_case(&ik))
+        });
+        return registered.map(|r| BadgeState::CouldNotCheck {
+            detail: format!("{} is in the Zecboat Registry but not checked yet: open Collections and press Check", r.name),
+        });
+    };
+    let (Some(ik), Ok(body), Ok(sig)) = (
+        hex32(&a.ik),
+        hex::decode(a.manifest_hex.as_deref().unwrap_or("")),
+        hex::decode(a.signature_hex.as_deref().unwrap_or("")),
+    ) else {
+        return Some(BadgeState::CouldNotCheck { detail: format!("{}: the cached audit is incomplete; check the collection again", a.name) });
+    };
+    let v: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return Some(BadgeState::CouldNotCheck { detail: format!("{}: etched manifest is not JSON: {e}", a.name) }),
+    };
+    let asset = v["assets"].as_array().and_then(|x| x.iter().find(|x| x["asset_id"].as_str().map(|s| s.eq_ignore_ascii_case(asset_id)).unwrap_or(false))).cloned()?;
+    let pin = Pin { label: a.name.clone(), ik, source: "zecboat-registry".into(), test_only: false };
+    Some(check(&pin, &body, &v, &sig, &asset, asset_id, Some(a.audited_to)).await)
 }
 
-async fn check(pin: &Pin, body: &[u8], v: &Value, asset: &Value, asset_id: &str) -> BadgeState {
-    // CHECK 1: BIP-340 under the PINNED ik, over the raw bytes as fetched.
-    let sig = match fetch(&pin.source, ".sig").await {
-        Ok(s) => s,
-        Err(e) => return BadgeState::CouldNotCheck { detail: format!("{}: signature: {e}", pin.label) },
-    };
-    if v["schema"] != "zecboat-proof-of-issuance/2" || !verify_bip340(&pin.ik, body, &sig) {
+/// The v1 checks, over a manifest and signature from either origin: a pinned collection's
+/// published files, or (phase 4) the copy etched on chain and rebuilt by a passed audit.
+async fn check(pin: &Pin, body: &[u8], v: &Value, sig: &[u8], asset: &Value, asset_id: &str, registry_at: Option<u32>) -> BadgeState {
+    // CHECK 1: BIP-340 under the ik (pinned, or registered and audited), over the raw bytes.
+    if v["schema"] != "zecboat-proof-of-issuance/2" || !verify_bip340(&pin.ik, body, sig) {
         return BadgeState::SignatureFailed {
             detail: format!("the manifest for {} is not signed by its pinned key (BIP-340)", pin.label),
         };
@@ -171,10 +202,19 @@ async fn check(pin: &Pin, body: &[u8], v: &Value, asset: &Value, asset_id: &str)
         return BadgeState::NotListed { issuer: pin.label.clone(), detail: "the listed id does not derive from the pinned ik and its description".into() };
     }
     let mut checks = vec![
-        format!("1 manifest signature (BIP-340) against the ik pinned for {}", pin.label),
+        match registry_at {
+            None => format!("1 manifest signature (BIP-340) against the ik pinned for {}", pin.label),
+            Some(h) => format!(
+                "1 found in the Zecboat Registry and audited 17/17 to block {h}; the manifest etched on chain is signed (BIP-340) by the registered ik"
+            ),
+        },
         "3 network is mainnet".into(),
         "4 this design is listed in the manifest".into(),
-        "6' asset id recomputed from the pinned ik and the published description".into(),
+        if registry_at.is_some() {
+            "6' asset id recomputed from the registered ik and the description etched on chain".into()
+        } else {
+            "6' asset id recomputed from the pinned ik and the published description".into()
+        },
     ];
     match holder_memo(asset_id) {
         Some(m) => {
@@ -212,6 +252,12 @@ async fn check(pin: &Pin, body: &[u8], v: &Value, asset: &Value, asset_id: &str)
     if pin.test_only {
         caveat = format!("TEST PIN from ZECBOAT_PINNED_V1, not built into this wallet. {caveat}");
     }
+    if let Some(h) = registry_at {
+        caveat = format!(
+            "Trusted through the Zecboat Registry (the one key pinned in this wallet) and an audit to block {h}; \
+             check the collection again to confirm nothing was issued since. {caveat}"
+        );
+    }
     BadgeState::Verified {
         issuer: pin.label.clone(),
         issuance_txid: txid.to_string(),
@@ -219,6 +265,7 @@ async fn check(pin: &Pin, body: &[u8], v: &Value, asset: &Value, asset_id: &str)
         issuance_action_index: idx as u32,
         checks,
         caveat,
+        found_in_registry_at: registry_at,
     }
 }
 

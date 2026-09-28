@@ -55,6 +55,9 @@ async fn main() -> anyhow::Result<()> {
             println!("  {}…  {} unit(s), {} forged id(s)", &ik[..16], x.count, x.bad_ids);
         }
     }
+    // Phase 4: `--badge <asset_id>` shows the issuance badge and Wake's genesis for one unit.
+    let args: Vec<String> = env::args().collect();
+    let badge_for = args.iter().position(|a| a == "--badge").and_then(|i| args.get(i + 1)).cloned();
     if env::args().any(|a| a == "--audit") {
         for r in v.registrations.iter().filter(|r| r.valid) {
             println!("\nAUDIT {} (birthday {})", r.name, r.mint_height.saturating_sub(zecboat_core::collection_audit::BIRTHDAY_MARGIN));
@@ -70,6 +73,11 @@ async fn main() -> anyhow::Result<()> {
             println!("  {} in {:.1?}: {} unit(s), closed at {:?}, audited to {}",
                 if a.passed { "AUDIT PASSED" } else { "AUDIT FAILED" }, t.elapsed(), a.units.len(), a.close_height, a.audited_to);
         }
+    }
+    if let Some(id) = badge_for {
+        println!("\nBADGE for {id}");
+        println!("  {:?}", zecboat_core::issuance::verify_issuance(id.clone()).await?);
+        println!("  wake genesis: {:?}", zecboat_core::wake::genesis_outpoint(&id).await);
     }
     Ok(())
 }
