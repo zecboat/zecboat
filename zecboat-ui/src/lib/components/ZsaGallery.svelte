@@ -23,6 +23,11 @@
     | { state: 'broken'; failure: string; detail: string };
   let wake = $state<Wake | null>(null);
   let isCheckingLineage = $state(false);
+  // WAKE-v1 §11: no implementation may report "verified" on the strength of a wake proof until
+  // the circuit's external review. Until then a passing lineage shows AMBER, "awaiting external
+  // review". Flip to true when the review is published with no open soundness issue
+  // (~/zebd/wake_audit/01_plan/wake_review_timeline.md). The issuer badge does not depend on it.
+  const WAKE_REVIEWED = false;
   type Verification = {
     verified: boolean; expected_hash: string; actual_hash: string;
     source_url: string; bytes: number; image: string | null;
@@ -274,8 +279,12 @@
           {#if isCheckingLineage}
             <div class="verify-badge checking">Verifying lineage against your node…</div>
           {:else if wake?.state === 'verified'}
-            <div class="verify-badge ok">
-              ✓ Lineage verified — {wake.hops} proof{wake.hops === 1 ? '' : 's'} back to the issuance output
+            <div class="verify-badge {WAKE_REVIEWED ? 'ok' : 'amber'}">
+              {#if WAKE_REVIEWED}
+                ✓ Lineage verified — {wake.hops} proof{wake.hops === 1 ? '' : 's'} back to the issuance output
+              {:else}
+                ✓ Lineage proof checks out · awaiting external review
+              {/if}
               <details class="verify-details">
                 <summary>what was checked</summary>
                 <span class="check-line">✓ every proof verifies under the pinned Wake keys</span>
@@ -401,6 +410,7 @@
   }
   .verify-badge.ok      { background: rgba(46, 160, 67, 0.15); color: #3fb950; border: 1px solid rgba(46, 160, 67, 0.4); }
   .verify-badge.bad     { background: rgba(248, 81, 73, 0.15); color: #f85149; border: 1px solid rgba(248, 81, 73, 0.4); }
+  .verify-badge.amber   { background: rgba(255, 179, 0, 0.14); color: #ffb300; border: 1px solid rgba(255, 179, 0, 0.45); }
   .verify-badge.unknown { background: rgba(210, 153, 34, 0.12); color: #d29922; border: 1px solid rgba(210, 153, 34, 0.35); }
   .verify-badge.checking { background: rgba(139, 148, 158, 0.12); color: #8b949e; border: 1px solid rgba(139, 148, 158, 0.3); }
   .wake-chip { display: inline-block; margin-top: 0.25rem; font-size: 0.7em; padding: 0.1rem 0.45rem; border-radius: 999px; border: 1px solid; }
