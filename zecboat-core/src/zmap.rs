@@ -212,12 +212,29 @@ pub fn memo_text(memo: &[u8]) -> Option<String> {
 #[derive(Deserialize)]
 struct JsonMemo {
     asset_id: String,
+    /// Identity v1: the description `asset_id` is derived from (with the memo's `ik`). A memo
+    /// carrying it can drop `name`, `symbol` and `image_hash`: [`desc_fields`] recovers them.
+    desc: Option<String>,
     name: Option<String>,
     symbol: Option<String>,
     decimals: Option<u8>,
     metadata_uri: Option<String>,
     image_hash: Option<String>,
     consignment_hash: Option<String>,
+}
+
+/// The `(name, symbol, image_sha256)` inside an identity-v1 description:
+/// `zmap-desc-v1|collection|unit|name|symbol|image_sha256`. `None` for any other shape.
+pub fn desc_fields(desc: &str) -> Option<(String, String, String)> {
+    let p: Vec<&str> = desc.split('|').collect();
+    if p.len() != 6 || p[0] != "zmap-desc-v1" {
+        return None;
+    }
+    let img = p[5];
+    if img.len() != 64 || !img.chars().all(|c| c.is_ascii_hexdigit()) || p[3].is_empty() {
+        return None;
+    }
+    Some((p[3].to_string(), p[4].to_string(), img.to_ascii_lowercase()))
 }
 
 /// Parse one memo into a ZMAP record, or `None` if it is not a ZMAP memo.
@@ -231,13 +248,23 @@ pub fn parse_memo(memo: &[u8]) -> Option<ZmapRecord> {
     if text.starts_with('{') {
         if let Ok(j) = serde_json::from_str::<JsonMemo>(&text) {
             if j.asset_id.len() == 64 && j.asset_id.chars().all(|c| c.is_ascii_hexdigit()) {
+                // A v1 memo may carry only `ik` + `desc` (a transfer memo, ZMAP v0.5 §15): the
+                // name, symbol and image hash are read from the description it already holds.
+                let from_desc = j.desc.as_deref().and_then(desc_fields);
                 return Some(ZmapRecord {
-                    name: j.name.clone().unwrap_or_else(|| j.asset_id[..8].to_string()),
-                    // When asset_id is the content hash (the scheme this project mints with) it
-                    // doubles as the image hash, so artwork stays verifiable without a second field.
-                    image_hash: j.image_hash.clone().or_else(|| Some(j.asset_id.clone())),
+                    name: j
+                        .name
+                        .clone()
+                        .or_else(|| from_desc.as_ref().map(|d| d.0.clone()))
+                        .unwrap_or_else(|| j.asset_id[..8].to_string()),
+                    // Pre-v1 memos: asset_id is the content hash, so it doubles as the image hash.
+                    image_hash: j
+                        .image_hash
+                        .clone()
+                        .or_else(|| from_desc.as_ref().map(|d| d.2.clone()))
+                        .or_else(|| Some(j.asset_id.clone())),
                     metadata_uri: j.metadata_uri.clone(),
-                    symbol: j.symbol.clone(),
+                    symbol: j.symbol.clone().or_else(|| from_desc.as_ref().map(|d| d.1.clone())),
                     decimals: j.decimals.unwrap_or(0),
                     asset_id: j.asset_id,
                     dialect: Dialect::Json,
@@ -295,7 +322,30 @@ pub fn memo_with_consignment_hash(memo: &[u8], hash_hex: &str) -> Result<Vec<u8>
     let obj = v
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("the carrier memo is not a JSON object"))?;
-    obj.insert(
+    // Identity v1 (ZMAP v0.5 §15, 2026-10-02): a transfer memo carries each fact once:
+    // asset_id, ik, desc, consignment_hash. name/symbol/image_hash repeat desc and are dropped;
+    // readers recover them with `desc_fields`. Minted memos kept every field, and for BCN26 and
+    // HBD10 that left no room for the hash (537 and 534 bytes).
+    let v1 = match (obj.get("ik").and_then(|x| x.as_str()), obj.get("desc").and_then(|x| x.as_str())) {
+        (Some(ik), Some(desc)) => {
+            let ik_bytes: [u8; 32] = hex::decode(ik)
+                .ok()
+                .and_then(|b| b.try_into().ok())
+                .ok_or_else(|| anyhow::anyhow!("the carrier memo's ik is not 32 bytes of hex"))?;
+            let id = obj.get("asset_id").and_then(|x| x.as_str()).unwrap_or_default().to_ascii_lowercase();
+            if crate::issuance_v1::derive_asset_id(&ik_bytes, desc) != id {
+                return Err(anyhow::anyhow!(
+                    "the carrier memo's asset id does not derive from its ik and desc; refusing to transfer a forged memo"
+                ));
+            }
+            Some((id, ik.to_ascii_lowercase(), desc.to_string()))
+        }
+        _ => None,
+    };
+    if let Some((id, ik, desc)) = v1 {
+        v = serde_json::json!({ "asset_id": id, "ik": ik, "desc": desc });
+    }
+    v.as_object_mut().unwrap().insert(
         "consignment_hash".to_string(),
         serde_json::Value::String(hash_hex.to_ascii_lowercase()),
     );
@@ -1508,4 +1558,74 @@ pub fn fee_readiness(conn: &rusqlite::Connection) -> rusqlite::Result<FeeReadine
         can_pay_fee: spendable_zat >= ESTIMATED_FEE_ZAT,
     })
 
+}
+
+/// ZMAP v0.5 §15 transfer memos for identity v1 (2026-10-02): each fact carried once.
+#[cfg(test)]
+mod memo_v1_tests {
+    use super::*;
+
+    // Real minted memos, unit #010 of each collection (public: readable with the published UFVK).
+    const HBD10_010: &str = r#"{"asset_id":"0e0e1a530132ab5033d350c250fb0913cb54d88368c3f379413a7b6a1823efc7","ik":"1ba0bd2f1a1891d616ce912b5e02c38069a9ec87d6b33769bdd8a00741ce1fa0","desc":"zmap-desc-v1|Happy Birthday Zcash 10|10|Happy Birthday Zcash 10 #010|HBD10|ceb6c397f3b19dedcaf4f17467fc22357b798a0fd0383e5d60bd653190997eb5","name":"Happy Birthday Zcash 10 #010","symbol":"HBD10","decimals":0,"image_hash":"ceb6c397f3b19dedcaf4f17467fc22357b798a0fd0383e5d60bd653190997eb5"}"#;
+    const BCN26_010: &str = r#"{"asset_id":"4b52e4b2abea2e94f7c6d34e70e638c9f8ec2abb051f50e2ec11248b228dc929","ik":"d289030848144bc321be1030051f90dbf170f0c6752ab8dbf6ed029658d1a820","desc":"zmap-desc-v1|Barcelona Post Card 2026|10|Barcelona Post Card 2026 #010|BCN26|a86fd58e2f0800fe897dd0d1da1aa378ed53f096108a6eea6e1af4381d603b2e","name":"Barcelona Post Card 2026 #010","symbol":"BCN26","decimals":0,"image_hash":"a86fd58e2f0800fe897dd0d1da1aa378ed53f096108a6eea6e1af4381d603b2e"}"#;
+    const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// The minted memos were too long to transfer (534 / 537 bytes); the short form fits.
+    #[test]
+    fn real_bcn26_and_hbd10_memos_now_transfer() {
+        for (memo, expect_len) in [(HBD10_010, 386usize), (BCN26_010, 388)] {
+            assert_eq!(memo.len(), if expect_len == 386 { 448 } else { 451 });
+            let out = memo_with_consignment_hash(memo.as_bytes(), HASH).expect("must transfer");
+            assert_eq!(out.len(), expect_len, "{}", String::from_utf8_lossy(&out));
+            let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+            let keys: Vec<&str> = v.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+            assert_eq!(keys, ["asset_id", "consignment_hash", "desc", "ik"]);
+            // Identity and every displayed fact survive, read back from desc.
+            let before = parse_memo(memo.as_bytes()).unwrap();
+            let after = parse_memo(&out).unwrap();
+            assert_eq!(after.asset_id, before.asset_id);
+            assert_eq!(after.name, before.name);
+            assert_eq!(after.symbol, before.symbol);
+            assert_eq!(after.image_hash, before.image_hash);
+            assert_eq!(after.consignment_hash.as_deref(), Some(HASH));
+        }
+    }
+
+    /// A second hop replaces the hash and stays the same size: the memo no longer grows.
+    #[test]
+    fn second_hop_replaces_the_hash_without_growing() {
+        let hop1 = memo_with_consignment_hash(BCN26_010.as_bytes(), HASH).unwrap();
+        let hop2 = memo_with_consignment_hash(&hop1, &"f".repeat(64)).unwrap();
+        assert_eq!(hop1.len(), hop2.len());
+        assert_eq!(parse_memo(&hop2).unwrap().consignment_hash.as_deref(), Some(&*"f".repeat(64)));
+    }
+
+    /// A memo whose asset id does not derive from its ik and desc is a forgery: never re-issued.
+    #[test]
+    fn forged_v1_memo_is_refused_on_transfer() {
+        let forged = BCN26_010.replace("4b52e4b2", "deadbeef");
+        let err = memo_with_consignment_hash(forged.as_bytes(), HASH).unwrap_err().to_string();
+        assert!(err.contains("does not derive"), "{err}");
+    }
+
+    #[test]
+    fn desc_fields_reads_a_v1_description_only() {
+        let (n, s, h) = desc_fields("zmap-desc-v1|C|3|C #003|SYM|".to_string().as_str()).map_or(("".into(), "".into(), "".into()), |x| x);
+        assert!(n.is_empty() && s.is_empty() && h.is_empty(), "no image hash → None");
+        let d = format!("zmap-desc-v1|Col|7|Col #007|CL|{}", "A".repeat(64));
+        let (n, s, h) = desc_fields(&d).unwrap();
+        assert_eq!((n.as_str(), s.as_str()), ("Col #007", "CL"));
+        assert_eq!(h, "a".repeat(64));
+        assert!(desc_fields("Lagos Post Card #001. Image Hash: abc").is_none());
+    }
+
+    /// A pre-v1 JSON memo (no ik/desc) is carried over whole, exactly as before.
+    #[test]
+    fn legacy_json_memo_keeps_every_field() {
+        let legacy = r#"{"asset_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","name":"Old #1","symbol":"OLD","decimals":0}"#;
+        let out = memo_with_consignment_hash(legacy.as_bytes(), HASH).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["name"], "Old #1");
+        assert_eq!(v["consignment_hash"], HASH);
+    }
 }
