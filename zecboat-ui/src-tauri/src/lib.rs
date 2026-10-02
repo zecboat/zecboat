@@ -201,6 +201,12 @@ fn check_yubikey() -> bool {
     zecboat_core::check_yubikey()
 }
 
+/// The plugin's current status line during a YubiKey decrypt ("touch the key"), else null.
+#[tauri::command]
+fn yubikey_message() -> Option<String> {
+    zecboat_core::yubikey_message()
+}
+
 #[tauri::command]
 fn lock_wallet() {
     zecboat_core::lock_wallet();
@@ -319,7 +325,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            sync_status, set_provider_url, get_provider_url, get_balance, get_balance_breakdown, get_transparent_balance, send_transaction, get_addresses,
+            sync_status, yubikey_message, set_provider_url, get_provider_url, get_balance, get_balance_breakdown, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
             registry_base, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, wallet_uses_yubikey, lock_wallet,

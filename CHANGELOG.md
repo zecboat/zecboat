@@ -60,6 +60,21 @@ not the diff.
 
 ### Fixed (2026-10-02)
 
+- **The setup wizard's "Seal this wallet to the YubiKey" box now creates the wallet.** It used
+  to move to the loading screen and call nothing, leaving a blank card (seen live in a
+  throwaway wallet, 2026-10-02). Both kinds of wallet go through the same call; the box only
+  decides how the identity is sealed.
+- **"Touch the YubiKey now" appears when the key is actually waiting.** The plugin has no
+  such message of its own, so the wallet shows it the moment it hands the plugin the decrypt
+  (the PIN goes across without any user action, so the wait from then on is the touch); the
+  plugin's "please insert the key" lines show in the same place. The unlock button and
+  the send button now show it, and the unlock screen says not to touch before. The review
+  step of a send from a sealed wallet says "Insert your YubiKey" while the key is out and
+  keeps Confirm disabled until it is in, since every send opens the identity through the key. A bare loop
+  outside the wallet showed every earlier "Failed to decrypt YubiKey stanza" came from a touch
+  made before the plugin asked (a YubiKey 4 fires its OTP applet instead, and the real window
+  then expires); the key and pcscd were never at fault.
+
 - **An expired, unmined send no longer leaves marks behind.** Its change was shown as "Needs a
   rescan" (no rescan could fix it: the note never existed), and its stored Wake lading blocked
   every later send of that unit. Both now follow the transaction's expiry: once it is past, the

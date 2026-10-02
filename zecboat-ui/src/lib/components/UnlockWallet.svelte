@@ -42,9 +42,18 @@
     await performUnlock();
   }
 
+  // What the YubiKey plugin is waiting for right now ("touch"), shown in place of
+  // "Decrypting..." so the touch comes when the key is actually listening. Null for a
+  // password wallet, so polling it is harmless there.
+  let yubiMsg = $state<string | null>(null);
+
   async function performUnlock() {
     isUnlocking = true;
     errorMsg = "";
+    yubiMsg = null;
+    const poll = setInterval(async () => {
+      try { yubiMsg = await invoke<string | null>("yubikey_message"); } catch { yubiMsg = null; }
+    }, 250);
     
     try {
       await invoke("unlock_wallet", { password: seedPhrase.trim(), useYubikey });
@@ -53,6 +62,9 @@
     } catch (e: any) {
       isUnlocking = false;
       errorMsg = e.toString();
+    } finally {
+      clearInterval(poll);
+      yubiMsg = null;
     }
   }
 
@@ -233,7 +245,9 @@
     <h2>Unlock Your Wallet</h2>
     {#if yubikeyWallet}
       <p class="subtitle">
-        This wallet is sealed to a YubiKey. Insert it and enter its PIN.
+        This wallet is sealed to a YubiKey. Insert it and enter its PIN, then touch the key
+        <strong>only when this screen says so</strong> (its light blinks). A touch before that
+        does nothing useful.
         {#if !yubikeyDetected}
           <strong>No YubiKey detected.</strong>
         {/if}
@@ -280,7 +294,9 @@
       {/if}
 
       <button type="submit" class="btn primary" disabled={isUnlocking || isCreating || isRestoring}>
-        {#if isUnlocking}
+        {#if isUnlocking && yubiMsg}
+          <span class="spinner"></span> 👉 {yubiMsg}
+        {:else if isUnlocking}
           <span class="spinner"></span> Decrypting...
         {:else}
           🔓 Unlock Wallet

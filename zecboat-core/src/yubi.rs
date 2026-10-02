@@ -134,11 +134,41 @@ struct PinCallbacks {
     pin: age::secrecy::SecretString,
 }
 
+/// What the user should do with the key right now, while a decrypt is in progress; `None`
+/// otherwise. The UI polls it. age-plugin-yubikey 0.5.1 has no "touch now" message of its own
+/// (its only messages are "please insert the key with serial …" and errors), so the wallet
+/// sets the touch line itself the moment it hands the plugin the decrypt: the PIN is passed
+/// without any user action, so the whole wait from then on is the touch wait. The plugin's
+/// own lines override it when they come. On 2026-10-02 a bare loop outside the wallet showed
+/// that every "Failed to decrypt YubiKey stanza" came from a touch made before the plugin was
+/// listening (a YubiKey 4 fires its OTP applet instead, and the real window then expires).
+pub const TOUCH_NOW: &str = "Touch the YubiKey now (its light is blinking)";
+static YUBI_MESSAGE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn yubikey_message() -> Option<String> {
+    YUBI_MESSAGE.lock().ok().and_then(|m| m.clone())
+}
+
+fn set_yubikey_message(m: Option<String>) {
+    if let Ok(mut g) = YUBI_MESSAGE.lock() {
+        *g = m;
+    }
+}
+
+/// Clears the status line when a decrypt ends, whichever way it ends.
+struct ClearMessageOnDrop;
+impl Drop for ClearMessageOnDrop {
+    fn drop(&mut self) {
+        set_yubikey_message(None);
+    }
+}
+
 impl age::Callbacks for PinCallbacks {
     fn display_message(&self, message: &str) {
-        // Reaches the user through the app's stdout log. The plugin uses this to say
-        // things like "touch the YubiKey", which is worth not swallowing.
+        // Reaches the user through the app's stdout log and, via `yubikey_message`, the
+        // screen. The plugin uses this to say "touch the YubiKey", which must not be swallowed.
         println!("[yubikey] {message}");
+        set_yubikey_message(Some(message.to_owned()));
     }
 
     fn confirm(&self, _message: &str, _yes: &str, _no: Option<&str>) -> Option<bool> {
@@ -197,6 +227,9 @@ pub fn decrypt_with_yubikey(
 ) -> Result<Vec<u8>> {
     use std::io::Read;
 
+    set_yubikey_message(None);
+    let _clear = ClearMessageOnDrop;
+
     let identity = age::plugin::Identity::from_str(identity_stub)
         .map_err(|e| anyhow!("not a YubiKey age identity: {e}"))?;
 
@@ -221,6 +254,7 @@ pub fn decrypt_with_yubikey(
         ),
     };
 
+    set_yubikey_message(Some(TOUCH_NOW.to_owned()));
     let mut reader = decryptor
         .decrypt(std::iter::once(&plugin as &dyn age::Identity))
         // Deliberately opaque, for the same reason as the password path: the underlying
@@ -233,4 +267,25 @@ pub fn decrypt_with_yubikey(
     let mut buf = Vec::new();
     reader.read_to_end(&mut buf)?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod message_tests {
+    use super::*;
+    use age::Callbacks;
+
+    #[test]
+    fn plugin_message_is_shown_while_waiting_and_cleared_after() {
+        set_yubikey_message(None);
+        assert_eq!(yubikey_message(), None);
+        {
+            let _clear = ClearMessageOnDrop;
+            set_yubikey_message(Some(TOUCH_NOW.to_owned()));
+            assert_eq!(yubikey_message().as_deref(), Some(TOUCH_NOW));
+            let cb = PinCallbacks { pin: age::secrecy::SecretString::new(String::new()) };
+            cb.display_message("Please insert YubiKey with serial 1");
+            assert_eq!(yubikey_message().as_deref(), Some("Please insert YubiKey with serial 1"), "the plugin's own line wins");
+        }
+        assert_eq!(yubikey_message(), None, "the line must not outlive the decrypt");
+    }
 }

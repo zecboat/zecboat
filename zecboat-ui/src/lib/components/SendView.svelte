@@ -58,7 +58,37 @@
   });
 
   let isSending = $state(false);
+  // The YubiKey plugin's status line while a send decrypts the identity (null unless a
+  // sealed wallet is waiting for a touch). See UnlockWallet.
+  let yubiMsg = $state<string | null>(null);
+  let yubiPoll: ReturnType<typeof setInterval> | null = null;
+  $effect(() => {
+    if (isSending && !yubiPoll) {
+      yubiPoll = setInterval(async () => {
+        try { yubiMsg = await invoke<string | null>("yubikey_message"); } catch { yubiMsg = null; }
+      }, 250);
+    } else if (!isSending && yubiPoll) {
+      clearInterval(yubiPoll); yubiPoll = null; yubiMsg = null;
+    }
+  });
   let showConfirmation = $state(false);
+
+  // A sealed wallet needs the key for every send, not only for unlocking (the identity is
+  // opened again on each send). So the review step says "insert the key" while it is out and
+  // keeps Confirm disabled until it is in; the button then says "touch" when the plugin asks.
+  let yubikeyWallet = $state(false);
+  let yubikeyPresent = $state(false);
+  let keyPoll: ReturnType<typeof setInterval> | null = null;
+  $effect(() => {
+    if (showConfirmation && !keyPoll) {
+      invoke<boolean>("wallet_uses_yubikey").then(v => { yubikeyWallet = v; }).catch(() => { yubikeyWallet = false; });
+      const check = async () => { try { yubikeyPresent = await invoke<boolean>("check_yubikey"); } catch { yubikeyPresent = false; } };
+      check();
+      keyPoll = setInterval(check, 1000);
+    } else if (!showConfirmation && keyPoll) {
+      clearInterval(keyPoll); keyPoll = null;
+    }
+  });
 
   // Wake (chapter 8). An asset send is refused when this wallet holds no lineage proof for
   // the unit and no trusted manifest names its carrier as the issuance output: the recipient
@@ -342,6 +372,16 @@
         {/if}
       </div>
       
+      {#if yubikeyWallet}
+        <div class="yubikey-gate" class:ready={yubikeyPresent}>
+          {#if yubikeyPresent}
+            🔑 YubiKey in · after Confirm, touch it when the button says so
+          {:else}
+            🔑 Insert your YubiKey to send · this wallet is sealed to it
+          {/if}
+        </div>
+      {/if}
+
       <div class="action-buttons">
         <!-- Hidden 2026-09-01: the YubiKey integration is a MOCK — is_yubikey_connected()
              returns true unconditionally and the "hardware" response is a static software
@@ -365,8 +405,10 @@
           </div>
         {/if}
         <button class="btn secondary" onclick={cancelSend} disabled={isSending}>Cancel</button>
-        <button class="btn primary" onclick={confirmAndSend} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven)}>
-          {#if isSending}
+        <button class="btn primary" onclick={confirmAndSend} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven) || (yubikeyWallet && !yubikeyPresent)}>
+          {#if isSending && yubiMsg}
+            <span>👉 {yubiMsg}</span>
+          {:else if isSending}
             <span>Processing...</span>
           {:else}
             <span>Confirm & Send</span>
@@ -682,5 +724,17 @@
   @keyframes slideDown {
     from { opacity: 0; transform: translateY(-10px); }
     to { opacity: 1; transform: translateY(0); }
+  }
+  .yubikey-gate {
+    margin: 0.75rem 0 0.25rem;
+    padding: 0.6rem 0.8rem;
+    border-radius: 8px;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.5);
+    font-size: 0.9rem;
+  }
+  .yubikey-gate.ready {
+    background: rgba(16, 185, 129, 0.1);
+    border-color: rgba(16, 185, 129, 0.5);
   }
 </style>

@@ -212,10 +212,10 @@
     }
 
     currentScreen = 5;
-    
-    if (!useYubikey) {
-      await performInitialization();
-    }
+    // Both kinds of wallet are created by the same backend call; `useYubikey` only chooses
+    // how the identity is sealed. Until 2026-10-02 the YubiKey case skipped this call and
+    // left a blank screen (seen live that day in ~/yk_test).
+    await performInitialization();
   }
 
   // Optional birthday for a NEW wallet. The correct answer is almost always the
@@ -411,13 +411,12 @@
     </div>
   {:else if currentScreen === 5}
     <div class="wizard-card loading-card">
-      <!-- The YubiKey branch is unreachable now that the hardware screen is hidden:
-           useYubikey can no longer be set. Markup removed rather than left dormant, so a
-           future change cannot resurrect a "Simulate Physical Touch" button by accident. -->
-      {#if false}
-        <div class="spinner"></div>
-        <h2>Forging Cryptographic Identity...</h2>
-        <p class="subtitle">Generating zero-knowledge proofs, deriving unified addresses, and initializing secure storage.</p>
+      <div class="spinner"></div>
+      <h2>Creating your wallet…</h2>
+      {#if useYubikey}
+        <p class="subtitle">Sealing it to the YubiKey that is plugged in. No touch is needed for this step.</p>
+      {:else}
+        <p class="subtitle">Generating the seed and encrypting it under your password.</p>
       {/if}
     </div>
   {:else if currentScreen === 6}

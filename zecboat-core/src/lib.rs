@@ -18,4 +18,5 @@ pub use wake::{verify_lineage, fetch_consignments, WakeState};
 pub use rpc::send_transaction_with_wake;
 pub use rpc::rescan_from_height;
 pub use yubi::is_yubikey_connected as check_yubikey;
+pub use yubi::yubikey_message;
 pub use wallet::ProposedInput;
