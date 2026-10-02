@@ -1101,7 +1101,7 @@ fn ensure_wallet_migrated(db_path: &str) -> Result<()> {
     // One-way migration on a real-funds wallet: keep a pre-migration copy.
     let backup = format!("{}.pre-ironwood", db_path);
     if !std::path::Path::new(&backup).exists() {
-        std::fs::copy(db_path, &backup)
+        crate::paths::copy_private(db_path, &backup)
             .map_err(|e| anyhow::anyhow!("could not back up the wallet before migrating: {}", e))?;
         println!("[wallet] backed up pre-Ironwood wallet to {}", backup);
     }
@@ -2817,7 +2817,7 @@ pub fn check_initialization_status() -> Result<bool> {
 // hardcoded. The Tauri command wrapping this was already async.
 pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday: Option<u32>) -> Result<String> {
     let data_dir = crate::paths::as_string::app_data_dir()?;
-    std::fs::create_dir_all(&data_dir)?;
+    crate::paths::create_private_dir(&data_dir)?;
     
     // A YubiKey wallet must be sealed to a device that is present NOW. Resolve the
     // recipient before anything is written, so the failure is "no key found" with an
@@ -2912,7 +2912,7 @@ pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday
     // password opens nothing and the new one opens nothing worth opening.
     let identity_path = format!("{}/encryption-identity.txt", data_dir);
     let kept_identity = preserve_replaced_file(&identity_path)?;
-    std::fs::write(&identity_path, encrypted_identity)?;
+    crate::paths::write_private(&identity_path, encrypted_identity)?;
 
     // The stub is what puts this wallet in YubiKey mode from now on. unlock_wallet reads
     // the directory, not a caller-supplied flag, so writing this file is the whole switch.
@@ -2923,7 +2923,7 @@ pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday
         let stub = stubs.into_iter().next().ok_or_else(|| {
             anyhow::anyhow!("the YubiKey stopped responding while the wallet was being created")
         })?;
-        std::fs::write(&stub_path, format!("{stub}\n"))?;
+        crate::paths::write_private(&stub_path, format!("{stub}\n"))?;
     }
     // A password wallet must not inherit a stub from whatever was here before — and does
     // not, because preserve_replaced_file above has already moved any previous one aside.
@@ -3110,7 +3110,7 @@ pub async fn recover_wallet_from_seed(
     }
 
     let data_dir = crate::paths::as_string::app_data_dir()?;
-    std::fs::create_dir_all(&data_dir)?;
+    crate::paths::create_private_dir(&data_dir)?;
 
     // A fresh identity under the NEW password. This is the whole point: no prior
     // secret is consulted, so a forgotten password does not block recovery.
@@ -3134,7 +3134,7 @@ pub async fn recover_wallet_from_seed(
 
     let identity_path = format!("{}/encryption-identity.txt", data_dir);
     let kept_identity = preserve_replaced_file(&identity_path)?;
-    std::fs::write(&identity_path, encrypted_identity)?;
+    crate::paths::write_private(&identity_path, encrypted_identity)?;
 
     // Recovery always produces a PASSWORD wallet, so a stub left by whatever was in this
     // directory before must go. It is not tidiness: the stub is what puts a wallet in
@@ -4042,7 +4042,7 @@ fn backup_sidecar(db_backup_path: &str, suffix: &str) -> String {
 
 pub async fn backup_wallet() -> Result<String> {
     let backup_dir = crate::paths::as_string::backup_dir()?;
-    std::fs::create_dir_all(&backup_dir)?;
+    crate::paths::create_private_dir(&backup_dir)?;
     let db_path = crate::paths::as_string::wallet_db_path()?;
     // A clock set before 1970 makes `duration_since` return Err, and `.unwrap()` would
     // then panic the backend while the user was trying to *back up their wallet* — the
@@ -4133,10 +4133,10 @@ pub async fn backup_wallet() -> Result<String> {
         }
     }
 
-    std::fs::copy(&db_path, &backup_path)?;
+    crate::paths::copy_private(&db_path, &backup_path)?;
     // If the second copy fails the first must not be left behind advertising itself as a
     // backup in `list_backups`.
-    if let Err(e) = std::fs::copy(&identity_path, &identity_backup) {
+    if let Err(e) = crate::paths::copy_private(&identity_path, &identity_backup) {
         let _ = std::fs::remove_file(&backup_path);
         return Err(anyhow::anyhow!(
             "backup aborted: the database copied but its encryption identity did not ({e}). \
@@ -4144,7 +4144,7 @@ pub async fn backup_wallet() -> Result<String> {
         ));
     }
     if has_stub {
-        if let Err(e) = std::fs::copy(&stub_path, &stub_backup) {
+        if let Err(e) = crate::paths::copy_private(&stub_path, &stub_backup) {
             let _ = std::fs::remove_file(&backup_path);
             let _ = std::fs::remove_file(&identity_backup);
             return Err(anyhow::anyhow!(
@@ -4200,7 +4200,7 @@ pub async fn restore_backup(backup_name: String) -> Result<String> {
     let identity_path = crate::paths::as_string::identity_path()?;
 
     // Safety: ensure data dir exists
-    std::fs::create_dir_all(crate::paths::as_string::app_data_dir()?)?;
+    crate::paths::create_private_dir(crate::paths::as_string::app_data_dir()?)?;
 
     // THIS USED TO BE A BARE `std::fs::copy` ONTO THE LIVE DATABASE.
     //
@@ -4249,11 +4249,11 @@ pub async fn restore_backup(backup_name: String) -> Result<String> {
     // user to reason about and the one most likely to end in a wrong conclusion about
     // where their funds went.
     let restored = (|| -> Result<()> {
-        std::fs::copy(&backup_path, &db_path)?;
+        crate::paths::copy_private(&backup_path, &db_path)?;
         if has_identity {
-            std::fs::copy(&identity_backup, &identity_path)?;
+            crate::paths::copy_private(&identity_backup, &identity_path)?;
             if has_stub_backup {
-                std::fs::copy(&stub_backup, &stub_path)?;
+                crate::paths::copy_private(&stub_backup, &stub_path)?;
             }
         }
         Ok(())

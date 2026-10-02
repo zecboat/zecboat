@@ -59,6 +59,12 @@ pub fn parse_close(memo: &[u8]) -> Option<Close> {
         0 => {
             // Trailing zero padding was trimmed; a final cmx ending in zero bytes is restored by
             // padding the body back to N × 32. More than that is malformed.
+            // `count` comes off the chain. Mode 0 carries the commitments inline, and a memo
+            // holds 512 bytes, so more than 16 is malformed; without this bound a crafted count
+            // asked for count × 32 bytes (registry review F2: 137 GB from u32::MAX).
+            if count == 0 || count > 16 {
+                return None;
+            }
             let want = count as usize * 32;
             if body.len() > want {
                 return None;
@@ -746,5 +752,21 @@ mod tests {
         ];
         let kept: Vec<String> = issued_outputs(outs, &flows).into_iter().map(|o| o.txid).collect();
         assert_eq!(kept, vec!["cc".to_string()]);
+    }
+
+    /// F2: a close memo claiming u32::MAX inline commitments must be rejected, not allocated.
+    #[test]
+    fn a_huge_inline_count_is_malformed_not_allocated() {
+        let mut m = b"zmap:close:v1".to_vec();
+        m.push(0); // mode 0
+        m.extend_from_slice(&1u32.to_be_bytes()); // generation
+        m.extend_from_slice(&u32::MAX.to_be_bytes()); // count
+        m.extend_from_slice(&[0x11; 32]); // manifest hash
+        m.extend_from_slice(&[0x22; 32]); // ik
+        assert!(parse_close(&m).is_none());
+        let mut ok = m.clone();
+        ok[18..22].copy_from_slice(&1u32.to_be_bytes());
+        ok.extend_from_slice(&[0x33; 32]);
+        assert_eq!(parse_close(&ok).map(|c| c.count), Some(1));
     }
 }

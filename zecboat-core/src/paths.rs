@@ -201,3 +201,68 @@ mod tests {
         assert!(home_dir().is_err(), "an empty HOME must error, not build /.AppVault/...");
     }
 }
+
+// ── Private files (wallet review F-04, 2026-10-02) ──────────────────────────────────────────
+// Every file the wallet writes holds secrets or linkable data: the encrypted identity, the
+// database with the viewing key and every memo, the backups. They were created with the process
+// umask (0644 on a stock desktop: world-readable). These helpers create them 0600 and their
+// directories 0700. On non-Unix targets they fall back to the plain operations.
+
+/// Create `dir` (and parents) readable by the owner only.
+pub fn create_private_dir(dir: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+    let dir = dir.as_ref();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        return std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir)
+}
+
+/// Write `bytes` to `path`, owner-readable only (created or truncated, then chmod 0600).
+pub fn write_private(path: impl AsRef<std::path::Path>, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let path = path.as_ref();
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+        f.write_all(bytes.as_ref())?;
+        f.sync_all()?;
+        return std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    std::fs::write(path, bytes)
+}
+
+/// Copy `from` to `to`, then make `to` owner-readable only.
+pub fn copy_private(from: impl AsRef<std::path::Path>, to: impl AsRef<std::path::Path>) -> std::io::Result<u64> {
+    let n = std::fs::copy(&from, &to)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(to.as_ref(), std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    Ok(n)
+}
+
+#[cfg(all(test, unix))]
+mod private_file_tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn files_and_dirs_are_owner_only() {
+        let base = std::env::temp_dir().join(format!("zecboat_perm_{}", std::process::id()));
+        let dir = base.join("data");
+        super::create_private_dir(&dir).unwrap();
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        let f = dir.join("encryption-identity.txt");
+        super::write_private(&f, b"secret").unwrap();
+        assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
+        super::write_private(&f, b"rewritten").unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"rewritten");
+        let c = dir.join("copy");
+        super::copy_private(&f, &c).unwrap();
+        assert_eq!(std::fs::metadata(&c).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}

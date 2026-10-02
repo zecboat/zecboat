@@ -100,6 +100,16 @@ not the diff.
   the password, or use up a YubiKey's three PIN attempts. Nothing used it: its only client was
   removed on 2026-08-13. The server, its module and the `axum` dependency are gone.
 
+- **Wallet files are created owner-only.** The encrypted identity, the database copies, the
+  backups and the YubiKey stub were written with the process umask, world-readable on a stock
+  desktop. They are now 0600, and the data and backup directories 0700. Files made by earlier
+  versions keep their old mode until rewritten: `chmod -R go-rwx ~/.AppVault ~/ZecboatBackups`
+  fixes them in place.
+
+- **A crafted close memo can no longer crash the wallet.** A registration whose close memo
+  claimed billions of inline commitments made the Check allocate accordingly and abort. The
+  count is now bounded by what a memo can carry before anything is allocated.
+
 - **A collection's Check can no longer be sabotaged by sending to its issuer.** The audit
   counted every output the published viewing key could decrypt as something the issuer did,
   so one note sent to the issuance address with a crafted memo failed checks 1, 9 and 10 in
