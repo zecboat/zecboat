@@ -305,7 +305,7 @@ mod tests {
             action_index: 0,
             ock: "00".repeat(32),
         };
-        let (_, fvk, note) = orchard::note::Note::dummy(&mut rand::rngs::OsRng, None, orchard::note::NoteVersion::V3);
+        let (_, fvk, note) = orchard::note::Note::dummy(&mut crate::rng::OsRng, None, orchard::note::NoteVersion::V3);
         let _ = fvk;
         let r = verify_pin(b"{}", 3, &sc, &note.recipient(), &NoNet, Network::MainNetwork);
         assert_eq!(
@@ -331,7 +331,7 @@ mod tests {
             action_index: 0,
             ock: "00".repeat(32),
         };
-        let (_, _, note) = orchard::note::Note::dummy(&mut rand::rngs::OsRng, None, orchard::note::NoteVersion::V3);
+        let (_, _, note) = orchard::note::Note::dummy(&mut crate::rng::OsRng, None, orchard::note::NoteVersion::V3);
         assert_eq!(
             verify_pin(b"{}", 1, &sc, &note.recipient(), &Empty, Network::MainNetwork),
             Err(PinFailure::TxNotFound)

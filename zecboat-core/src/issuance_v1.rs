@@ -260,7 +260,7 @@ async fn check(pin: &Pin, body: &[u8], v: &Value, sig: &[u8], asset: &Value, ass
         // F10: say so when that audit is old (judged by the registry scan, no network).
         if let Some(tip) = crate::collection_audit::registry_scanned_tip() {
             let age = tip.saturating_sub(h);
-            if age > crate::collection_audit::AUDIT_STALE_BLOCKS {
+            if age > crate::collection_audit::audit_stale_blocks(tip) {
                 caveat = format!("RE-CHECK DUE: that audit is {age} blocks old. {caveat}");
             }
         }
@@ -285,7 +285,7 @@ mod tests {
         use zcash_keys::keys::{UnifiedAddressRequest, UnifiedFullViewingKey};
         let ufvk = UnifiedFullViewingKey::decode(&zcash_protocol::consensus::MainNetwork, REGISTRY_UFVK).expect("mainnet UFVK");
         let (ua, _) = ufvk.default_address(UnifiedAddressRequest::ALLOW_ALL).unwrap();
-        assert_eq!(ua.encode(&zcash_protocol::consensus::MainNetwork), REGISTRY_ADDRESS);
+        assert_eq!(crate::addr::encode_u1(&ua), REGISTRY_ADDRESS);
         assert!(REGISTRY_BIRTHDAY > 3_498_000);
     }
 

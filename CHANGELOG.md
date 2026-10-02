@@ -3,6 +3,37 @@
 Notable changes to the Zecboat desktop wallet. Entries describe the user-visible effect,
 not the diff.
 
+## Unreleased — 0.7.1 (NU7), branch `nu7`
+
+Zcash NU7 activates on mainnet around 5 November 2026 (height set on 20 October; ZIP 259):
+new consensus branch ID `0x77190AD9`, 25-second blocks, v4 transactions retired. A wallet
+without it cannot sign a transaction any node accepts after the activation block.
+
+### Changed (2026-10-02)
+
+- **Zcash crates moved to the NU7 pre-release stack**: `zcash_protocol` 0.11, `zcash_primitives`
+  and `zcash_proofs` 0.31, `zcash_client_backend` 0.25, `zcash_client_sqlite` 0.23, `zcash_keys`
+  0.17, `zcash_address` 0.14, `zcash_transparent` 0.11, `pczt` 0.10, `orchard` 0.16, halo2 0.4,
+  `pasta_curves` 0.6, `rand` 0.10 (and `sinsemilla` 0.2, `incrementalmerkletree` 0.9,
+  `shardtree` 0.8, `zip32` 0.3). These carry the NU7 rules and the testnet activation height;
+  the mainnet height arrives with the final releases after 20 October, which is what 0.7.1
+  ships with.
+- **Wake is unchanged and still `wake-v1`.** The circuits were rebuilt on orchard 0.16 / halo2
+  0.4 without a code change; both pinned verifying-key ids are the same, and five real
+  mainnet ladings proven under halo2 0.3 verify under 0.4 (`zmap-wake/tests/stored_ladings_verify.rs`,
+  run against ladings exported from a wallet copy; never checked in).
+- **Addresses and viewing keys stay `u1…` and `uview1…`.** The new key crate encodes unified
+  addresses as `zu1…`/`tu1…` and viewing keys as `uvf1…` (ZIP 316 revision 2) by default. Other
+  wallets cannot pay those yet and every published manifest and Registry entry uses the
+  revision-0 strings, so everything this wallet shows, stores or compares is re-encoded as
+  revision 0 (`zecboat-core/src/addr.rs`); revision-2 strings from others are accepted.
+- **Block counts that mean time are now time** (`zecboat-core/src/block_time.rs`). Send expiry
+  (50 minutes), the carrier lock (35 days) and the audit re-check cadence (8.7 days) are stated
+  in seconds and converted at the height of use: 40 / 40,000 / 10,000 blocks before NU7,
+  120 / 120,000 / 30,000 after. The library's own send expiry stays a fixed 40 blocks, which
+  after NU7 is 17 minutes, so the wallet passes its own. Wake's minimum anchor depth stays 100
+  blocks (42 minutes after NU7; the rule is about reorg depth, which is a block count).
+
 ## Unreleased — 0.7.0
 
 ### Added

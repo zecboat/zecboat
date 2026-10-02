@@ -213,7 +213,7 @@ fn default_ua(ufvk: &UnifiedFullViewingKey) -> (UnifiedAddress, u32) {
 
 fn transparent_receiver_of(ua: &UnifiedAddress) -> String {
     let t = ua.transparent().expect("the default UA carries a transparent receiver");
-    Address::from(*t).encode(&MainNetwork)
+    Address::from(*t).encode(&MainNetwork).r0()
 }
 
 /// `HOME` and the process-wide `WALLET_PASSWORD` / `PROVIDER_URL` are global, and
@@ -262,6 +262,17 @@ impl Drop for Sandbox {
 
 /// The UFVK `zcash_client_sqlite` stored when it created the account, and the
 /// first address it derived. This is the wallet the user actually gets.
+/// Whatever the key crate encodes (revision 2 since the NU7 crates), compared as revision 0:
+/// the strings this wallet shows, stores in manifests and pins (`zecboat_core::addr`).
+trait R0 {
+    fn r0(self) -> String;
+}
+impl R0 for String {
+    fn r0(self) -> String {
+        zecboat_core::addr::as_uview1(&zecboat_core::addr::as_u1(&self))
+    }
+}
+
 fn stored_account(db: &Path) -> (String, String) {
     let conn = rusqlite::Connection::open_with_flags(
         db,
@@ -274,7 +285,7 @@ fn stored_account(db: &Path) -> (String, String) {
     let addr: String = conn
         .query_row("SELECT address FROM addresses ORDER BY id LIMIT 1", [], |r| r.get(0))
         .unwrap();
-    (ufvk, addr)
+    (zecboat_core::addr::as_uview1(&ufvk), zecboat_core::addr::as_u1(&addr))
 }
 
 // ─── T1: BIP-39 phrase → seed ────────────────────────────────────────────────
@@ -306,7 +317,7 @@ fn bip39_vectors_with_the_empty_passphrase_the_wallet_uses() {
 fn seed_to_ufvk_is_stable() {
     for w in KNOWN_WALLETS {
         let ufvk = mainnet_ufvk(w.phrase);
-        assert_eq!(ufvk.encode(&MainNetwork), w.ufvk, "UFVK changed for `{}…`", &w.phrase[..16]);
+        assert_eq!(ufvk.encode(&MainNetwork).r0(), w.ufvk, "UFVK changed for `{}…`", &w.phrase[..16]);
         // The encoding round-trips, so the constant is a real key and not a typo.
         UnifiedFullViewingKey::decode(&MainNetwork, w.ufvk).expect("fixture UFVK decodes");
     }
@@ -317,7 +328,7 @@ fn seed_to_default_unified_address_is_stable() {
     for w in KNOWN_WALLETS {
         let ufvk = mainnet_ufvk(w.phrase);
         let (ua, idx) = default_ua(&ufvk);
-        assert_eq!(ua.encode(&MainNetwork), w.default_ua);
+        assert_eq!(zecboat_core::addr::encode_u1(&ua), w.default_ua);
         assert_eq!(idx, w.default_ua_index);
         assert!(ua.orchard().is_some(), "default UA has an Orchard receiver");
         assert!(ua.sapling().is_some(), "default UA has a Sapling receiver");
@@ -327,7 +338,7 @@ fn seed_to_default_unified_address_is_stable() {
         // `tests/fixtures/verify_transparent_leg.py` reproduces without this crate.
         let tivk = ufvk.transparent().unwrap().derive_external_ivk().unwrap();
         let t = tivk.derive_address(NonHardenedChildIndex::from_index(idx).unwrap()).unwrap();
-        assert_eq!(Address::from(t).encode(&MainNetwork), w.default_ua_transparent);
+        assert_eq!(Address::from(t).encode(&MainNetwork).r0(), w.default_ua_transparent);
     }
 }
 
@@ -358,8 +369,8 @@ async fn database_backed_entry_points_agree_with_direct_derivation() {
         assert_eq!(phrase.split_whitespace().count(), 24);
         let expected = mainnet_ufvk(&phrase);
         let (stored_ufvk, stored_addr) = stored_account(&sb.wallet_db());
-        assert_eq!(stored_ufvk, expected.encode(&MainNetwork), "create_account derived a different key");
-        assert_eq!(stored_addr, default_ua(&expected).0.encode(&MainNetwork));
+        assert_eq!(stored_ufvk, expected.encode(&MainNetwork).r0(), "create_account derived a different key");
+        assert_eq!(stored_addr, zecboat_core::addr::encode_u1(&default_ua(&expected).0));
         let viewkey = zecboat_core::get_viewkey().await.expect("get_viewkey");
         assert_eq!(viewkey, stored_ufvk, "get_viewkey disagrees with the stored account");
     }
@@ -535,7 +546,7 @@ fn invalid_phrases_are_rejected_not_coerced() {
 /// the worst outcome here.
 #[test]
 fn equivalent_spellings_open_the_same_wallet() {
-    let canonical = mainnet_ufvk(PHRASE_24).encode(&MainNetwork);
+    let canonical = mainnet_ufvk(PHRASE_24).encode(&MainNetwork).r0();
     let double_spaced = PHRASE_24.replace(' ', "  ");
     let padded = format!(" \t{PHRASE_24}\n");
     let newlines = PHRASE_24.replace(' ', "\n");
@@ -547,7 +558,7 @@ fn equivalent_spellings_open_the_same_wallet() {
         let m = Mnemonic::<English>::from_phrase(phrase.as_str())
             .unwrap_or_else(|e| panic!("{what} rejected: {e:?}"));
         assert_eq!(m.phrase(), PHRASE_24, "{what}: normalised phrase differs");
-        assert_eq!(mainnet_ufvk(&phrase).encode(&MainNetwork), canonical, "{what}: different wallet");
+        assert_eq!(mainnet_ufvk(&phrase).encode(&MainNetwork).r0(), canonical, "{what}: different wallet");
     }
 }
 
@@ -609,11 +620,11 @@ fn accounts_are_separated_and_stable() {
         let a0 = derive_usk(&MainNetwork, w.phrase, AccountId::ZERO).to_unified_full_viewing_key();
         let a1 = derive_usk(&MainNetwork, w.phrase, AccountId::try_from(1).unwrap())
             .to_unified_full_viewing_key();
-        assert_ne!(a0.encode(&MainNetwork), a1.encode(&MainNetwork), "account 0 and 1 collide");
-        assert_ne!(default_ua(&a0).0.encode(&MainNetwork), default_ua(&a1).0.encode(&MainNetwork));
-        assert_eq!(a1.encode(&MainNetwork), w.account_1_ufvk, "account 1 derivation changed");
+        assert_ne!(a0.encode(&MainNetwork).r0(), a1.encode(&MainNetwork).r0(), "account 0 and 1 collide");
+        assert_ne!(zecboat_core::addr::encode_u1(&default_ua(&a0).0), zecboat_core::addr::encode_u1(&default_ua(&a1).0));
+        assert_eq!(a1.encode(&MainNetwork).r0(), w.account_1_ufvk, "account 1 derivation changed");
         // Deterministic: a second derivation of account 0 is byte-identical.
-        assert_eq!(a0.encode(&MainNetwork), mainnet_ufvk(w.phrase).encode(&MainNetwork));
+        assert_eq!(a0.encode(&MainNetwork).r0(), mainnet_ufvk(w.phrase).encode(&MainNetwork).r0());
     }
 }
 
@@ -624,10 +635,10 @@ fn networks_are_separated() {
         let test = derive_usk(&TestNetwork, w.phrase, AccountId::ZERO).to_unified_full_viewing_key();
         // Both encoded with the mainnet prefix: the comparison is on the key material.
         // Coin type 133 vs 1 sits in every ZIP 32 path, so all three components differ.
-        assert_ne!(main.encode(&MainNetwork), test.encode(&MainNetwork), "network does not affect derivation");
-        assert_eq!(test.encode(&MainNetwork), w.testnet_ufvk_as_main_hrp, "testnet derivation changed");
-        assert!(test.encode(&TestNetwork).starts_with("uviewtest"));
-        assert!(main.encode(&MainNetwork).starts_with("uview"));
+        assert_ne!(main.encode(&MainNetwork).r0(), test.encode(&MainNetwork).r0(), "network does not affect derivation");
+        assert_eq!(test.encode(&MainNetwork).r0(), w.testnet_ufvk_as_main_hrp, "testnet derivation changed");
+        assert!(test.encode(&TestNetwork).r0().starts_with("uviewtest"));
+        assert!(main.encode(&MainNetwork).r0().starts_with("uview"));
     }
 }
 
@@ -649,12 +660,12 @@ fn print_fixtures() {
             .to_unified_full_viewing_key();
         let test = derive_usk(&TestNetwork, phrase, AccountId::ZERO).to_unified_full_viewing_key();
         println!("phrase: {phrase}");
-        println!("  ufvk: {}", ufvk.encode(&MainNetwork));
-        println!("  default_ua: {}", ua.encode(&MainNetwork));
+        println!("  ufvk: {}", ufvk.encode(&MainNetwork).r0());
+        println!("  default_ua: {}", zecboat_core::addr::encode_u1(&ua));
         println!("  default_ua_index: {idx}");
         println!("  default_ua_transparent: {}", transparent_receiver_of(&ua));
-        println!("  account_1_ufvk: {}", a1.encode(&MainNetwork));
-        println!("  testnet_ufvk_as_main_hrp: {}", test.encode(&MainNetwork));
+        println!("  account_1_ufvk: {}", a1.encode(&MainNetwork).r0());
+        println!("  testnet_ufvk_as_main_hrp: {}", test.encode(&MainNetwork).r0());
     }
 }
 

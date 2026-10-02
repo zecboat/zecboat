@@ -35,6 +35,38 @@ pub mod keys;
 pub mod lading;
 pub mod manifest;
 pub mod oracle;
+
+/// The system RNG under rand 0.10, which has no `OsRng`: `UnwrapErr(SysRng)` is what the
+/// orchard and librustzcash crates use themselves. Both a type and a value, like the old one,
+/// so `&mut OsRng` and `WalletDb<_, _, _, OsRng>` read as before.
+pub mod rng {
+    use core::convert::Infallible;
+    use rand::rand_core::UnwrapErr;
+    use rand::rngs::SysRng;
+    use rand::{Rng, TryCryptoRng, TryRng};
+
+    /// A unit type, like rand 0.8's `OsRng`, so `&mut OsRng` and `WalletDb<_, _, _, OsRng>`
+    /// read as before. Every call goes straight to the operating system; rand 0.10's own
+    /// `SysRng` is fallible, and `UnwrapErr` turns a failure into a panic, as the old type did.
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct OsRng;
+
+    impl TryRng for OsRng {
+        type Error = Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Infallible> {
+            Ok(UnwrapErr(SysRng).next_u32())
+        }
+        fn try_next_u64(&mut self) -> Result<u64, Infallible> {
+            Ok(UnwrapErr(SysRng).next_u64())
+        }
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Infallible> {
+            UnwrapErr(SysRng).fill_bytes(dst);
+            Ok(())
+        }
+    }
+    // `Rng` and `CryptoRng` follow from the fallible traits with `Error = Infallible`.
+    impl TryCryptoRng for OsRng {}
+}
 #[cfg(feature = "lightwalletd")]
 pub mod oracle_lightwalletd;
 pub mod pin;

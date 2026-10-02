@@ -12,7 +12,7 @@ use ff::{Field, PrimeField};
 use orchard::note::{ExtractedNoteCommitment, NoteVersion, Rho};
 use orchard::tree::Anchor;
 use pasta_curves::pallas;
-use rand::rngs::OsRng;
+use zmap_wake::rng::OsRng;
 use zmap_wake::lading::{lading_hash, Lading, ProofEntry};
 use zmap_wake::oracle::{hex, AnchorStatus, ChainOracle, OracleTrust, MIN_DEPTH};
 use zmap_wake::prove::{prove_genesis, prove_hop};

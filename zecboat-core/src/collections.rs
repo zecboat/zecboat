@@ -266,7 +266,7 @@ async fn ensure_registry_account(db_path: &str) -> Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let has_account = {
-        let mut db = WalletDb::for_path(db_path, MainNetwork, SystemClock, rand::rngs::OsRng)
+        let mut db = WalletDb::for_path(db_path, MainNetwork, SystemClock, zmap_wake::rng::OsRng)
             .map_err(|e| anyhow!("could not open the registry database: {e:?}"))?;
         zcash_client_sqlite::wallet::init::init_wallet_db(&mut db, None)
             .map_err(|e| anyhow!("could not initialise the registry database: {e:?}"))?;
@@ -292,7 +292,7 @@ async fn ensure_registry_account(db_path: &str) -> Result<()> {
         .into_inner();
     let cs: ChainState = ts.to_chain_state().map_err(|e| anyhow!("malformed tree state: {e:?}"))?;
 
-    let mut db = WalletDb::for_path(db_path, MainNetwork, SystemClock, rand::rngs::OsRng)
+    let mut db = WalletDb::for_path(db_path, MainNetwork, SystemClock, zmap_wake::rng::OsRng)
         .map_err(|e| anyhow!("could not open the registry database: {e:?}"))?;
     db.import_account_ufvk("Zecboat Registry", &ufvk, &AccountBirthday::from_parts(cs, None), AccountPurpose::ViewOnly, None)
         .map_err(|e| anyhow!("could not import the registry key: {e:?}"))?;

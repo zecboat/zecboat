@@ -1,3 +1,5 @@
+pub mod addr;
+pub mod block_time;
 pub mod issuance;
 pub mod issuance_v1;
 pub mod paths;

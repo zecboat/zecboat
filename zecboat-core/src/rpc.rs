@@ -22,7 +22,7 @@ use tokio::time::{sleep, Duration};
 use zcash_client_sqlite::WalletDb;
 use zcash_protocol::consensus::MainNetwork;
 use zcash_client_sqlite::util::SystemClock;
-use rand::rngs::OsRng;
+use zmap_wake::rng::OsRng;
 use zcash_protocol::consensus::BlockHeight;
 
 pub static WALLET_PASSWORD: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
@@ -2412,7 +2412,7 @@ pub async fn get_transparent_address() -> Result<Vec<Value>> {
     use zcash_protocol::consensus::MainNetwork;
 
     let db_path = crate::paths::as_string::wallet_db_path()?;
-    let wallet_db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, rand::rngs::OsRng)
+    let wallet_db = WalletDb::for_path(&db_path, MainNetwork, SystemClock, zmap_wake::rng::OsRng)
         .map_err(|e| anyhow::anyhow!("could not open the wallet: {:?}", e))?;
 
     let account = wallet_db
@@ -2800,7 +2800,7 @@ pub async fn generate_new_address_with(with_transparent: bool) -> Result<String>
         .map_err(|e| anyhow::anyhow!("could not derive a new address: {:?}", e))?
         .ok_or_else(|| anyhow::anyhow!("no address could be derived for this account"))?;
 
-    let encoded = address.encode(&MainNetwork);
+    let encoded = crate::addr::encode_u1(&address);
     println!("[address] derived new UA at diversifier {:?}", diversifier);
     Ok(encoded)
 }
@@ -3878,7 +3878,7 @@ pub async fn shield_transparent() -> Result<String> {
     use zcash_protocol::consensus::MainNetwork;
     use zcash_client_sqlite::WalletDb;
     use zcash_client_sqlite::util::SystemClock;
-    use rand::rngs::OsRng;
+    use zmap_wake::rng::OsRng;
     use zcash_proofs::prover::LocalTxProver;
     use zcash_client_backend::data_api::wallet::shield_transparent_funds;
     use zcash_client_backend::data_api::wallet::input_selection::GreedyInputSelector;
@@ -3971,6 +3971,8 @@ pub async fn shield_transparent() -> Result<String> {
     let txids = shield_transparent_funds(
         &mut wallet_db,
         &MainNetwork,
+        &SystemClock,
+        &mut OsRng,
         &prover,
         &prover,
         &input_selector,
@@ -4407,7 +4409,7 @@ pub async fn get_viewkey() -> Result<String> {
     // Same derivation a send uses — one function, wallet.rs — so what this shows is
     // what a signature would be made with, not a second implementation of it.
     let usk = crate::wallet::spending_key_from_phrase(&phrase)?;
-    let derived = usk.to_unified_full_viewing_key().encode(&MainNetwork);
+    let derived = crate::addr::encode_uview1(&usk.to_unified_full_viewing_key());
 
     // R6. Derivation alone says what the seed WOULD produce. The key the user is asking
     // for is the one this wallet scans and spends with, and that lives in accounts.ufvk.
@@ -4432,7 +4434,7 @@ pub async fn get_viewkey() -> Result<String> {
     // derivation site uses account 0. An account row that says otherwise did not come
     // from this code, and its key is not the one derived above.
     let matched = rows.iter().any(|(idx, ufvk)| {
-        idx.unwrap_or(0) == 0 && ufvk.as_deref() == Some(derived.as_str())
+        idx.unwrap_or(0) == 0 && ufvk.as_deref().map(crate::addr::as_uview1) == Some(derived.clone())
     });
     if !matched {
         anyhow::bail!(

@@ -9,28 +9,28 @@ description = "Wake: proofs of note lineage on Zcash (separate exploratory proje
 # dependency and changes no versions. `unstable-voting-circuits` exposes note_commit,
 # commit_ivk, constants, RandomSeed::{psi,rcm_v2,rcm_v3} and FullViewingKey::nk().
 [dependencies]
-orchard        = { version = "=0.15.3", features = ["circuit", "unstable-voting-circuits"] }
-halo2_proofs   = { version = "=0.3.2", features = ["batch"] }
-halo2_gadgets  = "=0.5.0"
-pasta_curves   = "=0.5.1"
-sinsemilla     = "=0.1.0"
-zcash_client_sqlite  = { version = "=0.22.0-rc.4", features = ["orchard"] }
+orchard        = { version = "=0.16.0", features = ["circuit", "unstable-voting-circuits"] }
+halo2_proofs   = { version = "=0.4.0", features = ["batch"] }
+halo2_gadgets  = "=0.6.0"
+pasta_curves   = "=0.6.0"
+sinsemilla     = "=0.2.0"
+zcash_client_sqlite  = { version = "=0.23.0-pre.0", features = ["orchard"] }
 # The sqlite crate implements the backend's WalletWrite; an unpinned backend resolves to
 # 0.24.0 final, whose trait differs (lock_outputs et al.), and the build fails. Pin both.
-zcash_client_backend = { version = "=0.24.0-rc.4", features = ["orchard"] }
-zcash_primitives     = "=0.30.0"
-zcash_protocol       = "=0.10.4"
-zcash_keys           = { version = "=0.16.1", features = ["orchard"] }
-incrementalmerkletree = "=0.8.2"
+zcash_client_backend = { version = "=0.25.0-pre.0", features = ["orchard"] }
+zcash_primitives     = "=0.31.0-pre.0"
+zcash_protocol       = "=0.11.0-pre.0"
+zcash_keys           = { version = "=0.17.0-pre.0", features = ["orchard"] }
+incrementalmerkletree = "=0.9.0"
 rusqlite       = { version = "=0.37.0", features = ["bundled"] }
-rand           = "0.8"
-ff             = "0.13"
-group          = "0.13"
+rand           = "0.10"
+ff             = "0.14"
+group          = "0.14"
 subtle         = "2"
 blake2b_simd   = "1"
 sha2           = "0.10"
 ed25519-zebra  = "4"
-zcash_note_encryption = "0.4"
+zcash_note_encryption = "0.5"
 chacha20poly1305 = "=0.10.1"
 base64         = "0.22"
 serde          = { version = "1", features = ["derive"] }

@@ -26,7 +26,7 @@ use orchard::note_encryption::IronwoodDomain;
 use orchard::value::NoteValue;
 use orchard::Address;
 use pasta_curves::pallas;
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use zcash_note_encryption::{Domain, EphemeralKeyBytes};
 
@@ -75,7 +75,7 @@ fn symmetric_key(kdf_out: blake2b_simd::Hash) -> [u8; 32] {
 }
 
 /// Seal `plaintext` to `recipient`.
-pub fn seal(recipient: &Address, plaintext: &[u8], rng: &mut impl RngCore) -> Result<Sealed> {
+pub fn seal(recipient: &Address, plaintext: &[u8], rng: &mut impl Rng) -> Result<Sealed> {
     // A throwaway note carrying the recipient's address is the vehicle for the domain's
     // key agreement; its value, rho and rseed are irrelevant and never leave this function.
     let rho_f = pallas::Base::random(&mut *rng);
@@ -161,7 +161,7 @@ fn hex_bytes(s: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::rngs::OsRng;
+    use crate::rng::OsRng;
 
     fn keys() -> (FullViewingKey, Address) {
         let (_sk, fvk, note) = Note::dummy(&mut OsRng, None, NoteVersion::V3);

@@ -19,7 +19,7 @@ use std::env;
 use zcash_keys::keys::UnifiedSpendingKey;
 use zcash_protocol::consensus::{BlockHeight, MainNetwork};
 
-type Db = zcash_client_sqlite::WalletDb<rusqlite::Connection, MainNetwork, zcash_client_sqlite::util::SystemClock, rand::rngs::OsRng>;
+type Db = zcash_client_sqlite::WalletDb<rusqlite::Connection, MainNetwork, zcash_client_sqlite::util::SystemClock, zmap_wake::rng::OsRng>;
 
 fn guard_home() -> anyhow::Result<String> {
     let home = env::var("HOME")?;
@@ -43,7 +43,7 @@ fn usk_from(words_path: &str) -> anyhow::Result<UnifiedSpendingKey> {
 
 fn open_db() -> anyhow::Result<(Db, String)> {
     let db_path = zecboat_core::paths::as_string::wallet_db_path()?;
-    let db = zcash_client_sqlite::WalletDb::for_path(&db_path, MainNetwork, zcash_client_sqlite::util::SystemClock, rand::rngs::OsRng)?;
+    let db = zcash_client_sqlite::WalletDb::for_path(&db_path, MainNetwork, zcash_client_sqlite::util::SystemClock, zmap_wake::rng::OsRng)?;
     Ok((db, db_path))
 }
 
@@ -190,7 +190,7 @@ fn split(words: &str, asset_id: &str, to_other: &str, to_self: &str, lading_path
     ironwood_in.push(carrier_typed);
     let ironwood_out = vec![amount, second];
     let balance = change_strategy
-        .compute_balance(&network, target_height, &[] as &[std::convert::Infallible], &[] as &[TxOut], &sapling_fees::EmptyBundleView,
+        .compute_balance(&network, target_height, anchor_height, &wallet_db.pool_migration_params(), &[] as &[std::convert::Infallible], &[] as &[TxOut], &sapling_fees::EmptyBundleView,
             &(BundleVersion::orchard_v2(), &orchard_in[..], &[] as &[Zatoshis]),
             &(BundleVersion::orchard_v2(), &ironwood_in[..], &ironwood_out[..]), None, &())
         .map_err(|e| anyhow::anyhow!("balance: {e:?}"))?;
@@ -200,7 +200,7 @@ fn split(words: &str, asset_id: &str, to_other: &str, to_self: &str, lading_path
         .map_err(|e| anyhow::anyhow!("proposal: {e:?}"))?;
     let expiry = Some(BlockHeight::from_u32(tip()? + 40));
     let pczt = create_pczt_from_proposal::<_, _, std::convert::Infallible, _, std::convert::Infallible, _>(
-        &mut wallet_db, &network, account_id, OvkPolicy::Sender, &proposal, expiry,
+        &mut wallet_db, &network, &zcash_client_sqlite::util::SystemClock, &mut zmap_wake::rng::OsRng, account_id, OvkPolicy::Sender, &proposal, expiry,
         zcash_primitives::transaction::builder::BundlePadding::DEFAULT)
         .map_err(|e| anyhow::anyhow!("build: {e:?}"))?;
 
@@ -219,15 +219,15 @@ fn split(words: &str, asset_id: &str, to_other: &str, to_self: &str, lading_path
     // Prove, sign, extract: a real transaction, not broadcast.
     let pk = zcash_primitives::transaction::builder::cached_orchard_proving_key(::orchard::circuit::OrchardCircuitVersion::PostNu6_3);
     let mut prover = pczt::roles::prover::Prover::new(pczt);
-    if prover.requires_ironwood_proof() { prover = prover.create_ironwood_proof(pk).map_err(|e| anyhow::anyhow!("{e:?}"))?; }
+    if prover.requires_ironwood_proof() { prover = prover.create_ironwood_proof(zmap_wake::rng::OsRng, pk).map_err(|e| anyhow::anyhow!("{e:?}"))?; }
     let pczt = prover.finish();
     let ask = ::orchard::keys::SpendAuthorizingKey::from(usk.orchard());
     let unsigned: Vec<usize> = pczt.ironwood().actions().iter().enumerate().filter(|(_, a)| a.spend().spend_auth_sig().is_none()).map(|(i, _)| i).collect();
     let mut signer = pczt::roles::signer::Signer::new(pczt).map_err(|e| anyhow::anyhow!("{e:?}"))?;
-    for i in unsigned { signer.sign_ironwood(i, &ask).map_err(|e| anyhow::anyhow!("{e:?}"))?; }
+    for i in unsigned { signer.sign_ironwood(zmap_wake::rng::OsRng, i, &ask).map_err(|e| anyhow::anyhow!("{e:?}"))?; }
     let pczt = signer.finish();
     let vk = ::orchard::circuit::VerifyingKey::build(::orchard::circuit::OrchardCircuitVersion::PostNu6_3);
-    let txid = extract_and_store_transaction_from_pczt::<_, std::convert::Infallible>(&mut wallet_db, pczt, None, Some(&vk)).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    let txid = extract_and_store_transaction_from_pczt::<_, std::convert::Infallible>(&mut wallet_db, &zcash_client_sqlite::util::SystemClock, &mut zmap_wake::rng::OsRng, pczt, None, Some(&vk)).map_err(|e| anyhow::anyhow!("{e:?}"))?;
     let tx = wallet_db.get_transaction(txid).map_err(|e| anyhow::anyhow!("{e:?}"))?.ok_or_else(|| anyhow::anyhow!("missing"))?;
     let mut raw = Vec::new(); tx.write(&mut raw)?;
     let out = format!("{}/split_tx.hex", env::var("HOME")?);

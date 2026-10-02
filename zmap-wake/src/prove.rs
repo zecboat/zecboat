@@ -6,7 +6,7 @@ use halo2_proofs::{
     transcript::{Blake2bWrite, Challenge255},
 };
 use pasta_curves::{pallas, vesta};
-use rand::rngs::OsRng;
+use crate::rng::OsRng;
 
 use crate::circuit::{Circuit, Kind, ANCHOR, INSTANCE_LEN, LINK, NF};
 use crate::keys;

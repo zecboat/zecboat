@@ -23,7 +23,7 @@ use orchard::note::{ExtractedNoteCommitment, NoteVersion};
 use orchard::tree::MerkleHashOrchard;
 use orchard::value::NoteValue;
 use pasta_curves::pallas;
-use rand::rngs::OsRng;
+use zmap_wake::rng::OsRng;
 use zmap_wake::circuit::{Circuit, Sabotage, ANCHOR, INSTANCE_LEN, LINK, NF};
 use zmap_wake::prove::{instance_for, prove_raw};
 use zmap_wake::testing::{carrier, fixture, lone_leaf_path, random_rho, Fixture};

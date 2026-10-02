@@ -186,8 +186,8 @@ mod tests {
     use super::*;
     use orchard::note::RandomSeed;
     use orchard::Address;
-    use rand::rngs::OsRng;
-    use rand::RngCore;
+    use crate::rng::OsRng;
+    use rand::Rng;
 
     fn dummy_note(version: NoteVersion) -> (FullViewingKey, Note) {
         let mut rng = OsRng;

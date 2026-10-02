@@ -12,8 +12,8 @@ use orchard::note::{ExtractedNoteCommitment, Note, NoteVersion, Rho};
 use orchard::tree::{Anchor, MerkleHashOrchard, MerklePath};
 use orchard::value::NoteValue;
 use orchard::NOTE_COMMITMENT_TREE_DEPTH as DEPTH;
-use rand::rngs::OsRng;
-use rand::RngCore;
+use crate::rng::OsRng;
+use rand::Rng;
 
 use crate::witness::Witness;
 

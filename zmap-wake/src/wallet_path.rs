@@ -17,7 +17,7 @@ use anyhow::{anyhow, Context, Result};
 use incrementalmerkletree::frontier::NonEmptyFrontier;
 use incrementalmerkletree::Position;
 use orchard::tree::{MerkleHashOrchard, MerklePath};
-use rand::rngs::OsRng;
+use crate::rng::OsRng;
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use zcash_client_sqlite::util::SystemClock;
