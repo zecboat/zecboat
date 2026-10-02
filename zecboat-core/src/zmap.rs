@@ -914,6 +914,14 @@ pub fn ensure_consignments_table(conn: &rusqlite::Connection) -> rusqlite::Resul
         )",
         [],
     )?;
+    // 2026-10-02 (Wake review H2): the transaction a sender's extended lading belongs to.
+    // A lading stored for a send that never mined must not be the one later reads pick up.
+    let has_sent: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('ext_zecboat_zmap_consignments') WHERE name = 'sent_txid'")?
+        .exists([])?;
+    if !has_sent {
+        conn.execute("ALTER TABLE ext_zecboat_zmap_consignments ADD COLUMN sent_txid BLOB", [])?;
+    }
     Ok(())
 }
 
@@ -924,14 +932,15 @@ pub fn store_consignment(
     unit: Option<u32>,
     received_note_id: Option<i64>,
     json: &[u8],
+    sent_txid: Option<&[u8; 32]>,
 ) -> rusqlite::Result<String> {
     ensure_consignments_table(conn)?;
     let hash = zmap_wake::lading::lading_hash(json);
     conn.execute(
         "INSERT OR IGNORE INTO ext_zecboat_zmap_consignments
-            (asset_id, unit, received_note_id, json, sha256)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![asset_id, unit, received_note_id, json, hash.as_slice()],
+            (asset_id, unit, received_note_id, json, sha256, sent_txid)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![asset_id, unit, received_note_id, json, hash.as_slice(), sent_txid.map(|t| t.as_slice())],
     )?;
     Ok(hex::encode(hash))
 }
@@ -972,11 +981,31 @@ pub fn latest_consignment(
     if !consignments_table_exists(conn)? {
         return Ok(None);
     }
+    // A lading stored for a send counts only while that send can still mine. Once the
+    // transaction has expired unmined, the carrier it extended is still this wallet's, and the
+    // lading before it is the live one again. The tip is the wallet's own scanned height; with
+    // no `transactions` table (tests) nothing is excluded.
+    let has_txs: bool = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'transactions'")?
+        .exists([])?;
+    let tip: u32 = if has_txs {
+        conn.query_row("SELECT COALESCE(MAX(height), 0) FROM blocks", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as u32
+    } else {
+        0
+    };
+    let filter = if has_txs {
+        "AND (sent_txid IS NULL OR NOT EXISTS (
+             SELECT 1 FROM transactions t WHERE t.txid = sent_txid
+                AND t.mined_height IS NULL AND t.expiry_height IS NOT NULL
+                AND t.expiry_height > 0 AND t.expiry_height <= ?2))"
+    } else {
+        "AND ?2 = ?2"
+    };
     let mut stmt = conn.prepare(&format!(
         "SELECT {CONSIGNMENT_COLS} FROM ext_zecboat_zmap_consignments
-          WHERE asset_id = ?1 ORDER BY id DESC LIMIT 1"
+          WHERE asset_id = ?1 {filter} ORDER BY id DESC LIMIT 1"
     ))?;
-    let mut rows = stmt.query([asset_id])?;
+    let mut rows = stmt.query(rusqlite::params![asset_id, tip])?;
     match rows.next()? {
         Some(r) => Ok(Some(consignment_from_row(r)?)),
         None => Ok(None),
@@ -1068,10 +1097,10 @@ mod tests {
     fn consignments_store_and_read_back() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         let json = br#"{"wake_lading":1,"genesis":{"txid":"00","action_index":0},"hops":[]}"#;
-        let h = store_consignment(&conn, "asset-a", Some(1), Some(7), json).unwrap();
+        let h = store_consignment(&conn, "asset-a", Some(1), Some(7), json, None).unwrap();
         assert_eq!(h.len(), 64);
         // idempotent on the hash
-        let h2 = store_consignment(&conn, "asset-a", Some(1), Some(7), json).unwrap();
+        let h2 = store_consignment(&conn, "asset-a", Some(1), Some(7), json, None).unwrap();
         assert_eq!(h, h2);
         assert_eq!(list_consignments(&conn).unwrap().len(), 1);
         let c = latest_consignment(&conn, "asset-a").unwrap().unwrap();
@@ -1627,5 +1656,30 @@ mod memo_v1_tests {
         let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(v["name"], "Old #1");
         assert_eq!(v["consignment_hash"], HASH);
+    }
+
+    /// Wake review H2: the lading stored for a send that expired unmined is not the live one.
+    #[test]
+    fn lading_of_an_expired_unmined_send_is_skipped() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE transactions (txid BLOB, mined_height INTEGER, expiry_height INTEGER);
+             CREATE TABLE blocks (height INTEGER);
+             INSERT INTO blocks VALUES (1000);",
+        ).unwrap();
+        let before = br#"{"wake_lading":1,"genesis":{"txid":"00","action_index":0},"hops":[]}"#;
+        let extended = br#"{"wake_lading":1,"genesis":{"txid":"00","action_index":0},"hops":[1]}"#;
+        let h_before = store_consignment(&conn, "a", None, Some(1), before, None).unwrap();
+        let send = [7u8; 32];
+        let h_ext = store_consignment(&conn, "a", None, None, extended, Some(&send)).unwrap();
+        // The send is in the mempool (expiry ahead of the tip): the extended lading is live.
+        conn.execute("INSERT INTO transactions VALUES (?1, NULL, 1040)", [send.as_slice()]).unwrap();
+        assert_eq!(latest_consignment(&conn, "a").unwrap().unwrap().sha256, h_ext);
+        // The send expired without mining: the earlier lading is live again.
+        conn.execute("UPDATE transactions SET expiry_height = 900", []).unwrap();
+        assert_eq!(latest_consignment(&conn, "a").unwrap().unwrap().sha256, h_before);
+        // Mined: the extended lading is the one.
+        conn.execute("UPDATE transactions SET mined_height = 950", []).unwrap();
+        assert_eq!(latest_consignment(&conn, "a").unwrap().unwrap().sha256, h_ext);
     }
 }

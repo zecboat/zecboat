@@ -58,6 +58,13 @@ not the diff.
   backup therefore carries a device identifier, so prefer a key dedicated to this wallet over
   one that also does your SSH or website logins.
 
+### Fixed (2026-10-02)
+
+- **An expired, unmined send no longer leaves marks behind.** Its change was shown as "Needs a
+  rescan" (no rescan could fix it: the note never existed), and its stored Wake lading blocked
+  every later send of that unit. Both now follow the transaction's expiry: once it is past, the
+  change is not counted and the previous lading is live again.
+
 ### Changed
 
 - **The node is chosen before the seed phrase is typed.** Restoring a wallet previously

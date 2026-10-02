@@ -316,7 +316,7 @@ pub fn fetch_missing_consignments(db_path: &str) -> Result<FetchReport> {
                     return Err(anyhow!("the delivered lading does not hash to the memo's consignment_hash"));
                 }
                 Lading::parse(&bytes)?;
-                crate::zmap::store_consignment(&conn, &h.asset_id, None, Some(c.note_id), &bytes)?;
+                crate::zmap::store_consignment(&conn, &h.asset_id, None, Some(c.note_id), &bytes, None)?;
                 Ok(())
             })();
             match result {

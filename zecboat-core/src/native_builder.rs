@@ -939,7 +939,7 @@ pub fn send_zmap_asset(
         // The sender's copy makes a lost delivery re-issuable. Delivery failure is reported,
         // not fatal: the transfer is built and the recipient can ask for the lading again.
         if let Some(l) = &wake_lading {
-            crate::zmap::store_consignment(&conn, asset_id, None, None, &l.bytes)
+            crate::zmap::store_consignment(&conn, asset_id, None, None, &l.bytes, Some(&successor_txid))
                 .map_err(|e| anyhow!("could not keep a copy of the lading: {}", e))?;
             match crate::wake::deliver(recipient, l) {
                 Ok(()) => println!("[wake] lading sealed to the recipient and delivered to {}", crate::wake::dropbox_base()),

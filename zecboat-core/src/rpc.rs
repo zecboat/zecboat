@@ -2277,6 +2277,8 @@ pub async fn get_balance_breakdown() -> Result<BalanceBreakdown> {
     // The backend's buckets. No summary (nothing scanned yet) is a wallet of zeros, not
     // an error — but the unpositioned scan below still runs, because those rows exist
     // independently of any summary.
+    // The wallet's own view of the tip, for judging expiry below; 0 when nothing is scanned.
+    let mut tip_seen = 0u32;
     let mut spendable = 0u64;
     let mut locked = 0u64;
     let mut pending_change = 0u64;
@@ -2290,6 +2292,7 @@ pub async fn get_balance_breakdown() -> Result<BalanceBreakdown> {
             .get_wallet_summary(ConfirmationsPolicy::MIN)
             .map_err(|e| anyhow::anyhow!("could not read wallet summary: {:?}", e))?
         {
+            tip_seen = u32::from(summary.chain_tip_height());
             for b in summary.account_balances().values() {
                 for p in [b.sapling_balance(), b.orchard_balance(), b.ironwood_balance()] {
                     spendable += u64::from(p.spendable_value());
@@ -2304,6 +2307,10 @@ pub async fn get_balance_breakdown() -> Result<BalanceBreakdown> {
     }
 
     // The bucket the backend cannot name. Unspent, and no commitment-tree position: note
+    // selection requires a position to build a witness. Change of a transaction that expired
+    // without being mined is not a note at all (the backend already excludes it), so it is left
+    // out here too; until 2026-10-02 it was shown as "needs a rescan", which no rescan can fix.
+    // (Was:) note
     // selection requires a position to build a witness (it is the first thing
     // select_spendable_notes filters on), so these can never be inputs. The backend counts
     // them in `value_pending_spendability`; they are taken out of that bucket here so
@@ -2318,20 +2325,23 @@ pub async fn get_balance_breakdown() -> Result<BalanceBreakdown> {
             "SELECT n.value, t.mined_height FROM sapling_received_notes n
                JOIN transactions t ON t.id_tx = n.transaction_id
               WHERE n.commitment_tree_position IS NULL
+                AND (t.mined_height IS NOT NULL OR t.expiry_height IS NULL OR t.expiry_height = 0 OR t.expiry_height > ?1)
                 AND NOT EXISTS (SELECT 1 FROM sapling_received_note_spends s WHERE s.sapling_received_note_id = n.id)
              UNION ALL
              SELECT n.value, t.mined_height FROM orchard_received_notes n
                JOIN transactions t ON t.id_tx = n.transaction_id
               WHERE n.commitment_tree_position IS NULL
+                AND (t.mined_height IS NOT NULL OR t.expiry_height IS NULL OR t.expiry_height = 0 OR t.expiry_height > ?1)
                 AND NOT EXISTS (SELECT 1 FROM orchard_received_note_spends s WHERE s.orchard_received_note_id = n.id)
              UNION ALL
              SELECT n.value, t.mined_height FROM ironwood_received_notes n
                JOIN transactions t ON t.id_tx = n.transaction_id
               WHERE n.commitment_tree_position IS NULL
+                AND (t.mined_height IS NOT NULL OR t.expiry_height IS NULL OR t.expiry_height = 0 OR t.expiry_height > ?1)
                 AND NOT EXISTS (SELECT 1 FROM ironwood_received_note_spends s WHERE s.ironwood_received_note_id = n.id)",
         )?;
         let rows: Vec<(i64, Option<u32>)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map([tip_seen], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<std::result::Result<_, _>>()?;
         let value: u64 = rows.iter().map(|(v, _)| (*v).max(0) as u64).sum();
         let from = rows.iter().filter_map(|(_, h)| *h).min();

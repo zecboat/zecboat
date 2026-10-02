@@ -504,7 +504,7 @@ async fn backup_carries_consignments_written_after_the_pool_opened() {
     let hash = {
         let conn = rusqlite::Connection::open(sb.db()).unwrap();
         conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-        zecboat_core::zmap::store_consignment(&conn, "asset-x", Some(3), Some(1), lading).unwrap()
+        zecboat_core::zmap::store_consignment(&conn, "asset-x", Some(3), Some(1), lading, None).unwrap()
     };
 
     zecboat_core::backup_wallet().await.expect("backup should succeed");
