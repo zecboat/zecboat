@@ -100,6 +100,14 @@ not the diff.
   the password, or use up a YubiKey's three PIN attempts. Nothing used it: its only client was
   removed on 2026-08-13. The server, its module and the `axum` dependency are gone.
 
+- **YubiKey-protected wallets can send.** Two spend paths still assumed a password-encrypted
+  identity file and refused a YubiKey one, so such a wallet could unlock and show balances but
+  never sign. Both now go through the one decryption routine that knows both forms.
+
+- **A remote zebrad is not "your node".** Wake rated anchors from any `ZECBOAT_ZEBRAD_RPC`
+  address as self-checked. Only a zebrad on this machine (loopback or localhost) counts now;
+  anything else leaves the lineage at Unverified, with the endpoint named in the reason.
+
 - **Wallet files are created owner-only.** The encrypted identity, the database copies, the
   backups and the YubiKey stub were written with the process umask, world-readable on a stock
   desktop. They are now 0600, and the data and backup directories 0700. Files made by earlier

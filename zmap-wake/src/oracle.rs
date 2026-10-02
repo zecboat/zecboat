@@ -219,9 +219,30 @@ impl ZebradOracle {
     }
 }
 
+/// Whether `url` points at this machine: loopback (127.0.0.0/8, `::1`) or `localhost`.
+///
+/// WAKE-v1 §8.1: anchors count as self-validated only when the oracle is a node the verifier
+/// runs. A zebrad reached over the network is someone else's word, however it is configured.
+pub fn is_local_url(url: &str) -> bool {
+    let rest = url.split("://").nth(1).unwrap_or(url);
+    let hostport = rest.split('/').next().unwrap_or("");
+    let host = if let Some(h) = hostport.strip_prefix('[') {
+        h.split(']').next().unwrap_or("")
+    } else {
+        hostport.rsplit_once(':').map(|(h, _)| h).unwrap_or(hostport)
+    };
+    host.eq_ignore_ascii_case("localhost") || host == "::1" || host.starts_with("127.")
+}
+
 impl ChainOracle for ZebradOracle {
+    /// Full-node trust only for a zebrad on this machine (review M3, 2026-10-02): before, any
+    /// URL in `ZECBOAT_ZEBRAD_RPC` yielded the strongest badge.
     fn trust(&self) -> OracleTrust {
-        OracleTrust::FullNode
+        if is_local_url(&self.url) {
+            OracleTrust::FullNode
+        } else {
+            OracleTrust::ServerAsserted
+        }
     }
 
     fn anchor_at(&self, root: &Anchor, height: u32) -> Result<AnchorStatus> {
@@ -274,4 +295,19 @@ pub fn hex(bytes: &[u8]) -> String {
 pub fn reversed(mut b: [u8; 32]) -> [u8; 32] {
     b.reverse();
     b
+}
+
+#[cfg(test)]
+mod trust_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_node_on_this_machine_is_a_full_node() {
+        for u in ["http://127.0.0.1:8232", "http://localhost:8232", "http://[::1]:8232", "https://127.5.6.7/"] {
+            assert!(is_local_url(u), "{u}");
+        }
+        for u in ["http://192.168.0.142:8232", "https://zec.rocks:443", "http://zebrad.lan:8232", "http://1270.0.0.1:8232"] {
+            assert!(!is_local_url(u), "{u}");
+        }
+    }
 }

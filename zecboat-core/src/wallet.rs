@@ -75,35 +75,10 @@ pub fn batch_send_transaction(
     }
     
     // 3. Key Extraction: Read and decrypt the spending key using `age`
-    let identity_path = crate::paths::as_string::identity_path()?;
-    
-    let encrypted_data = std::fs::read(&identity_path)
-        .map_err(|e| anyhow!("could not read the encryption identity file at {}: {}", identity_path, e))?;
-        
-    let password_str = crate::rpc::WALLET_PASSWORD.lock().unwrap().clone()
-        .ok_or_else(|| anyhow!("Wallet is locked. Password required to decrypt identity file"))?;
-
-    let decryptor = match age::Decryptor::new(&encrypted_data[..]) {
-        Ok(age::Decryptor::Passphrase(d)) => d,
-        _ => return Err(anyhow!("Expected passphrase-based age encryption")),
-    };
-
-    let mut decrypted_identity = vec![];
-    let mut reader = decryptor.decrypt(&age::secrecy::Secret::new(password_str.to_string()), Some(22))
-        .map_err(|e| anyhow!("Decryption failed: Invalid password or corrupted file ({:?})", e))?;
-    
-    std::io::Read::read_to_end(&mut reader, &mut decrypted_identity)
-        .map_err(|e| anyhow!("could not read the decrypted data: {e}"))?;
-        
-    let identity_str = String::from_utf8(decrypted_identity)
-        .map_err(|e| anyhow!("decrypted data is not valid UTF-8: {e}"))?;
-
-    let identity_key = identity_str.lines()
-        .find(|l| l.starts_with("AGE-SECRET-KEY-"))
-        .ok_or_else(|| anyhow!("No AGE-SECRET-KEY found in decrypted identity"))?;
-
-    let identity: age::x25519::Identity = std::str::FromStr::from_str(identity_key)
-        .map_err(|e| anyhow!("Invalid identity format: {:?}", e))?;
+    // Wallet review F-02 (2026-10-02): this block hard-coded the passphrase decryptor, so a
+    // wallet whose identity file is sealed to a YubiKey could unlock and show balances but
+    // never sign a spend. decrypt_identity() knows both forms; it is the only copy of the rule.
+    let identity = crate::rpc::decrypt_identity()?;
 
     // 4. Initialize WalletDb
     use zcash_client_sqlite::WalletDb;
@@ -299,35 +274,10 @@ pub fn send_transaction(
     memo_bytes.resize(512, 0);
     
     // 3. Key Extraction: Read and decrypt the spending key using `age`
-    let identity_path = crate::paths::as_string::identity_path()?;
-    
-    let encrypted_data = std::fs::read(&identity_path)
-        .map_err(|e| anyhow!("could not read the encryption identity file at {}: {}", identity_path, e))?;
-        
-    let password_str = crate::rpc::WALLET_PASSWORD.lock().unwrap().clone()
-        .ok_or_else(|| anyhow!("Wallet is locked. Password required to decrypt identity file"))?;
-
-    let decryptor = match age::Decryptor::new(&encrypted_data[..]) {
-        Ok(age::Decryptor::Passphrase(d)) => d,
-        _ => return Err(anyhow!("Expected passphrase-based age encryption")),
-    };
-
-    let mut decrypted_identity = vec![];
-    let mut reader = decryptor.decrypt(&age::secrecy::Secret::new(password_str.to_string()), Some(22))
-        .map_err(|e| anyhow!("Decryption failed: Invalid password or corrupted file ({:?})", e))?;
-    
-    std::io::Read::read_to_end(&mut reader, &mut decrypted_identity)
-        .map_err(|e| anyhow!("could not read the decrypted data: {e}"))?;
-        
-    let identity_str = String::from_utf8(decrypted_identity)
-        .map_err(|e| anyhow!("decrypted data is not valid UTF-8: {e}"))?;
-
-    let identity_key = identity_str.lines()
-        .find(|l| l.starts_with("AGE-SECRET-KEY-"))
-        .ok_or_else(|| anyhow!("No AGE-SECRET-KEY found in decrypted identity"))?;
-
-    let identity: age::x25519::Identity = std::str::FromStr::from_str(identity_key)
-        .map_err(|e| anyhow!("Invalid identity format: {:?}", e))?;
+    // Wallet review F-02 (2026-10-02): this block hard-coded the passphrase decryptor, so a
+    // wallet whose identity file is sealed to a YubiKey could unlock and show balances but
+    // never sign a spend. decrypt_identity() knows both forms; it is the only copy of the rule.
+    let identity = crate::rpc::decrypt_identity()?;
 
     // 4. Initialize WalletDb
     use zcash_client_sqlite::WalletDb;

@@ -180,7 +180,7 @@ pub async fn wallet_uses_yubikey() -> Result<bool> {
 ///
 /// This is the same move `lock_zmap_carriers` made: put the rule where a forgetful call
 /// site cannot bypass it, rather than asking every caller to remember.
-fn decrypt_identity() -> Result<age::x25519::Identity> {
+pub(crate) fn decrypt_identity() -> Result<age::x25519::Identity> {
     use std::io::Read;
     use std::str::FromStr;
 

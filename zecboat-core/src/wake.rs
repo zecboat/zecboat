@@ -409,7 +409,7 @@ pub fn verify_holding(db_path: &str, asset_id: &str, genesis: Option<&(String, u
             let g_ok = genesis.map(|(t, i, _)| t.eq_ignore_ascii_case(&lading.genesis.txid) && *i == lading.genesis.action_index);
             if v.trust != OracleTrust::FullNode {
                 return Ok(WakeState::Unverified {
-                    detail: "the node only relays a server's answers; anchors were not checked against headers".into(),
+                    detail: format!("the Wake oracle at {} is not a node on this machine, so its anchors are a server's word, not checked against your own headers; set ZECBOAT_ZEBRAD_RPC to your own zebrad for Verified", crate::rpc::zebrad_rpc_endpoint()),
                     consignment_hash: Some(consignment.sha256.clone()),
                 });
             }
