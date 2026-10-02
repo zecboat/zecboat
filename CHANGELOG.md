@@ -100,6 +100,10 @@ not the diff.
   the password, or use up a YubiKey's three PIN attempts. Nothing used it: its only client was
   removed on 2026-08-13. The server, its module and the `axum` dependency are gone.
 
+- **A failed re-check now revokes a collection's Verified badge.** The newest Check of a
+  collection decides; an older pass no longer outranks a newer failure. When the last Check is
+  more than 10,000 blocks old (about 8.7 days) the badge's detail says a re-check is due.
+
 - **YubiKey-protected wallets can send.** Two spend paths still assumed a password-encrypted
   identity file and refused a YubiKey one, so such a wallet could unlock and show balances but
   never sign. Both now go through the one decryption routine that knows both forms.

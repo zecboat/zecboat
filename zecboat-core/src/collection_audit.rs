@@ -544,14 +544,33 @@ pub fn audited_collection_listing(asset_id: &str) -> Option<AuditReport> {
 /// The selection rule, pure: a report counts only if every one of the 17 checks passed, it kept
 /// the etched manifest and signature, and it lists the unit.
 pub fn pick_listing(reports: impl IntoIterator<Item = AuditReport>, asset_id: &str) -> Option<AuditReport> {
-    reports.into_iter().find(|a| {
+    // Registry review F10 (2026-10-02): the cache keeps every report, and a passed one used to
+    // serve the badge forever, even after a later Check of the same collection failed. The
+    // newest report (highest audited_to) for the collection decides; an older pass never
+    // outranks a newer failure. At the same height a pass still wins (a re-run at one height).
+    let reports: Vec<AuditReport> = reports.into_iter().collect();
+    let complete = |a: &AuditReport| {
         a.passed
             && a.checks.len() == 17
             && a.checks.iter().all(|c| c.pass)
             && a.manifest_hex.is_some()
             && a.signature_hex.is_some()
             && a.units.iter().any(|u| u.asset_id.eq_ignore_ascii_case(asset_id))
-    })
+    };
+    let best = reports.iter().filter(|a| complete(a)).max_by_key(|a| a.audited_to)?.clone();
+    let newer_failure = reports
+        .iter()
+        .any(|a| a.ik.eq_ignore_ascii_case(&best.ik) && !a.passed && a.audited_to > best.audited_to);
+    (!newer_failure).then_some(best)
+}
+
+/// Blocks after which a passed audit is due for a re-check (≈ 8.7 days at 75-second blocks).
+/// The badge stays, with the height it was verified to; a stale one says so.
+pub const AUDIT_STALE_BLOCKS: u32 = 10_000;
+
+/// Whether `report` is older than [`AUDIT_STALE_BLOCKS`] relative to `tip`.
+pub fn listing_is_stale(report: &AuditReport, tip: u32) -> bool {
+    tip.saturating_sub(report.audited_to) > AUDIT_STALE_BLOCKS
 }
 
 /// Seconds since the Unix epoch, as text; the UI formats it.
@@ -595,6 +614,13 @@ pub fn cached_audits() -> Result<Vec<(String, AuditReport)>> {
         .into_iter()
         .filter_map(|(ik, tx, j)| serde_json::from_str(&j).ok().map(|a| (format!("{tx}:{ik}"), a)))
         .collect())
+}
+
+/// The height the registry scan has reached (the wallet's own view), for judging audit age
+/// without the network. `None` before any scan.
+pub fn registry_scanned_tip() -> Option<u32> {
+    let c = rusqlite::Connection::open_with_flags(crate::paths::registry_db_path().ok()?, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    c.query_row("SELECT MAX(height) FROM blocks", [], |r| r.get::<_, Option<i64>>(0)).ok().flatten().map(|h| h as u32)
 }
 
 /// Store under the registration it came from.
@@ -768,5 +794,20 @@ mod tests {
         ok[18..22].copy_from_slice(&1u32.to_be_bytes());
         ok.extend_from_slice(&[0x33; 32]);
         assert_eq!(parse_close(&ok).map(|c| c.count), Some(1));
+    }
+
+    /// F10: a newer failed Check of the same collection revokes an older pass; the newest
+    /// pass wins over an older failure; age is judged against the tip.
+    #[test]
+    fn a_newer_failure_revokes_an_older_pass() {
+        let id = "5b742dc8".repeat(8);
+        let at = |mut r: AuditReport, h: u32| { r.audited_to = h; r };
+        let old_pass = at(report(true, None, true, &id), 1_000);
+        let new_fail = at(report(false, Some(9), true, &id), 2_000);
+        assert!(pick_listing(vec![old_pass.clone(), new_fail.clone()], &id).is_none());
+        let newer_pass = at(report(true, None, true, &id), 3_000);
+        assert_eq!(pick_listing(vec![old_pass.clone(), new_fail, newer_pass], &id).map(|a| a.audited_to), Some(3_000));
+        assert!(!listing_is_stale(&old_pass, 1_000 + AUDIT_STALE_BLOCKS));
+        assert!(listing_is_stale(&old_pass, 1_001 + AUDIT_STALE_BLOCKS));
     }
 }

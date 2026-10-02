@@ -257,6 +257,13 @@ async fn check(pin: &Pin, body: &[u8], v: &Value, sig: &[u8], asset: &Value, ass
             "Trusted through the Zecboat Registry (the one key pinned in this wallet) and an audit to block {h}; \
              check the collection again to confirm nothing was issued since. {caveat}"
         );
+        // F10: say so when that audit is old (judged by the registry scan, no network).
+        if let Some(tip) = crate::collection_audit::registry_scanned_tip() {
+            let age = tip.saturating_sub(h);
+            if age > crate::collection_audit::AUDIT_STALE_BLOCKS {
+                caveat = format!("RE-CHECK DUE: that audit is {age} blocks old. {caveat}");
+            }
+        }
     }
     BadgeState::Verified {
         issuer: pin.label.clone(),
