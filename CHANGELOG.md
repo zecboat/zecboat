@@ -84,6 +84,22 @@ not the diff.
 
 ---
 
+### Security
+
+- **The wallet no longer opens a listening socket.** Every launch started a JSON-RPC server
+  on `127.0.0.1:8238` with no authentication and no origin check, answering `unlock_wallet`,
+  `send_transaction` and `batch_send`. Any process on the machine, or any web page (a
+  `text/plain` POST needs no browser permission), could spend from an unlocked wallet, guess
+  the password, or use up a YubiKey's three PIN attempts. Nothing used it: its only client was
+  removed on 2026-08-13. The server, its module and the `axum` dependency are gone.
+
+- **Transfer memos carry each fact once.** A send adds `consignment_hash` to the carrier memo;
+  the minted memos repeated name, symbol and image hash that `desc` already holds, and for
+  Barcelona Post Card 2026 and Happy Birthday Zcash 10 that left no room (537 and 534 bytes
+  against the 512 limit), so no unit of either could be sent. A transfer memo is now
+  `asset_id`, `ik`, `desc`, `consignment_hash`; readers take the rest from `desc`. The asset id
+  must derive from `ik` and `desc`, or the transfer is refused. Nothing minted changes.
+
 ## 0.6.5-beta.1 — 2026-09-20
 
 **The 0.6.5-beta release was withdrawn. This replaces it.** The wallet is byte-for-byte the

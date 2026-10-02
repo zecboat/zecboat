@@ -316,12 +316,6 @@ async fn scan_collections() -> Result<zecboat_core::collections::RegistryView, S
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .setup(|_app| {
-            tauri::async_runtime::spawn(async move {
-                zecboat_core::local_rpc::start_server().await;
-            });
-            Ok(())
-        })
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![

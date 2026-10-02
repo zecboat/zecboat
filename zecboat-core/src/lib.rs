@@ -6,7 +6,6 @@ pub mod wallet;
 pub mod rpc;
 pub mod native_builder;
 pub mod yubi;
-pub mod local_rpc;
 pub mod zmap;
 pub mod wake;
 pub mod collections;

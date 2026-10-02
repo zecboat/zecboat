@@ -91,7 +91,6 @@ blake2b_simd = "1"
 base64 = "0.22"
 # reqwest returns bytes::Bytes; naming the type explicitly keeps the fetch loop readable.
 bytes = "1"
-axum = "0.7"
 
 # --- issuance verification (the "Design Verified" badge) ---------------------
 #
