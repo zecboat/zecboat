@@ -993,7 +993,14 @@ pub fn latest_consignment(
     } else {
         0
     };
-    let filter = if has_txs {
+    // A wallet whose table predates 2026-10-02 has no `sent_txid` column until something
+    // writes a consignment (store_consignment adds it). Reading must work before that, and
+    // on a connection that may not be allowed to ALTER: the filter applies only when the
+    // column exists. Showcase hit this on 2026-10-02: "no such column: sent_txid".
+    let has_sent_col: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('ext_zecboat_zmap_consignments') WHERE name = 'sent_txid'")?
+        .exists([])?;
+    let filter = if has_txs && has_sent_col {
         "AND (sent_txid IS NULL OR NOT EXISTS (
              SELECT 1 FROM transactions t WHERE t.txid = sent_txid
                 AND t.mined_height IS NULL AND t.expiry_height IS NOT NULL
@@ -1659,6 +1666,23 @@ mod memo_v1_tests {
     }
 
     /// Wake review H2: the lading stored for a send that expired unmined is not the live one.
+    #[test]
+    fn a_table_without_the_sent_txid_column_still_reads() {
+        // The table as every wallet had it before 2026-10-02: today's schema minus the
+        // column, plus the tables the filter would join.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        ensure_consignments_table(&conn).unwrap();
+        conn.execute_batch(
+            "ALTER TABLE ext_zecboat_zmap_consignments DROP COLUMN sent_txid;
+             CREATE TABLE transactions (txid BLOB, mined_height INTEGER, expiry_height INTEGER);
+             CREATE TABLE blocks (height INTEGER);
+             INSERT INTO ext_zecboat_zmap_consignments (asset_id, json, sha256) VALUES ('a', x'7b7d', x'00');",
+        )
+        .unwrap();
+        let c = latest_consignment(&conn, "a").expect("a legacy table must not error").unwrap();
+        assert_eq!(c.asset_id, "a");
+    }
+
     #[test]
     fn lading_of_an_expired_unmined_send_is_skipped() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();

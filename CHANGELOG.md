@@ -60,6 +60,11 @@ not the diff.
 
 ### Fixed (2026-10-02)
 
+- **"Lineage could not be verified right now: no such column: sent_txid."** The expired-send
+  fix below added that column to the consignments table, but only when a lading is stored;
+  reading in a wallet whose table predates it (showcase, same day) failed before anything was
+  written. Reads now apply the expired-send filter only when the column exists.
+
 - **The setup wizard's "Seal this wallet to the YubiKey" box now creates the wallet.** It used
   to move to the loading screen and call nothing, leaving a blank card (seen live in a
   throwaway wallet, 2026-10-02). Both kinds of wallet go through the same call; the box only
