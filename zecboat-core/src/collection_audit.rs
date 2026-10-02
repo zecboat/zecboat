@@ -160,6 +160,19 @@ pub struct Flow {
     pub has_outgoing: bool,
 }
 
+/// F1 (2026-10-02 review): the outputs the account **issued**. Decryption proves only that a
+/// key in the published UFVK can read an output: the IVK reads anything sent *to* the account,
+/// and the OVK is public too, so anyone can craft an output that decrypts as "outgoing". What no
+/// stranger can do is spend the account's notes. An output is the issuer's statement only when
+/// its transaction spent at least one of the account's own notes (`spent_known > 0`). Without
+/// this, one note sent to the issuance address with a crafted memo would fail checks 1, 9 and
+/// 10 for everyone, forever; a legitimate return of a unit would fail check 9.
+pub fn issued_outputs(outs: Vec<Out>, flows: &[Flow]) -> Vec<Out> {
+    let issued: std::collections::HashSet<&str> =
+        flows.iter().filter(|f| f.spent_known > 0).map(|f| f.txid.as_str()).collect();
+    outs.into_iter().filter(|o| issued.contains(o.txid.as_str())).collect()
+}
+
 /// Check 14. Returns (violations, unaccountable). Both must be empty to pass.
 pub fn value_accounting(flows: &[Flow]) -> (Vec<String>, Vec<String>) {
     let (mut bad, mut unknown) = (vec![], vec![]);
@@ -482,6 +495,7 @@ pub async fn audit(reg: &Registration) -> Result<AuditReport> {
     ensure_account(&db, &ufvk, birthday).await?;
     let tip = sync_to_tip(&db, birthday).await?;
     let (outs, flows) = decrypted(&db, &ufvk).await?;
+    let outs = issued_outputs(outs, &flows);
     let (checks, units, close) = run_checks(reg, &ufvk_str, &outs, &flows);
     let etched = close.as_ref().map(|c| etched_manifest(&outs, &c.1));
     let passed = checks.len() == 17 && checks.iter().all(|c| c.pass);
@@ -711,5 +725,26 @@ mod tests {
         m.resize(512, 0);
         assert!(pin_matches(&m, 7, &h));
         assert!(!pin_matches(&m, 8, &h));
+    }
+
+    /// F1: a stranger's note sent to the issuance address (no spend by the account) is not an
+    /// issuer statement, whatever its memo says; the account's own sends are.
+    #[test]
+    fn only_outputs_of_spending_transactions_count_as_issued() {
+        let out = |txid: &str, memo: &[u8]| Out {
+            height: 1, txid: txid.to_string(), index: 0, value: 10_000, cmx: None, memo: memo.to_vec(), outgoing: true,
+        };
+        let outs = vec![
+            out("aa", b"{\"asset_id\":\"00\",\"ik\":\"11\",\"desc\":\"x\"}"),
+            out("bb", b"zmap:close:v1 forged"),
+            out("cc", b"{\"asset_id\":\"real\"}"),
+        ];
+        let flows = vec![
+            Flow { txid: "aa".into(), spent_known: 0, readable_out: 10_000, fee: None, has_outgoing: true },
+            Flow { txid: "bb".into(), spent_known: 0, readable_out: 1, fee: None, has_outgoing: true },
+            Flow { txid: "cc".into(), spent_known: 50_000, readable_out: 10_000, fee: Some(10_000), has_outgoing: true },
+        ];
+        let kept: Vec<String> = issued_outputs(outs, &flows).into_iter().map(|o| o.txid).collect();
+        assert_eq!(kept, vec!["cc".to_string()]);
     }
 }

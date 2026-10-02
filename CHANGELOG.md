@@ -93,6 +93,12 @@ not the diff.
   the password, or use up a YubiKey's three PIN attempts. Nothing used it: its only client was
   removed on 2026-08-13. The server, its module and the `axum` dependency are gone.
 
+- **A collection's Check can no longer be sabotaged by sending to its issuer.** The audit
+  counted every output the published viewing key could decrypt as something the issuer did,
+  so one note sent to the issuance address with a crafted memo failed checks 1, 9 and 10 in
+  every wallet, forever. An output now counts only when its transaction spent the account's
+  own notes, which nothing but the spending key can do.
+
 - **Transfer memos carry each fact once.** A send adds `consignment_hash` to the carrier memo;
   the minted memos repeated name, symbol and image hash that `desc` already holds, and for
   Barcelona Post Card 2026 and Happy Birthday Zcash 10 that left no room (537 and 534 bytes
