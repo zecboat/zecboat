@@ -33,6 +33,12 @@ without it cannot sign a transaction any node accepts after the activation block
   120 / 120,000 / 30,000 after. The library's own send expiry stays a fixed 40 blocks, which
   after NU7 is 17 minutes, so the wallet passes its own. Wake's minimum anchor depth stays 100
   blocks (42 minutes after NU7; the rule is about reorg depth, which is a block count).
+- **Existing wallets migrate to the new schema on first open.** The migration guard only
+  looked for the Ironwood tables, so a wallet that already had them never received the NU7
+  crates' migrations and every scan batch failed with "no such table:
+  transparent_spend_locator_map" (found live in testA). The guard now knows each schema
+  generation by a sentinel table and takes a one-way backup named for it (`wallet.db.pre-nu7`)
+  before migrating.
 
 ## Unreleased — 0.7.0
 

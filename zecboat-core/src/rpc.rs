@@ -1078,35 +1078,50 @@ fn ensure_wal_mode(db_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Schema generations this wallet has shipped on, oldest first: a table that only exists
+/// from that generation on, and the suffix of the one-way backup taken before migrating to it.
+/// When a new crate release adds tables, add a row; `init_wallet_db` applies every pending
+/// migration in one go, so the first missing sentinel names the backup.
+const SCHEMA_GENERATIONS: &[(&str, &str, &str)] = &[
+    ("ironwood_tree_shards", "pre-ironwood", "Ironwood"),
+    // zcash_client_sqlite 0.23 (the NU7 stack, 2026-10-02): transparent spend tracking. Found
+    // live in testA: every scan batch failed with "no such table: transparent_spend_locator_map"
+    // because the guard below only looked for the Ironwood tables.
+    ("transparent_spend_locator_map", "pre-nu7", "NU7"),
+];
+
 fn ensure_wallet_migrated(db_path: &str) -> Result<()> {
     use zcash_client_backend::data_api::WalletRead;
 
-    // Cheap check: if the wallet already has the Ironwood tables there is
-    // nothing to do, and no reason to touch the disk.
-    {
+    // Cheap check: if the wallet already has every generation's tables there is nothing to
+    // do, and no reason to touch the disk.
+    let pending = {
         let conn = rusqlite::Connection::open(db_path)
             .map_err(|e| anyhow::anyhow!("could not open wallet database: {}", e))?;
-        let present: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ironwood_tree_shards'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        if present > 0 {
-            return Ok(());
-        }
-    }
+        SCHEMA_GENERATIONS.iter().find(|(table, _, _)| {
+            let present: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            present == 0
+        })
+    };
+    let Some((_, suffix, label)) = pending else {
+        return Ok(());
+    };
 
     // One-way migration on a real-funds wallet: keep a pre-migration copy.
-    let backup = format!("{}.pre-ironwood", db_path);
+    let backup = format!("{}.{}", db_path, suffix);
     if !std::path::Path::new(&backup).exists() {
         crate::paths::copy_private(db_path, &backup)
             .map_err(|e| anyhow::anyhow!("could not back up the wallet before migrating: {}", e))?;
-        println!("[wallet] backed up pre-Ironwood wallet to {}", backup);
+        println!("[wallet] backed up pre-{} wallet to {}", label, backup);
     }
 
-    println!("[wallet] migrating the wallet database to the Ironwood schema (one-way)");
+    println!("[wallet] migrating the wallet database to the {} schema (one-way)", label);
     let mut wallet_db = WalletDb::for_path(db_path, MainNetwork, SystemClock, OsRng)
         .map_err(|e| anyhow::anyhow!("could not open wallet: {:?}", e))?;
     zcash_client_sqlite::wallet::init::init_wallet_db(&mut wallet_db, None)
