@@ -7,6 +7,11 @@ not the diff.
 
 ### Added
 
+- **"Update before 5 November" notice.** This build does not follow NU7 (ZIP 259), the network
+  upgrade that activates on Zcash mainnet on 5 November 2026. From that block it can neither
+  sync nor send. One amber line in the header and in Settings → About says so and names the
+  release to update to (0.7.1). The line comes from the wallet core itself, so a build that
+  follows the upgrade shows nothing.
 - **Collections (A3b): the Zecboat Registry, read by the wallet itself.** A new 🔎 Collections page
   lists every collection registered in the Zecboat Registry, read from the chain with the
   registry's viewing key that is pinned in the wallet: nothing comes from zecboat.com. Each

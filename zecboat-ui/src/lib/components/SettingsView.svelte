@@ -1,5 +1,6 @@
 <script lang="ts">
   import CopyButton from "./CopyButton.svelte";
+  import UpgradeNotice from "./UpgradeNotice.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
 
@@ -527,6 +528,7 @@
 
   <div class="settings-section card">
     <h3>About this wallet</h3>
+    <UpgradeNotice />
     {#if about}
       <div class="about-grid">
         <span class="about-label">Version</span>

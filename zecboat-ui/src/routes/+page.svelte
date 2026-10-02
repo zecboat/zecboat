@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
   import NodeStatus from "$lib/components/NodeStatus.svelte";
+  import UpgradeNotice from "$lib/components/UpgradeNotice.svelte";
   import BalanceCard from "$lib/components/BalanceCard.svelte";
   import TransactionHistory from "$lib/components/TransactionHistory.svelte";
   import TransactionsView from "$lib/components/TransactionsView.svelte";
@@ -145,6 +146,7 @@
       <header class="top-bar">
         <h2>{currentView}</h2>
         <div class="user-profile">
+          <UpgradeNotice compact />
           <button class="lock-btn" onclick={handleLock} title="Lock Wallet">🔒</button>
         </div>
       </header>
