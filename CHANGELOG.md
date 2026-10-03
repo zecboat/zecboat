@@ -3,7 +3,7 @@
 Notable changes to the Zecboat desktop wallet. Entries describe the user-visible effect,
 not the diff.
 
-## Unreleased — 0.7.0
+## 0.7.0-beta — 2026-10-02
 
 ### Added
 

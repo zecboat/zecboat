@@ -1,6 +1,6 @@
 [package]
 name = "zecboat-ui"
-version = "0.6.5"
+version = "0.7.0"
 description = "Shielded Zcash wallet for Layer-2 memo assets (ZMAP)"
 authors = ["Zecboat <speed@zecboat.com>"]
 edition = "2021"
