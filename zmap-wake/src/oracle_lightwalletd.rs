@@ -22,7 +22,7 @@ use zcash_protocol::consensus::{BlockHeight, BranchId, Network};
 
 use crate::oracle::{reversed, AnchorStatus, ChainOracle, IronwoodAction, IronwoodTreeState, OracleTrust};
 
-/// A lightwalletd-protocol endpoint, e.g. `http://192.168.0.40:8137`.
+/// A lightwalletd-protocol endpoint, e.g. `http://127.0.0.1:8137`.
 pub struct LightwalletdOracle {
     url: String,
     network: Network,

@@ -306,7 +306,7 @@ mod trust_tests {
         for u in ["http://127.0.0.1:8232", "http://localhost:8232", "http://[::1]:8232", "https://127.5.6.7/"] {
             assert!(is_local_url(u), "{u}");
         }
-        for u in ["http://192.168.0.142:8232", "https://zec.rocks:443", "http://zebrad.lan:8232", "http://1270.0.0.1:8232"] {
+        for u in ["http://192.168.1.10:8232", "https://zec.rocks:443", "http://zebrad.lan:8232", "http://1270.0.0.1:8232"] {
             assert!(!is_local_url(u), "{u}");
         }
     }
