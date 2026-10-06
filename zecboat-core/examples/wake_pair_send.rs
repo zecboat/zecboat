@@ -56,6 +56,12 @@ fn main() -> anyhow::Result<()> {
         genesis: zecboat_core::wake::genesis_from_local_manifest(asset_id),
         acknowledge_unproven: env::var("WAKE_ALLOW_UNPROVEN").map(|v| v == "1").unwrap_or(false),
     };
+    // Collect any lading the drop-box (or the carrier's own transaction) holds for this copy first,
+    // as the wallet does when it lists its assets.
+    match zecboat_core::wake::fetch_missing_consignments(&db_path) {
+        Ok(r) => println!("ladings: fetched {}, already held {}, not found {}, failed {:?}", r.fetched, r.already_held, r.not_in_dropbox, r.failed),
+        Err(e) => println!("lading fetch skipped: {e}"),
+    }
     let t = std::time::Instant::now();
     let hex = zecboat_core::native_builder::send_zmap_asset(&mut wallet_db, &usk, asset_id, recipient, expiry, &wake)?;
     println!("built, proved, signed and stored in {:.1?}; {} bytes; NOT broadcast", t.elapsed(), hex.len() / 2);

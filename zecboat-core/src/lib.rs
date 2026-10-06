@@ -8,6 +8,7 @@ pub mod native_builder;
 pub mod yubi;
 pub mod zmap;
 pub mod wake;
+pub mod wake_memo;
 pub mod collections;
 pub mod collection_audit;
 

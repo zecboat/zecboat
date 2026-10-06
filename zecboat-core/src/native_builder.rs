@@ -551,6 +551,15 @@ pub fn send_zmap_asset(
             &oracle,
         )?
     };
+    // PROTOTYPE (wake_memo): with ZECBOAT_LADING_IN_MEMOS=1 a lading of up to three proofs
+    // travels in this same transaction, as memos of zero-value outputs to the recipient.
+    let record_memos: Vec<[u8; 512]> = match &wake_lading {
+        Some(l) if crate::wake_memo::sending_enabled() => crate::wake_memo::memos_for(&l.bytes, l.hops)?.unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    if !record_memos.is_empty() {
+        println!("[wake] carrying the lading in this transfer: {} memo output(s)", record_memos.len());
+    }
     match &wake_lading {
         Some(l) => println!("[wake] lading of {} proof(s) ready, sha256 {}…", l.hops, &l.hash_hex[..16]),
         None if wake.acknowledge_unproven => println!("[wake] no lading for this unit; sending it UNPROVEN as acknowledged"),
@@ -633,7 +642,7 @@ pub fn send_zmap_asset(
     // This is the ordinary state for anyone carrying pre-NU6.3 change: Orchard is closed
     // to new outputs, so old value sits there while carriers are Ironwood. Such a wallet
     // showed "insufficient funds" against a visibly healthy balance.
-    let fee_headroom = Zatoshis::from_u64(crate::zmap::CARRIER_ZAT * 6)
+    let fee_headroom = Zatoshis::from_u64(crate::zmap::CARRIER_ZAT * 6 + 5_000 * record_memos.len() as u64)
         .map_err(|e| anyhow!("internal: bad fee headroom: {:?}", e))?;
 
     let other_pool = match source_pool {
@@ -698,12 +707,23 @@ pub fn send_zmap_asset(
         .map_err(|e| anyhow!("internal: bad carrier value: {:?}", e))?;
     let memo = MemoBytes::from_bytes(&memo_bytes)
         .map_err(|e| anyhow!("the carrier's memo will not fit a memo field: {:?}", e))?;
-    let payment = Payment::new(recipient_addr, Some(amount), Some(memo), None, None, vec![])
+    let payment = Payment::new(recipient_addr.clone(), Some(amount), Some(memo), None, None, vec![])
         .map_err(|e| anyhow!("could not construct the asset payment: {:?}", e))?;
-    let request = TransactionRequest::new(vec![payment])
+    let mut payments = vec![payment];
+    for m in &record_memos {
+        let memo = MemoBytes::from_bytes(m).map_err(|e| anyhow!("a record memo will not fit a memo field: {:?}", e))?;
+        payments.push(
+            Payment::new(recipient_addr.clone(), Some(Zatoshis::ZERO), Some(memo), None, None, vec![])
+                .map_err(|e| anyhow!("could not construct a record output: {:?}", e))?,
+        );
+    }
+    let payment_count = payments.len();
+    let request = TransactionRequest::new(payments)
         .map_err(|e| anyhow!("could not construct the transfer request: {:?}", e))?;
     let mut payment_pools = std::collections::BTreeMap::new();
-    payment_pools.insert(0usize, zcash_protocol::PoolType::IRONWOOD);
+    for i in 0..payment_count {
+        payment_pools.insert(i, zcash_protocol::PoolType::IRONWOOD);
+    }
 
     // ── 5. Fee and change from the library, not from local arithmetic ──────────────────────
     let change_strategy = SingleOutputChangeStrategy::<Db>::new(
@@ -754,7 +774,8 @@ pub fn send_zmap_asset(
         ShieldedPool::Sapling => return Err(anyhow!("Sapling carriers are not supported")),
     }
 
-    let ironwood_out = vec![amount];
+    let mut ironwood_out = vec![amount];
+    ironwood_out.extend(std::iter::repeat(Zatoshis::ZERO).take(record_memos.len()));
 
     // SingleOutputChangeStrategy carries no account metadata (`AccountMetaT = ()`), so there is
     // nothing to fetch here — a metadata query would be work whose result is discarded.
@@ -820,7 +841,10 @@ pub fn send_zmap_asset(
         _ => return Err(anyhow!("a ZMAP carrier can only be sent to a unified address")),
     };
 
-    const MAX_PAIRING_ATTEMPTS: usize = 64;
+    // Each try pairs the carrier spend with the carrier output with odds of one in the number
+    // of Actions; record outputs add Actions, so the budget grows with them.
+    #[allow(non_snake_case)]
+    let MAX_PAIRING_ATTEMPTS: usize = 64 + 40 * record_memos.len();
     let mut paired: Option<(pczt::Pczt, usize, [u8; 32])> = None;
     for attempt in 1..=MAX_PAIRING_ATTEMPTS {
         let candidate = create_pczt_from_proposal::<_, _, std::convert::Infallible, _, std::convert::Infallible, _>(
@@ -943,6 +967,11 @@ pub fn send_zmap_asset(
                 .map_err(|e| anyhow!("could not keep a copy of the lading: {}", e))?;
             // 0.7.1: the outcome is recorded, so the wallet can show it, retry it, and hand the
             // lading over as a file. Before, a failure was this console line and nothing else.
+            if !record_memos.is_empty() {
+                // The record is in the transaction itself: nothing to hand to a drop-box.
+                let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Ok(()));
+                println!("[wake] lading carried in the transfer; no drop-box used");
+            } else {
             match crate::wake::deliver(recipient, l) {
                 Ok(()) => {
                     let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Ok(()));
@@ -952,6 +981,7 @@ pub fn send_zmap_asset(
                     let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Err(&e.to_string()));
                     eprintln!("[wake] WARNING: the lading was NOT delivered ({e}); it is kept in this wallet under sha256 {}", l.hash_hex)
                 }
+            }
             }
         }
     }

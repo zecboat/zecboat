@@ -439,6 +439,24 @@ pub fn fetch_missing_consignments(db_path: &str) -> Result<FetchReport> {
                 report.already_held += 1;
                 continue;
             }
+            // First choice (prototype): the record may be in the carrier's own transaction.
+            match crate::wake_memo::record_in_transaction(&conn, &c.txid_bytes, hash) {
+                Ok(Some(bytes)) => {
+                    match Lading::parse(&bytes)
+                        .map_err(|e| anyhow!("{e}"))
+                        .and_then(|_| Ok(crate::zmap::store_consignment(&conn, &h.asset_id, None, Some(c.note_id), &bytes, None)?))
+                    {
+                        Ok(_) => {
+                            println!("[wake] lading for {} read from the transfer's own memos", h.name);
+                            report.fetched += 1;
+                        }
+                        Err(e) => report.failed.push(format!("{}: {e}", h.name)),
+                    }
+                    continue;
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("[wake] could not look for the record in the transfer: {e}"),
+            }
             let sealed = match dropbox_get(hash) {
                 Ok(Some(b)) => b,
                 Ok(None) => { report.not_in_dropbox += 1; continue; }
