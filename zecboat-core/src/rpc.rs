@@ -3463,6 +3463,10 @@ pub async fn get_zsas() -> Result<Vec<Value>> {
             _ => {}
         }
     }
+    // 0.7.1: and send out any lading of ours that has not reached a drop-box yet (the drop-box
+    // was unreachable at send time, or none was in use then). Not waited for: an unreachable
+    // drop-box must not delay the holdings.
+    crate::wake::redeliver_in_background(db_path.clone());
     let pool = crate::db::WalletPool::new(&db_path)?;
     let holdings = pool.get_zmap_holdings().await?;
     let ladings: std::collections::HashMap<String, crate::zmap::Consignment> = {
@@ -3652,7 +3656,7 @@ pub async fn wallet_about() -> Result<Value> {
         "upgrade_notice": {
             "name": "NU7",
             "date": "5 November 2026",
-            "update_to": "0.7.1",
+            "update_to": "0.7.2",
         },
         "does_not": [
             "Mint. Issuance is a separate application with separate keys — a wallet that can mint is a wallet that can forge.",

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import LineageDelivery from "./LineageDelivery.svelte";
   import CopyButton from "./CopyButton.svelte";
   import { invoke } from "@tauri-apps/api/core";
   
@@ -426,6 +427,11 @@
           <CopyButton value={txResult.txid} label="Copy TxID" title="Copy the transaction id" />
           <CopyButton value={txResult.message} label="Copy full output" compact title="Copy the whole message" />
         </div>
+      {/if}
+      {#if txResult.success && txResult.txid}
+        <!-- 0.7.1: whether the lineage record of an asset send reached the recipient's
+             drop-box. Renders nothing for a ZEC send, which has no such record. -->
+        <LineageDelivery txid={txResult.txid} />
       {/if}
     </div>
   {/if}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import CopyButton from "./CopyButton.svelte";
   import UpgradeNotice from "./UpgradeNotice.svelte";
+  import LineageDelivery from "./LineageDelivery.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
 
@@ -417,6 +418,11 @@
         {/if}
       </div>
     {/if}
+  </div>
+
+  <div class="settings-section card">
+    <h3>Lineage records</h3>
+    <LineageDelivery />
   </div>
 
   <div class="settings-section card">

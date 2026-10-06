@@ -922,6 +922,90 @@ pub fn ensure_consignments_table(conn: &rusqlite::Connection) -> rusqlite::Resul
     if !has_sent {
         conn.execute("ALTER TABLE ext_zecboat_zmap_consignments ADD COLUMN sent_txid BLOB", [])?;
     }
+    // 0.7.1: whether a sent lading reached a drop-box. Until now delivery was tried once and a
+    // failure was a console line; the wallet could not say which ladings never left.
+    for (col, ty) in [("delivered_at", "TEXT"), ("delivery_note", "TEXT")] {
+        let has: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('ext_zecboat_zmap_consignments') WHERE name = ?1")?
+            .exists([col])?;
+        if !has {
+            conn.execute(&format!("ALTER TABLE ext_zecboat_zmap_consignments ADD COLUMN {col} {ty}"), [])?;
+        }
+    }
+    Ok(())
+}
+
+/// A lading this wallet made for a send, with where it was going and whether it got there.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OutgoingConsignment {
+    pub asset_id: String,
+    pub sha256: String,
+    /// The transfer it belongs to, display order.
+    pub txid: String,
+    pub recipient: String,
+    pub delivered_at: Option<String>,
+    pub delivery_note: Option<String>,
+    pub created_at: String,
+    /// Whole days since it was made.
+    pub age_days: i64,
+    #[serde(skip)]
+    pub json: Vec<u8>,
+}
+
+/// Every lading stored for a send, newest first, joined to the recipient it was sealed to.
+pub fn outgoing_consignments(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<OutgoingConsignment>> {
+    if !consignments_table_exists(conn)? {
+        return Ok(Vec::new());
+    }
+    ensure_consignments_table(conn)?;
+    ensure_lineage_out_table(conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT c.asset_id, c.sha256, c.sent_txid, l.recipient, c.delivered_at, c.delivery_note, c.created_at, c.json,
+                CAST(julianday('now') - julianday(c.created_at) AS INTEGER)
+           FROM ext_zecboat_zmap_consignments c
+           JOIN ext_zecboat_zmap_lineage_out l
+             ON l.successor_txid = c.sent_txid AND l.asset_id = c.asset_id
+          WHERE c.sent_txid IS NOT NULL
+          ORDER BY c.id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let sha: Vec<u8> = r.get(1)?;
+        let mut txid: Vec<u8> = r.get(2)?;
+        txid.reverse();
+        Ok(OutgoingConsignment {
+            asset_id: r.get(0)?,
+            sha256: hex::encode(sha),
+            txid: hex::encode(txid),
+            recipient: r.get(3)?,
+            delivered_at: r.get(4)?,
+            delivery_note: r.get(5)?,
+            created_at: r.get(6)?,
+            age_days: r.get::<_, Option<i64>>(8)?.unwrap_or(0),
+            json: r.get(7)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Record the outcome of a delivery attempt: `Ok` stamps the time and clears the note, `Err`
+/// keeps the reason and leaves a previous success untouched.
+pub fn mark_consignment_delivery(
+    conn: &rusqlite::Connection,
+    sha256_hex: &str,
+    outcome: std::result::Result<(), &str>,
+) -> rusqlite::Result<()> {
+    ensure_consignments_table(conn)?;
+    let Ok(raw) = hex::decode(sha256_hex) else { return Ok(()) };
+    match outcome {
+        Ok(()) => conn.execute(
+            "UPDATE ext_zecboat_zmap_consignments SET delivered_at = datetime('now'), delivery_note = NULL WHERE sha256 = ?1",
+            [raw.as_slice()],
+        )?,
+        Err(why) => conn.execute(
+            "UPDATE ext_zecboat_zmap_consignments SET delivery_note = ?2 WHERE sha256 = ?1 AND delivered_at IS NULL",
+            rusqlite::params![raw.as_slice(), why],
+        )?,
+    };
     Ok(())
 }
 
@@ -1119,6 +1203,74 @@ mod tests {
         assert_eq!(c.verified_at_height, Some(3_497_364));
         assert!(latest_consignment(&conn, "asset-b").unwrap().is_none());
         assert!(consignment_by_hash(&conn, "zz").unwrap().is_none());
+    }
+
+    /// 0.7.1: a sent lading is listed with its recipient and delivery state; a failure is kept
+    /// as a note, a success stamps the time, and a later failure does not undo a success.
+    #[test]
+    fn outgoing_consignments_carry_their_delivery_state() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        assert!(outgoing_consignments(&conn).unwrap().is_empty(), "no tables yet");
+        let sent = [7u8; 32];
+        let h = store_consignment(&conn, "asset-a", None, None, br#"{"sent":1}"#, Some(&sent)).unwrap();
+        // A received lading and a sent one with no lineage row are not outgoing deliveries.
+        store_consignment(&conn, "asset-a", None, Some(3), br#"{"received":1}"#, None).unwrap();
+        store_consignment(&conn, "asset-c", None, None, br#"{"orphan":1}"#, Some(&[9u8; 32])).unwrap();
+        record_lineage_out(&conn, &LineageOut {
+            asset_id: "asset-a".into(),
+            spent_txid: [1u8; 32],
+            spent_action_index: 0,
+            spent_nf: [2u8; 32],
+            successor_txid: sent,
+            successor_action_index: 1,
+            successor_cmx: [3u8; 32],
+            recipient: "u1recipient".into(),
+        }).unwrap();
+
+        let out = outgoing_consignments(&conn).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!((out[0].sha256.as_str(), out[0].recipient.as_str()), (h.as_str(), "u1recipient"));
+        assert_eq!(out[0].txid, "07".repeat(32));
+        assert_eq!(out[0].json, br#"{"sent":1}"#);
+        assert!(out[0].delivered_at.is_none() && out[0].delivery_note.is_none());
+        assert_eq!(out[0].age_days, 0);
+        conn.execute("UPDATE ext_zecboat_zmap_consignments SET created_at = datetime('now', '-40 days') WHERE sent_txid = ?1", [sent.as_slice()]).unwrap();
+        assert_eq!(outgoing_consignments(&conn).unwrap()[0].age_days, 40);
+
+        mark_consignment_delivery(&conn, &h, Err("HTTP 404")).unwrap();
+        let out = outgoing_consignments(&conn).unwrap();
+        assert_eq!(out[0].delivery_note.as_deref(), Some("HTTP 404"));
+        assert!(out[0].delivered_at.is_none());
+
+        mark_consignment_delivery(&conn, &h, Ok(())).unwrap();
+        let out = outgoing_consignments(&conn).unwrap();
+        assert!(out[0].delivered_at.is_some());
+        assert!(out[0].delivery_note.is_none());
+
+        mark_consignment_delivery(&conn, &h, Err("later failure")).unwrap();
+        let out = outgoing_consignments(&conn).unwrap();
+        assert!(out[0].delivered_at.is_some() && out[0].delivery_note.is_none(), "a success stands");
+    }
+
+    /// A table made before 0.7.1 gains the delivery columns on first use and keeps its rows.
+    #[test]
+    fn an_older_consignments_table_is_upgraded_in_place() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ext_zecboat_zmap_consignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT NOT NULL, unit INTEGER,
+                received_note_id INTEGER, json BLOB NOT NULL, sha256 BLOB NOT NULL UNIQUE,
+                verified_at_height INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+             INSERT INTO ext_zecboat_zmap_consignments (asset_id, json, sha256) VALUES ('old', x'7b7d', x'00');",
+        ).unwrap();
+        assert!(outgoing_consignments(&conn).unwrap().is_empty());
+        let cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('ext_zecboat_zmap_consignments')").unwrap()
+            .query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        for c in ["sent_txid", "delivered_at", "delivery_note"] {
+            assert!(cols.iter().any(|x| x == c), "{c} missing from {cols:?}");
+        }
+        assert_eq!(list_consignments(&conn).unwrap().len(), 1);
     }
 
     /// Real memo from `FULL_NOMAD_MANIFEST.txt`, asset #042.

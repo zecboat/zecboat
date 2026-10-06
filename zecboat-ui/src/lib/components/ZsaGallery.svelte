@@ -12,12 +12,15 @@
     wake?: { has_lading: boolean; consignment_hash: string | null; verified_at_height: number | null; hops: number | null };
   };
 
-  // Lineage badge -- ZMAP v0.5 §9 check 7, WAKE-v1 §8. Four states, never one tick:
-  // verified is a proof chain checked against a full node AND a genesis the issuer's manifest
-  // names; unverified is "could not confirm" (no verdict); no_wake is "no lading held"
-  // (unproven, not forged); broken is evidence of forgery or tampering.
+  // Lineage badge -- ZMAP v0.5 §9 check 7, WAKE-v1 §8. Five states, never one tick:
+  // verified is a proof chain checked against a full node on this machine AND a genesis the
+  // issuer's manifest names; provider_checked is the same checks with the chain's answers taken
+  // from the wallet's provider (0.7.1: what a wallet without its own node sees); unverified is
+  // "could not confirm" (no verdict); no_wake is "no lading held" (unproven, not forged); broken
+  // is evidence of forgery or tampering.
   type Wake =
     | { state: 'verified'; hops: number; min_anchor_depth: number; genesis_txid: string; genesis_action_index: number; genesis_source: string; consignment_hash: string }
+    | { state: 'provider_checked'; hops: number; min_anchor_depth: number; genesis_txid: string; genesis_action_index: number; genesis_source: string; consignment_hash: string; asked: string }
     | { state: 'unverified'; detail: string; consignment_hash: string | null }
     | { state: 'no_wake'; detail: string }
     | { state: 'broken'; failure: string; detail: string };
@@ -277,13 +280,13 @@
                checked. Verified here means: proofs, chain rule, anchors on a full node this
                wallet chose, and a genesis output the issuer's manifest names. -->
           {#if isCheckingLineage}
-            <div class="verify-badge checking">Verifying lineage against your node…</div>
+            <div class="verify-badge checking">Verifying lineage…</div>
           {:else if wake?.state === 'verified'}
             <div class="verify-badge {WAKE_REVIEWED ? 'ok' : 'amber'}">
               {#if WAKE_REVIEWED}
                 ✓ Lineage verified — {wake.hops} proof{wake.hops === 1 ? '' : 's'} back to the issuance output
               {:else}
-                ✓ Lineage proof checks out · awaiting external review
+                ✓ Lineage checks out · your own node · awaiting external review
               {/if}
               <details class="verify-details">
                 <summary>what was checked</summary>
@@ -295,10 +298,29 @@
                 <span class="check-line caveat">Wake is a draft circuit without external review (WAKE-v1 §11). This badge is exploratory.</span>
               </details>
             </div>
+          {:else if wake?.state === 'provider_checked'}
+            <!-- 0.7.1: the same proofs, with the chain's answers from the provider. Never the
+                 green tick of an own-node verdict, reviewed circuit or not (WAKE-v1 §8.1). -->
+            <div class="verify-badge {WAKE_REVIEWED ? 'provider' : 'amber'}">
+              ✓ Lineage checks out · via your provider{WAKE_REVIEWED ? '' : ' · awaiting external review'}
+              <details class="verify-details">
+                <summary>what was checked</summary>
+                <span class="check-line">✓ every proof verifies under the pinned Wake keys, on this machine</span>
+                <span class="check-line">✓ each note's ρ is the previous note's nullifier (consensus-bound)</span>
+                <span class="check-line">✓ every anchor is a tree root according to {wake.asked}, shallowest {wake.min_anchor_depth.toLocaleString()} blocks deep</span>
+                <span class="check-line">✓ the genesis output {wake.genesis_txid.slice(0, 16)}… #{wake.genesis_action_index} is the one the {wake.genesis_source === 'local_manifest' ? 'local test manifest' : wake.genesis_source === 'registry' ? 'Zecboat Registry' : "issuer's manifest"} names, and it is on chain according to the same source</span>
+                <span class="check-line mono">lading sha256 {wake.consignment_hash.slice(0, 16)}…</span>
+                <span class="check-line caveat">The chain's answers here are your provider's word, the same trust your balance rests on. With your own node running on this machine, the wallet checks them itself.</span>
+                {#if !WAKE_REVIEWED}<span class="check-line caveat">Wake is a draft circuit without external review (WAKE-v1 §11). This badge is exploratory.</span>{/if}
+              </details>
+            </div>
           {:else if wake?.state === 'no_wake'}
             <div class="verify-badge unknown">
               No lineage proof for this unit
               <span class="verify-detail">{wake.detail} Unproven is not forged: the memo and artwork checks above still apply.</span>
+              {#if wake.detail.includes("has not been fetched")}
+                <span class="verify-detail">The sender can save the lineage record as a file for you: open it under Settings → Lineage records.</span>
+              {/if}
             </div>
           {:else if wake?.state === 'unverified'}
             <div class="verify-badge unknown">
@@ -410,6 +432,7 @@
   }
   .verify-badge.ok      { background: rgba(46, 160, 67, 0.15); color: #3fb950; border: 1px solid rgba(46, 160, 67, 0.4); }
   .verify-badge.bad     { background: rgba(248, 81, 73, 0.15); color: #f85149; border: 1px solid rgba(248, 81, 73, 0.4); }
+  .verify-badge.provider { background: rgba(120, 170, 255, 0.12); color: #9ec1ff; border: 1px solid rgba(120, 170, 255, 0.4); }
   .verify-badge.amber   { background: rgba(255, 179, 0, 0.14); color: #ffb300; border: 1px solid rgba(255, 179, 0, 0.45); }
   .verify-badge.unknown { background: rgba(210, 153, 34, 0.12); color: #d29922; border: 1px solid rgba(210, 153, 34, 0.35); }
   .verify-badge.checking { background: rgba(139, 148, 158, 0.12); color: #8b949e; border: 1px solid rgba(139, 148, 158, 0.3); }

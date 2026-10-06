@@ -25,15 +25,103 @@ use serde::Serialize;
 use std::path::PathBuf;
 use zcash_protocol::consensus::{MainNetwork, Network};
 use zmap_wake::lading::{lading_hash, Lading, ProofEntry};
-use zmap_wake::oracle::{reversed, OracleTrust, ZebradOracle, MIN_DEPTH};
+use zmap_wake::oracle::{reversed, AnchorStatus, ChainOracle, IronwoodAction, IronwoodTreeState, OracleTrust, ZebradOracle, MIN_DEPTH};
+use zmap_wake::oracle_lightwalletd::LightwalletdOracle;
 use zmap_wake::wallet_notes::{received_notes_in_tx_conn, witness_at, ReceivedNote};
 use zmap_wake::{prove_genesis, prove_hop, verify_chain, WakeFailure};
 
 type Db<P> = zcash_client_sqlite::WalletDb<Connection, P, zcash_client_sqlite::util::SystemClock, rand::rngs::OsRng>;
 
-/// The node the wallet verifies and proves against.
-pub fn oracle() -> ZebradOracle {
-    ZebradOracle::new(crate::rpc::zebrad_rpc_endpoint())
+/// Where this wallet asks the chain its lineage and issuance questions (0.7.1).
+///
+/// Wake asks three things only: the tree state at a height, a mined transaction's outputs, and
+/// the tip. A zebrad answers them, and so does any lightwalletd-protocol server. Until 0.7.1 the
+/// wallet could only ask a zebrad, so a wallet without one could neither check a lineage nor
+/// send a unit that had one.
+pub enum Chain {
+    /// A zebrad answered at `ZECBOAT_ZEBRAD_RPC`. Self-validated only when it is on this machine.
+    Node(ZebradOracle, String),
+    /// No node answered: the wallet's own provider, the light server chosen in Settings.
+    Provider(LightwalletdOracle),
+}
+
+/// The chain source for this call: the node if one answers, otherwise the provider.
+///
+/// The probe is one `getblockcount`; with no node on the machine it is refused at once.
+pub fn chain() -> Chain {
+    let endpoint = crate::rpc::zebrad_rpc_endpoint();
+    let node = ZebradOracle::new(endpoint.clone());
+    if node.tip_height().is_ok() {
+        return Chain::Node(node, endpoint);
+    }
+    match LightwalletdOracle::new(crate::rpc::grpc_endpoint(), Network::MainNetwork) {
+        Ok(p) => Chain::Provider(p),
+        Err(_) => Chain::Node(node, endpoint),
+    }
+}
+
+impl Chain {
+    /// The address being asked, for messages.
+    pub fn endpoint(&self) -> String {
+        match self {
+            Chain::Node(_, url) => url.clone(),
+            Chain::Provider(p) => p.url().to_string(),
+        }
+    }
+
+    pub fn tip_height(&self) -> Result<u32> {
+        match self {
+            Chain::Node(n, _) => n.tip_height(),
+            Chain::Provider(p) => p.tip_height(),
+        }
+    }
+
+    pub fn ironwood_tree_state(&self, height: u32) -> Result<IronwoodTreeState> {
+        match self {
+            Chain::Node(n, _) => n.ironwood_tree_state(height),
+            Chain::Provider(p) => p.ironwood_tree_state(height),
+        }
+    }
+
+    /// The Ironwood Actions of a mined transaction; `txid_hex` in display order.
+    pub fn ironwood_actions(&self, txid_hex: &str) -> Result<Option<(u32, Vec<IronwoodAction>)>> {
+        match self {
+            Chain::Node(n, _) => n.ironwood_actions(txid_hex),
+            Chain::Provider(p) => p.ironwood_actions(&zmap_wake::oracle::decode_hex_32(txid_hex)?),
+        }
+    }
+
+    /// In words, for a badge: who answered.
+    pub fn described(&self) -> String {
+        match self {
+            Chain::Node(n, url) if n.trust() == OracleTrust::FullNode => format!("your own node at {url}"),
+            Chain::Node(_, url) => format!("the node at {url}, which is not on this machine"),
+            Chain::Provider(p) => format!("your provider {}", p.url()),
+        }
+    }
+}
+
+impl ChainOracle for Chain {
+    fn trust(&self) -> OracleTrust {
+        match self {
+            Chain::Node(n, _) => n.trust(),
+            Chain::Provider(p) => p.trust(),
+        }
+    }
+
+    fn anchor_at(&self, root: &orchard::tree::Anchor, height: u32) -> Result<AnchorStatus> {
+        match self {
+            Chain::Node(n, _) => n.anchor_at(root, height),
+            Chain::Provider(p) => p.anchor_at(root, height),
+        }
+    }
+
+    fn cmx_at(&self, txid: &[u8; 32], action_index: u32) -> Result<Option<orchard::note::ExtractedNoteCommitment>> {
+        match self {
+            Chain::Node(n, _) => n.cmx_at(txid, action_index),
+            Chain::Provider(p) => p.cmx_at(txid, action_index),
+        }
+    }
 }
 
 // ── genesis lookup ───────────────────────────────────────────────────────────────────────────
@@ -148,7 +236,7 @@ pub fn prepare_send_lading<P: zcash_protocol::consensus::Parameters>(
     carrier_txid_internal: &[u8; 32],
     output_index: u32,
     genesis: Option<&(String, u32)>,
-    oracle: &ZebradOracle,
+    oracle: &Chain,
 ) -> Result<Option<SendLading>> {
     let note = carrier_note(conn, carrier_txid_internal, output_index)?;
     let note_txid_hex = hex::encode(note.txid_display);
@@ -180,7 +268,7 @@ pub fn prepare_send_lading<P: zcash_protocol::consensus::Parameters>(
     // the recipient's verifier is not made to wait for confirmations the chain already has.
     let ts = oracle
         .ironwood_tree_state(note.mined_height)
-        .map_err(|e| anyhow!("could not fetch the tree state at height {} from the node: {e}", note.mined_height))?;
+        .map_err(|e| anyhow!("could not fetch the tree state at height {} from {}: {e}", note.mined_height, oracle.described()))?;
     let w = witness_at(wallet_db, &note, &ts)?;
     let proof = if lading.hops.is_empty() { prove_genesis(&w) } else { prove_hop(&w) }
         .map_err(|e| anyhow!("Wake proof failed: {e:?}"))?;
@@ -205,8 +293,43 @@ pub fn seal_for(recipient_ua: &str, bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(sealed.to_bytes())
 }
 
+/// The drop-box chosen in Settings (0.7.1). Empty: no choice made, so the environment or the
+/// default applies. `off`: no drop-box at all; ladings are handed over as files.
+static DROPBOX_CHOICE: once_cell::sync::Lazy<std::sync::Mutex<String>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(String::new()));
+
+/// Largest sealed lading the wallet will accept from a drop-box or a file. A lading grows by
+/// about 7 KB per hop; this leaves room for several hundred.
+pub const MAX_SEALED_BYTES: usize = 4 * 1024 * 1024;
+
+/// Set the drop-box from Settings: an `https://` base, a `file://` folder, `off`, or empty for
+/// the automatic choice.
+pub fn set_dropbox_choice(choice: &str) -> Result<()> {
+    let c = choice.trim().trim_end_matches('/').to_string();
+    if !(c.is_empty() || c == "off" || c.starts_with("https://") || c.starts_with("http://") || c.starts_with("file://")) {
+        return Err(anyhow!("a drop-box is an https:// address, a file:// folder, or off"));
+    }
+    *DROPBOX_CHOICE.lock().unwrap() = c;
+    Ok(())
+}
+
+/// What Settings last set: empty, `off`, or a base.
+pub fn dropbox_choice() -> String {
+    DROPBOX_CHOICE.lock().unwrap().clone()
+}
+
+/// Whether any drop-box is in use.
+pub fn dropbox_enabled() -> bool {
+    dropbox_choice() != "off"
+}
+
 /// The drop-box base. `file://<dir>` for a shared directory, otherwise an HTTP base URL.
+/// Order: the choice made in Settings, then `ZECBOAT_DROPBOX`, then `{registry}/dropbox`.
 pub fn dropbox_base() -> String {
+    let chosen = dropbox_choice();
+    if !chosen.is_empty() && chosen != "off" {
+        return chosen;
+    }
     std::env::var("ZECBOAT_DROPBOX")
         .ok()
         .map(|s| s.trim().trim_end_matches('/').to_string())
@@ -220,6 +343,9 @@ fn dropbox_file(base: &str, hash_hex: &str) -> PathBuf {
 
 /// Put a sealed lading under its hash. Overwrites nothing: the first delivery stands.
 pub fn dropbox_put(hash_hex: &str, sealed: &[u8]) -> Result<()> {
+    if !dropbox_enabled() {
+        return Err(anyhow!("no drop-box is in use (Settings); hand the lineage file to the recipient yourself"));
+    }
     let base = dropbox_base();
     if base.starts_with("file://") {
         let path = dropbox_file(&base, hash_hex);
@@ -248,6 +374,9 @@ pub fn dropbox_put(hash_hex: &str, sealed: &[u8]) -> Result<()> {
 
 /// Fetch a sealed lading by hash. `Ok(None)` when the drop-box has nothing under it.
 pub fn dropbox_get(hash_hex: &str) -> Result<Option<Vec<u8>>> {
+    if !dropbox_enabled() {
+        return Ok(None);
+    }
     let base = dropbox_base();
     if base.starts_with("file://") {
         let path = dropbox_file(&base, hash_hex);
@@ -270,7 +399,14 @@ pub fn dropbox_get(hash_hex: &str) -> Result<Option<Vec<u8>>> {
     if !res.status().is_success() {
         return Err(anyhow!("{url}: HTTP {}", res.status()));
     }
-    Ok(Some(res.bytes()?.to_vec()))
+    if res.content_length().map(|n| n as usize > MAX_SEALED_BYTES).unwrap_or(false) {
+        return Err(anyhow!("{url}: the drop-box answered with more than {MAX_SEALED_BYTES} bytes; refused"));
+    }
+    let bytes = res.bytes()?.to_vec();
+    if bytes.len() > MAX_SEALED_BYTES {
+        return Err(anyhow!("{url}: the drop-box answered with more than {MAX_SEALED_BYTES} bytes; refused"));
+    }
+    Ok(Some(bytes))
 }
 
 /// Deliver a lading for a sent carrier: seal to the recipient and put it in the drop-box.
@@ -308,17 +444,7 @@ pub fn fetch_missing_consignments(db_path: &str) -> Result<FetchReport> {
                 Ok(None) => { report.not_in_dropbox += 1; continue; }
                 Err(e) => { report.failed.push(format!("{}: {e}", h.name)); continue; }
             };
-            let result = (|| -> Result<()> {
-                let note = carrier_note(&conn, &c.txid_bytes, c.output_index as u32)?;
-                let sealed = zmap_wake::seal::Sealed::parse(&sealed)?;
-                let bytes = zmap_wake::seal::open(&note.fvk, &sealed)?;
-                if hex::encode(lading_hash(&bytes)) != hash {
-                    return Err(anyhow!("the delivered lading does not hash to the memo's consignment_hash"));
-                }
-                Lading::parse(&bytes)?;
-                crate::zmap::store_consignment(&conn, &h.asset_id, None, Some(c.note_id), &bytes, None)?;
-                Ok(())
-            })();
+            let result = accept_sealed(&conn, &h.asset_id, c, &sealed);
             match result {
                 Ok(()) => report.fetched += 1,
                 Err(e) => report.failed.push(format!("{}: {e}", h.name)),
@@ -326,6 +452,199 @@ pub fn fetch_missing_consignments(db_path: &str) -> Result<FetchReport> {
         }
     }
     Ok(report)
+}
+
+/// Open one sealed lading for carrier `c` of `asset_id` and store it, or say why not. It must
+/// open with this wallet's keys and hash to the value the carrier's memo commits to.
+fn accept_sealed(conn: &Connection, asset_id: &str, c: &crate::zmap::CarrierRef, sealed: &[u8]) -> Result<()> {
+    let Some(hash) = c.consignment_hash.as_deref() else {
+        return Err(anyhow!("this carrier's memo commits to no lading"));
+    };
+    if sealed.len() > MAX_SEALED_BYTES {
+        return Err(anyhow!("more than {MAX_SEALED_BYTES} bytes; refused"));
+    }
+    let note = carrier_note(conn, &c.txid_bytes, c.output_index as u32)?;
+    let sealed = zmap_wake::seal::Sealed::parse(sealed)?;
+    let bytes = zmap_wake::seal::open(&note.fvk, &sealed)?;
+    if hex::encode(lading_hash(&bytes)) != hash {
+        return Err(anyhow!("the delivered lading does not hash to the memo's consignment_hash"));
+    }
+    Lading::parse(&bytes)?;
+    crate::zmap::store_consignment(conn, asset_id, None, Some(c.note_id), &bytes, None)?;
+    Ok(())
+}
+
+// ── delivery that can be seen, retried and done by hand (0.7.1) ───────────────────────
+
+/// One lading this wallet sent, for the UI.
+#[derive(Clone, Debug, Serialize)]
+pub struct Outgoing {
+    pub asset_id: String,
+    pub consignment_hash: String,
+    pub txid: String,
+    pub recipient: String,
+    pub delivered: bool,
+    pub delivered_at: Option<String>,
+    pub note: Option<String>,
+    pub created_at: String,
+}
+
+/// Every lading this wallet made for a send, newest first.
+pub fn outgoing(db_path: &str) -> Result<Vec<Outgoing>> {
+    let conn = Connection::open(db_path)?;
+    Ok(crate::zmap::outgoing_consignments(&conn)?
+        .into_iter()
+        .map(|o| Outgoing {
+            asset_id: o.asset_id,
+            consignment_hash: o.sha256,
+            txid: o.txid,
+            recipient: o.recipient,
+            delivered: o.delivered_at.is_some(),
+            delivered_at: o.delivered_at,
+            note: o.delivery_note,
+            created_at: o.created_at,
+        })
+        .collect())
+}
+
+/// How long the unattended pass keeps trying to deliver a record.
+pub const AUTO_RETRY_DAYS: i64 = 30;
+
+/// The unattended delivery pass, at most once per [`AUTO_RETRY_EVERY`], and never waited for:
+/// an unreachable drop-box must not hold up whatever triggered it.
+pub fn redeliver_in_background(db_path: String) {
+    const AUTO_RETRY_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
+    static LAST: once_cell::sync::Lazy<std::sync::Mutex<Option<std::time::Instant>>> =
+        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
+    {
+        let mut last = LAST.lock().unwrap();
+        if last.map(|t| t.elapsed() < AUTO_RETRY_EVERY).unwrap_or(false) {
+            return;
+        }
+        *last = Some(std::time::Instant::now());
+    }
+    std::thread::spawn(move || match redeliver(&db_path, None) {
+        Ok(r) if r.delivered > 0 => println!("[wake] {} waiting lading(s) delivered", r.delivered),
+        _ => {}
+    });
+}
+
+/// What a delivery pass did.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct DeliveryReport {
+    pub delivered: usize,
+    pub failed: Vec<String>,
+}
+
+/// Deliver ladings that have not reached a drop-box: all of them, or the one named. Naming one
+/// delivers it again even if it was delivered before (a drop-box keeps the first copy).
+pub fn redeliver(db_path: &str, only: Option<&str>) -> Result<DeliveryReport> {
+    let conn = Connection::open(db_path)?;
+    let mut report = DeliveryReport::default();
+    for o in crate::zmap::outgoing_consignments(&conn)? {
+        match only {
+            Some(h) if !h.eq_ignore_ascii_case(&o.sha256) => continue,
+            // The unattended pass leaves alone what was delivered and what is older than
+            // AUTO_RETRY_DAYS: a record nobody collected in that time is asked for by hand.
+            None if o.delivered_at.is_some() || o.age_days > AUTO_RETRY_DAYS => continue,
+            _ => {}
+        }
+        let outcome = seal_for(&o.recipient, &o.json).and_then(|sealed| dropbox_put(&o.sha256, &sealed));
+        match &outcome {
+            Ok(()) => report.delivered += 1,
+            Err(e) => report.failed.push(format!("{}…: {e}", &o.sha256[..16.min(o.sha256.len())])),
+        }
+        let why = outcome.as_ref().err().map(|e| e.to_string());
+        let _ = crate::zmap::mark_consignment_delivery(&conn, &o.sha256, match &why { None => Ok(()), Some(w) => Err(w.as_str()) });
+    }
+    Ok(report)
+}
+
+/// The lading `hash_hex`, sealed to its recipient, as a file's bytes and a file name. Only the
+/// recipient's keys open it, so the file can travel by any channel.
+pub fn export_sealed(db_path: &str, hash_hex: &str) -> Result<(String, Vec<u8>)> {
+    let conn = Connection::open(db_path)?;
+    let o = crate::zmap::outgoing_consignments(&conn)?
+        .into_iter()
+        .find(|o| o.sha256.eq_ignore_ascii_case(hash_hex))
+        .ok_or_else(|| anyhow!("this wallet holds no sent lading {hash_hex}"))?;
+    let sealed = seal_for(&o.recipient, &o.json)?;
+    Ok((format!("lineage-{}.wake.json", &o.sha256[..16]), sealed))
+}
+
+/// What importing a lineage file did.
+#[derive(Clone, Debug, Serialize)]
+pub struct Imported {
+    pub asset_id: String,
+    pub name: String,
+    pub consignment_hash: String,
+    pub hops: usize,
+}
+
+/// Take a sealed lading handed over as a file. It is tried against every held carrier whose
+/// memo commits to a lading this wallet does not hold yet; the same rules as a drop-box fetch
+/// apply, so a file that is not for this wallet, or not the committed lading, is refused.
+pub fn import_sealed(db_path: &str, sealed: &[u8]) -> Result<Imported> {
+    if sealed.len() > MAX_SEALED_BYTES {
+        return Err(anyhow!("that file is larger than {MAX_SEALED_BYTES} bytes; not a lineage file this wallet accepts"));
+    }
+    zmap_wake::seal::Sealed::parse(sealed).map_err(|e| anyhow!("that is not a lineage file: {e}"))?;
+    let conn = Connection::open(db_path)?;
+    let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?);
+    let mut waiting = 0;
+    for h in &holdings {
+        for c in &h.carriers {
+            let Some(hash) = c.consignment_hash.as_deref() else { continue };
+            if crate::zmap::consignment_by_hash(&conn, hash)?.is_some() {
+                continue;
+            }
+            waiting += 1;
+            if accept_sealed(&conn, &h.asset_id, c, sealed).is_ok() {
+                let hops = crate::zmap::consignment_by_hash(&conn, hash)?
+                    .and_then(|k| Lading::parse(&k.json).ok())
+                    .map(|l| l.hops.len())
+                    .unwrap_or(0);
+                return Ok(Imported { asset_id: h.asset_id.clone(), name: h.name.clone(), consignment_hash: hash.to_string(), hops });
+            }
+        }
+    }
+    Err(if waiting == 0 {
+        anyhow!("no unit in this wallet is waiting for a lineage record")
+    } else {
+        anyhow!("that file does not belong to any unit here that is waiting for its lineage record: it is sealed to another wallet, or it is not the record the sender committed to")
+    })
+}
+
+/// Async wrappers for the UI.
+pub async fn lineage_outgoing() -> Result<Vec<Outgoing>> {
+    let db_path = crate::paths::as_string::wallet_db_path()?;
+    tokio::task::spawn_blocking(move || outgoing(&db_path)).await.map_err(|e| anyhow!("did not finish: {e}"))?
+}
+
+pub async fn lineage_redeliver(only: Option<String>) -> Result<DeliveryReport> {
+    let db_path = crate::paths::as_string::wallet_db_path()?;
+    tokio::task::spawn_blocking(move || redeliver(&db_path, only.as_deref())).await.map_err(|e| anyhow!("did not finish: {e}"))?
+}
+
+/// Write the sealed lading into the user's Downloads folder (their home if there is none) and
+/// return the path.
+pub async fn lineage_export(hash_hex: String) -> Result<String> {
+    let db_path = crate::paths::as_string::wallet_db_path()?;
+    tokio::task::spawn_blocking(move || -> Result<String> {
+        let (name, bytes) = export_sealed(&db_path, &hash_hex)?;
+        let home = PathBuf::from(std::env::var_os("HOME").ok_or_else(|| anyhow!("no home folder"))?);
+        let dir = Some(home.join("Downloads")).filter(|d| d.is_dir()).unwrap_or(home);
+        let path = dir.join(name);
+        std::fs::write(&path, bytes)?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| anyhow!("did not finish: {e}"))?
+}
+
+pub async fn lineage_import(sealed: Vec<u8>) -> Result<Imported> {
+    let db_path = crate::paths::as_string::wallet_db_path()?;
+    tokio::task::spawn_blocking(move || import_sealed(&db_path, &sealed)).await.map_err(|e| anyhow!("did not finish: {e}"))?
 }
 
 /// Async wrapper for the UI: fetch whatever is missing, off the executor.
@@ -352,9 +671,24 @@ pub enum WakeState {
         genesis_source: GenesisSource,
         consignment_hash: String,
     },
-    /// The proofs and chain rule held, but something outside them could not be confirmed: the
-    /// oracle only relays a server's answers, an anchor is not yet deep enough, or no trusted
-    /// manifest confirms the genesis output. **Not** a verdict against the asset.
+    /// Everything `Verified` checks held, but the chain's answers (tree roots, the genesis
+    /// output) came from a server and not from a node on this machine: the wallet's provider, or
+    /// a node elsewhere. The proofs themselves were checked here. This is the same trust a light
+    /// wallet places in its provider for its balance; it is **not** "verified by your own node"
+    /// and the UI must not show it as such (WAKE-v1 §8.1).
+    ProviderChecked {
+        hops: usize,
+        min_anchor_depth: u32,
+        genesis_txid: String,
+        genesis_action_index: u32,
+        genesis_source: GenesisSource,
+        consignment_hash: String,
+        /// Who answered, in words.
+        asked: String,
+    },
+    /// The proofs and chain rule held, but something outside them could not be confirmed: an
+    /// anchor is not yet deep enough, no trusted manifest confirms the genesis output, or
+    /// nothing could be asked about the chain at all. **Not** a verdict against the asset.
     Unverified { detail: String, consignment_hash: Option<String> },
     /// No lading is held for this asset. Unproven, distinct from forged.
     NoWake { detail: String },
@@ -401,20 +735,14 @@ pub fn verify_holding(db_path: &str, asset_id: &str, genesis: Option<&(String, u
         .as_deref()
         .and_then(|hh| hex::decode(hh).ok())
         .and_then(|v| <[u8; 32]>::try_from(v).ok());
-    let oracle = oracle();
+    let oracle = chain();
     let lading = Lading::parse(&consignment.json).map_err(|e| anyhow!("stored lading unreadable: {e}"))?;
 
     match verify_chain(&consignment.json, expected, &note.note.rho(), &oracle, MIN_DEPTH) {
         Ok(v) => {
             let g_ok = genesis.map(|(t, i, _)| t.eq_ignore_ascii_case(&lading.genesis.txid) && *i == lading.genesis.action_index);
-            if v.trust != OracleTrust::FullNode {
-                return Ok(WakeState::Unverified {
-                    detail: format!("the Wake oracle at {} is not a node on this machine, so its anchors are a server's word, not checked against your own headers; set ZECBOAT_ZEBRAD_RPC to your own zebrad for Verified", crate::rpc::zebrad_rpc_endpoint()),
-                    consignment_hash: Some(consignment.sha256.clone()),
-                });
-            }
             match g_ok {
-                Some(true) => {
+                Some(true) if v.trust == OracleTrust::FullNode => {
                     let _ = crate::zmap::mark_consignment_verified(&conn, &consignment.sha256, Some(oracle.tip_height().unwrap_or(0)));
                     Ok(WakeState::Verified {
                         hops: v.hops,
@@ -425,6 +753,17 @@ pub fn verify_holding(db_path: &str, asset_id: &str, genesis: Option<&(String, u
                         consignment_hash: consignment.sha256.clone(),
                     })
                 }
+                // The same checks, answered by a server. Not recorded as verified: that mark is
+                // kept for a verdict this machine reached against its own node.
+                Some(true) => Ok(WakeState::ProviderChecked {
+                    hops: v.hops,
+                    min_anchor_depth: v.min_anchor_depth,
+                    genesis_txid: lading.genesis.txid.clone(),
+                    genesis_action_index: lading.genesis.action_index,
+                    genesis_source: genesis.map(|g| g.2.clone()).unwrap_or(GenesisSource::PinnedManifest),
+                    consignment_hash: consignment.sha256.clone(),
+                    asked: oracle.described(),
+                }),
                 Some(false) => Ok(WakeState::Broken {
                     failure: "GenesisMismatch".into(),
                     detail: format!(
@@ -435,8 +774,9 @@ pub fn verify_holding(db_path: &str, asset_id: &str, genesis: Option<&(String, u
                 }),
                 None => Ok(WakeState::Unverified {
                     detail: format!(
-                        "the chain of {} proof(s) verified against the node, but no trusted manifest could confirm that {}… output {} is this asset's genesis",
+                        "the chain of {} proof(s) verified against {}, but no trusted manifest could confirm that {}… output {} is this asset's genesis",
                         v.hops,
+                        oracle.described(),
                         &lading.genesis.txid[..16],
                         lading.genesis.action_index
                     ),
@@ -526,8 +866,35 @@ mod tests {
         dropbox_put(&h, b"sealed-1").unwrap();
         dropbox_put(&h, b"sealed-2").unwrap(); // first delivery stands
         assert_eq!(dropbox_get(&h).unwrap().as_deref(), Some(&b"sealed-1"[..]));
+
+        // 0.7.1, in this test because the choice is process-wide: Settings outranks the
+        // environment, `off` means no drop-box at all, and clearing it gives the environment back.
+        let other = std::env::temp_dir().join(format!("wake-dropbox-chosen-{}", std::process::id()));
+        set_dropbox_choice(&format!("file://{}/", other.display())).unwrap();
+        assert_eq!(dropbox_base(), format!("file://{}", other.display()));
+        assert_eq!(dropbox_get(&h).unwrap(), None, "the chosen folder is empty");
+        set_dropbox_choice("off").unwrap();
+        assert!(!dropbox_enabled());
+        assert!(dropbox_put(&h, b"x").unwrap_err().to_string().contains("no drop-box is in use"));
+        assert_eq!(dropbox_get(&h).unwrap(), None);
+        assert!(set_dropbox_choice("ftp://example").is_err());
+        assert_eq!(dropbox_choice(), "off", "a refused value changes nothing");
+        set_dropbox_choice("").unwrap();
+        assert_eq!(dropbox_base(), format!("file://{}", dir.display()));
+        assert_eq!(dropbox_get(&h).unwrap().as_deref(), Some(&b"sealed-1"[..]));
+
         std::env::remove_var("ZECBOAT_DROPBOX");
         let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn an_oversized_file_is_not_a_lineage_file() {
+        let big = vec![b' '; MAX_SEALED_BYTES + 1];
+        let e = import_sealed("/nonexistent/wallet.db", &big).unwrap_err().to_string();
+        assert!(e.contains("larger than"), "{e}");
+        let e = import_sealed("/nonexistent/wallet.db", b"{}").unwrap_err().to_string();
+        assert!(e.contains("not a lineage file"), "{e}");
     }
 
     #[test]

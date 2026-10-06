@@ -538,7 +538,7 @@ pub fn send_zmap_asset(
             wallet_db_path()?,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
-        let oracle = crate::wake::oracle();
+        let oracle = crate::wake::chain();
         let spent_index = u32::try_from(plan.carrier.output_index())
             .map_err(|_| anyhow!("internal: carrier output index out of range"))?;
         crate::wake::prepare_send_lading(
@@ -941,9 +941,17 @@ pub fn send_zmap_asset(
         if let Some(l) = &wake_lading {
             crate::zmap::store_consignment(&conn, asset_id, None, None, &l.bytes, Some(&successor_txid))
                 .map_err(|e| anyhow!("could not keep a copy of the lading: {}", e))?;
+            // 0.7.1: the outcome is recorded, so the wallet can show it, retry it, and hand the
+            // lading over as a file. Before, a failure was this console line and nothing else.
             match crate::wake::deliver(recipient, l) {
-                Ok(()) => println!("[wake] lading sealed to the recipient and delivered to {}", crate::wake::dropbox_base()),
-                Err(e) => eprintln!("[wake] WARNING: the lading was NOT delivered ({e}); it is kept in this wallet under sha256 {}", l.hash_hex),
+                Ok(()) => {
+                    let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Ok(()));
+                    println!("[wake] lading sealed to the recipient and delivered to {}", crate::wake::dropbox_base())
+                }
+                Err(e) => {
+                    let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Err(&e.to_string()));
+                    eprintln!("[wake] WARNING: the lading was NOT delivered ({e}); it is kept in this wallet under sha256 {}", l.hash_hex)
+                }
             }
         }
     }

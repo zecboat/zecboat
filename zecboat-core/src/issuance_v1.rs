@@ -234,23 +234,32 @@ async fn check(pin: &Pin, body: &[u8], v: &Value, sig: &[u8], asset: &Value, ass
     let iss = &asset["issuance"];
     let (txid, idx, cmx) = (iss["txid"].as_str().unwrap_or(""), iss["action_index"].as_u64().unwrap_or(u64::MAX), iss["cmx"].as_str().unwrap_or(""));
     let height = iss["height"].as_u64().unwrap_or(0) as u32;
-    let oracle = crate::wake::oracle();
-    let on_chain = tokio::task::block_in_place(|| oracle.ironwood_actions(txid));
+    // Asked of the wallet's own node when one answers, of its provider otherwise (0.7.1). The
+    // source is made and dropped inside the blocking section: the provider path runs its own
+    // short-lived runtime.
+    let (on_chain, asked, own_node) = tokio::task::block_in_place(|| {
+        let chain = crate::wake::chain();
+        use zmap_wake::oracle::{ChainOracle, OracleTrust};
+        (chain.ironwood_actions(txid), chain.described(), chain.trust() == OracleTrust::FullNode)
+    });
     match on_chain {
         Ok(Some((_, actions))) if actions.get(idx as usize).map(|a| hex::encode(a.cmx) == cmx).unwrap_or(false) => {
-            checks.push(format!("5' genesis output {}… #{} is on chain with the stated commitment", &txid[..16.min(txid.len())], idx));
+            checks.push(format!("5' genesis output {}… #{} is on chain with the stated commitment, as reported by {asked}", &txid[..16.min(txid.len())], idx));
         }
         Ok(Some(_)) => {
-            return BadgeState::SignatureFailed { detail: "the genesis commitment the manifest states is not at that output on chain".into() };
+            return BadgeState::SignatureFailed { detail: format!("the genesis commitment the manifest states is not at that output on chain, as reported by {asked}") };
         }
-        Ok(None) => return BadgeState::CouldNotCheck { detail: format!("the node does not know the genesis transaction {txid}") },
-        Err(e) => return BadgeState::CouldNotCheck { detail: format!("could not ask the node for the genesis output: {e}") },
+        Ok(None) => return BadgeState::CouldNotCheck { detail: format!("{asked} does not know the genesis transaction {txid}") },
+        Err(e) => return BadgeState::CouldNotCheck { detail: format!("could not ask {asked} for the genesis output: {e}") },
     }
     let mut caveat = "Issuance only: that THIS unit descends from that genesis output is the lineage badge's \
                       question, and the collection's close and count are `audit`'s."
         .to_string();
     if pin.test_only {
         caveat = format!("TEST PIN from ZECBOAT_PINNED_V1, not built into this wallet. {caveat}");
+    }
+    if !own_node {
+        caveat = format!("That the genesis output is on chain was reported by {asked}, not checked by a node on this machine. {caveat}");
     }
     if let Some(h) = registry_at {
         caveat = format!(

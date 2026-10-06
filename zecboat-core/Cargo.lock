@@ -4778,7 +4778,7 @@ dependencies = [
 
 [[package]]
 name = "zecboat-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "age",
  "anyhow",
@@ -4965,6 +4965,8 @@ dependencies = [
  "sha2 0.10.9",
  "sinsemilla",
  "subtle",
+ "tokio",
+ "tonic",
  "zcash_client_backend",
  "zcash_client_sqlite",
  "zcash_keys",

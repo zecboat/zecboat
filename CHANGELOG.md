@@ -3,7 +3,55 @@
 Notable changes to the Zecboat desktop wallet. Entries describe the user-visible effect,
 not the diff.
 
-## 0.7.0-beta — 2026-10-02
+## 0.7.1-beta — unreleased
+
+0.7.0-beta was tagged and staged but never published: a test on a machine without its own node
+showed that lineage, and one step of the issuance check, only worked beside a zebrad, and that
+a lineage record could not reach a wallet outside this project's own machines. 0.7.1 is the
+first public release of everything listed under 0.7.0, with that fixed.
+
+### Changed
+
+- **Lineage and issuance work without your own node.** Checking a lineage record, checking that
+  an item's issuance output is on chain, and sending an item that has a lineage record all asked
+  a zebrad on the same machine and nothing else. They now ask your own node when one answers
+  and your provider, the light server chosen in Settings, when none does. The proofs are
+  checked on your machine either way; only the chain's answers come from the provider.
+- **The lineage badge says who answered.** "your own node" when a node on this machine was
+  asked; "via your provider" when the provider was. The provider's word about the chain is the
+  same trust your balance already rests on, and the badge does not present it as more. Both stay
+  amber, "awaiting external review", until the Wake circuit has been reviewed.
+- **Messages in plain words.** "No node answered at …" replaces "curl exited with exit status:
+  7". The wallet no longer runs the external `curl` program to ask a local node.
+- **The "update before 5 November" notice now names 0.7.2**, the release that will follow NU7.
+
+### Added
+
+- **Lineage records you can see, retry and carry.** Settings → Lineage records lists every
+  record this wallet sent, with one mark each: delivered, or not yet. A record that could not be
+  delivered is tried again by itself at the next sync, and there is a Retry button. **Save file**
+  writes the record, sealed so that only the recipient's wallet can open it, into Downloads, to
+  be sent by any means; **Open a lineage file…** takes one in. A finished send of an item shows
+  the same mark under the transaction id. Before, delivery was tried once and a failure was a
+  line on the console.
+- **The drop-box is a choice.** Automatic (zecboat.com), your own (`https://…` or a shared
+  `file://` folder), or none at all, with records handed over as files. A drop-box cannot read
+  or replace a record; it can withhold one, and it sees the network address of both sides. That
+  is why it is optional.
+
+### For those who build or integrate
+
+- `zmap-wake`: `LightwalletdOracle` is now exercised against a live server
+  (`examples/light_verify.rs`), is safe to call from any thread or runtime, and caches the tip and
+  tree states; `ZebradOracle` talks plain HTTP itself and keeps `curl` only for `https://` nodes.
+- `zecboat-core`: `wake::Chain` (node or provider), `WakeState::ProviderChecked`,
+  `wake::{outgoing, redeliver, export_sealed, import_sealed}`, the drop-box choice, and two
+  delivery columns on the consignments table, added in place on first use.
+- Wake v1 §8.1 says a server-asserted verdict is reported as unverified. The wallet now reports
+  it as its own named state, never as verified by the holder's node. The spec wording is to be
+  amended to match before release.
+
+## 0.7.0-beta — 2026-10-02 *(tagged, never published — see 0.7.1-beta)*
 
 ### Added
 
