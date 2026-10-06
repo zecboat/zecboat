@@ -133,55 +133,69 @@ impl LightwalletdOracle {
         Ok(ts)
     }
 
-    /// The raw bytes of a mined transaction and its height (`GetTransaction`); `None` if the
-    /// server does not know it as mined. `txid` in display order.
-    pub fn raw_transaction(&self, txid: &[u8; 32]) -> Result<Option<(u32, Vec<u8>)>> {
+    /// Fetch a transaction by id and make sure the bytes returned ARE that transaction: the
+    /// id is recomputed from them. A server can therefore withhold a transaction but cannot
+    /// substitute another. Returns the height the server reports (0 when it reports none) and
+    /// the bytes; `None` when the server does not know the id. `txid` in display order.
+    ///
+    /// The reported height is not relied on. Some servers return 0 for transactions outside
+    /// their recent window even though they are mined (seen 2026-10-06 with zainod 0.10.0 in
+    /// pass-through mode: bytes present, height absent, for transactions about 12,000 blocks
+    /// old). Treating 0 as "not mined" made a sound lineage look broken.
+    fn fetch_checked(&self, txid: &[u8; 32]) -> Result<Option<(u32, Vec<u8>, Transaction)>> {
         let url = self.url.clone();
         let hash = reversed(*txid).to_vec();
-        on_thread(move || async move {
+        let got = on_thread(move || async move {
             let mut c = connect(&url).await?;
-            let raw = match c.get_transaction(TxFilter { block: None, index: 0, hash }).await {
-                Ok(r) => r.into_inner(),
-                Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
-                Err(e) => return Err(anyhow!("GetTransaction: {e}")),
-            };
-            if raw.height == 0 || raw.height > u32::MAX as u64 || raw.data.is_empty() {
-                return Ok(None);
+            match c.get_transaction(TxFilter { block: None, index: 0, hash }).await {
+                Ok(r) => {
+                    let raw = r.into_inner();
+                    Ok(Some((raw.height, raw.data)))
+                }
+                Err(status) if status.code() == tonic::Code::NotFound => Ok(None),
+                Err(e) => Err(anyhow!("GetTransaction: {e}")),
             }
-            Ok(Some((raw.height as u32, raw.data)))
-        })
+        })?;
+        let Some((height, data)) = got else { return Ok(None) };
+        if data.is_empty() {
+            return Ok(None);
+        }
+        let height = if height == 0 || height > u32::MAX as u64 { 0 } else { height as u32 };
+        // Version 5 and later transactions name their own consensus branch, so the height only
+        // matters for older ones; without a reported height the tip's branch is used.
+        let at = if height > 0 { height } else { self.tip_height()? };
+        let branch = BranchId::for_height(&self.network, BlockHeight::from_u32(at));
+        let tx = Transaction::read(&data[..], branch).context("parse transaction")?;
+        if tx.txid().as_ref() != &reversed(*txid) {
+            return Err(anyhow!("the server answered with a different transaction than the one asked for"));
+        }
+        Ok(Some((height, data, tx)))
     }
 
-    /// The Ironwood Actions of a mined transaction (`GetTransaction`, then parsed locally).
-    /// `txid` is in display order; lightwalletd wants the internal byte order.
+    /// The raw bytes of a transaction and the height the server reports for it (the tip's
+    /// height when it reports none); `None` if the server does not know it. The bytes are
+    /// checked against the id. `txid` in display order.
+    pub fn raw_transaction(&self, txid: &[u8; 32]) -> Result<Option<(u32, Vec<u8>)>> {
+        match self.fetch_checked(txid)? {
+            Some((height, data, _)) => Ok(Some((if height > 0 { height } else { self.tip_height()? }, data))),
+            None => Ok(None),
+        }
+    }
+
+    /// The Ironwood Actions of a transaction (`GetTransaction`, parsed locally, checked against
+    /// the id), with the height the server reports (0 when it reports none). `None` if the
+    /// server does not know the transaction. `txid` in display order.
     pub fn ironwood_actions(&self, txid: &[u8; 32]) -> Result<Option<(u32, Vec<IronwoodAction>)>> {
-        let url = self.url.clone();
-        let network = self.network;
-        let hash = reversed(*txid).to_vec();
-        on_thread(move || async move {
-            let mut c = connect(&url).await?;
-            let raw = match c.get_transaction(TxFilter { block: None, index: 0, hash }).await {
-                Ok(r) => r.into_inner(),
-                Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
-                Err(e) => return Err(anyhow!("GetTransaction: {e}")),
-            };
-            // Height 0 or u64::MAX: the server knows the transaction only from the mempool.
-            if raw.height == 0 || raw.height > u32::MAX as u64 || raw.data.is_empty() {
-                return Ok(None);
-            }
-            let height = raw.height as u32;
-            let branch = BranchId::for_height(&network, BlockHeight::from_u32(height));
-            let tx = Transaction::read(&raw.data[..], branch).context("parse transaction")?;
-            let Some(bundle) = tx.ironwood_bundle() else {
-                return Ok(Some((height, Vec::new())));
-            };
-            let actions = bundle
-                .actions()
-                .iter()
-                .map(|a| IronwoodAction { nullifier: a.nullifier().to_bytes(), cmx: a.cmx().to_bytes() })
-                .collect();
-            Ok(Some((height, actions)))
-        })
+        let Some((height, _, tx)) = self.fetch_checked(txid)? else { return Ok(None) };
+        let Some(bundle) = tx.ironwood_bundle() else {
+            return Ok(Some((height, Vec::new())));
+        };
+        let actions = bundle
+            .actions()
+            .iter()
+            .map(|a| IronwoodAction { nullifier: a.nullifier().to_bytes(), cmx: a.cmx().to_bytes() })
+            .collect();
+        Ok(Some((height, actions)))
     }
 }
 
@@ -203,9 +217,13 @@ impl ChainOracle for LightwalletdOracle {
         }
     }
 
+    /// A server not knowing the transaction is an error here, not `None`: `None` means "this
+    /// output does not exist", which a verifier treats as evidence against the lading, and a
+    /// server's silence is not evidence. That the output is mined is established separately, by
+    /// the genesis proof's anchor.
     fn cmx_at(&self, txid: &[u8; 32], action_index: u32) -> Result<Option<ExtractedNoteCommitment>> {
         let Some((_, actions)) = self.ironwood_actions(txid)? else {
-            return Ok(None);
+            return Err(anyhow!("the server at {} does not know transaction {}", self.url, crate::oracle::hex(txid)));
         };
         let Some(a) = actions.get(action_index as usize) else {
             return Ok(None);

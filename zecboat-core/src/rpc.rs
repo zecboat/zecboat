@@ -2598,7 +2598,21 @@ pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, 
         );
     }
 
-    
+    // An item that arrived with a lineage record must have that record collected before it can
+    // be sent on: the next proof extends it. Until 2026-10-06 that only happened when the item
+    // list was opened, so sending straight after receiving was refused with "the stored lading
+    // ... does not end at the carrier being spent". Collect here; a failure is not fatal, the
+    // send then reports what is actually missing.
+    if asset_id.is_some() {
+        if let Ok(db_path) = crate::paths::as_string::wallet_db_path() {
+            match tokio::task::spawn_blocking(move || crate::wake::fetch_missing_consignments(&db_path)).await {
+                Ok(Ok(r)) if r.fetched > 0 => println!("[wake] collected {} waiting lading(s) before the send", r.fetched),
+                Ok(Err(e)) => eprintln!("[wake] could not collect waiting ladings before the send: {e}"),
+                _ => {}
+            }
+        }
+    }
+
     // Ask the node we are already talking to.
     //
     // 2026-08-12: this branched on `provider.contains("127.0.0.1")` — the same
