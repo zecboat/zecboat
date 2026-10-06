@@ -421,7 +421,7 @@
   </div>
 
   <div class="settings-section card">
-    <h3>Lineage records</h3>
+    <h3>Lineage</h3>
     <LineageDelivery />
   </div>
 

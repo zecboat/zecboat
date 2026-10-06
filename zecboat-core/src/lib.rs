@@ -21,3 +21,4 @@ pub use rpc::rescan_from_height;
 pub use yubi::is_yubikey_connected as check_yubikey;
 pub use yubi::yubikey_message;
 pub use wallet::ProposedInput;
+pub use wake_memo::{lineage_route, set_send_mode_choice};

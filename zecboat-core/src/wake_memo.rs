@@ -43,12 +43,62 @@ pub enum SendMode {
     Knotline,
 }
 
-pub fn send_mode() -> SendMode {
-    match std::env::var("ZECBOAT_LADING_IN_MEMOS").as_deref() {
-        Ok("1") => SendMode::FullRecord,
-        Ok("knotline") | Ok("log") => SendMode::Knotline,
-        _ => SendMode::Off,
+/// What a wallet does when nothing says otherwise.
+///
+/// The Knotline, by the owner's decision of 2026-10-06 for 0.7.1: lineage travels in the
+/// transfer unless the user turns it off in Settings. Off means the record stays in the
+/// sender's wallet to be handed over as a file (or left in a drop-box the user has named).
+pub const DEFAULT_SEND_MODE: SendMode = SendMode::Knotline;
+
+/// The route chosen in Settings; `None` when Settings has not chosen.
+static ROUTE_CHOICE: once_cell::sync::Lazy<std::sync::Mutex<Option<SendMode>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
+
+/// Set the route from Settings: `knotline`, `off`, or empty to return to the default.
+pub fn set_send_mode_choice(choice: &str) -> Result<()> {
+    let mode = match choice.trim() {
+        "" => None,
+        "knotline" => Some(SendMode::Knotline),
+        "off" => Some(SendMode::Off),
+        other => return Err(anyhow!("unknown lineage route {other:?}")),
+    };
+    *ROUTE_CHOICE.lock().unwrap() = mode;
+    Ok(())
+}
+
+fn mode_name(m: SendMode) -> &'static str {
+    match m {
+        SendMode::Off => "off",
+        SendMode::FullRecord => "whole",
+        SendMode::Knotline => "knotline",
     }
+}
+
+/// The route in force and who decided it: `environment`, `settings` or `default`.
+///
+/// `ZECBOAT_LADING_IN_MEMOS` outranks Settings. It is a test and operator override (`knotline`,
+/// `log` its first name, `1` the whole lading, `off`); a stock install never sets it.
+pub fn send_mode_with_source() -> (SendMode, &'static str) {
+    match std::env::var("ZECBOAT_LADING_IN_MEMOS").as_deref() {
+        Ok("1") => return (SendMode::FullRecord, "environment"),
+        Ok("knotline") | Ok("log") => return (SendMode::Knotline, "environment"),
+        Ok("off") | Ok("0") => return (SendMode::Off, "environment"),
+        _ => {}
+    }
+    match *ROUTE_CHOICE.lock().unwrap() {
+        Some(m) => (m, "settings"),
+        None => (DEFAULT_SEND_MODE, "default"),
+    }
+}
+
+pub fn send_mode() -> SendMode {
+    send_mode_with_source().0
+}
+
+/// For the UI: `{route, source}`.
+pub fn lineage_route() -> (&'static str, &'static str) {
+    let (m, source) = send_mode_with_source();
+    (mode_name(m), source)
 }
 
 /// Where an extra zero-value output of a transfer goes.
@@ -392,6 +442,26 @@ mod tests {
         let mut tampered = memos.clone();
         tampered[3][100] ^= 1;
         assert!(from_memos(tampered.iter().map(|m| &m[..]), &hash).is_none(), "the hash check catches a changed chunk");
+    }
+
+    #[test]
+    fn the_route_is_environment_then_settings_then_default() {
+        // One test, because both the variable and the choice are process-wide.
+        std::env::remove_var("ZECBOAT_LADING_IN_MEMOS");
+        set_send_mode_choice("").unwrap();
+        assert_eq!(send_mode_with_source(), (DEFAULT_SEND_MODE, "default"));
+        set_send_mode_choice("knotline").unwrap();
+        assert_eq!(lineage_route(), ("knotline", "settings"));
+        set_send_mode_choice("off").unwrap();
+        assert_eq!(lineage_route(), ("off", "settings"));
+        assert!(set_send_mode_choice("carrier-pigeon").is_err());
+        assert_eq!(lineage_route(), ("off", "settings"), "a refused value changes nothing");
+        std::env::set_var("ZECBOAT_LADING_IN_MEMOS", "log");
+        assert_eq!(lineage_route(), ("knotline", "environment"), "the first name still works, and outranks Settings");
+        std::env::set_var("ZECBOAT_LADING_IN_MEMOS", "1");
+        assert_eq!(lineage_route(), ("whole", "environment"));
+        std::env::remove_var("ZECBOAT_LADING_IN_MEMOS");
+        set_send_mode_choice("").unwrap();
     }
 
     #[test]

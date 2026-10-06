@@ -1,10 +1,13 @@
 <script lang="ts">
-  // Lineage records on their way out (0.7.1). A lading used to be delivered once, to one fixed
-  // address, and a failure was a console line. Here it is a mark the user can see, with one
-  // button to retry, one to save it as a file for the recipient, and one to take a file in.
+  // Lineage, as the user sees it (0.7.1).
   //
-  // `txid` narrows it to the record of one transfer: the line shown under a finished send.
-  // Without it this is the Settings card, which also holds the drop-box choice.
+  // The Settings card is one switch and a repair kit. The switch: lineage travels in the
+  // transfer itself (the Knotline), so there is nothing to deliver and nobody in the middle. The
+  // repair kit: a sent record can be saved as a file for the recipient, and a file can be opened,
+  // for the cases the Knotline does not cover (an older wallet on the other side, the switch off).
+  // A drop-box is still possible but only if one is named; none is contacted by default.
+  //
+  // `txid` narrows the component to the record of one transfer: the line under a finished send.
   import { invoke } from "@tauri-apps/api/core";
 
   type Outgoing = {
@@ -12,6 +15,7 @@
     delivered: boolean; carried: boolean; delivered_at: string | null; note: string | null; created_at: string;
   };
   type Box = { choice: string; in_use: string | null };
+  type Route = { route: "knotline" | "whole" | "off"; source: "settings" | "default" | "environment" };
 
   let { txid = null }: { txid?: string | null } = $props();
 
@@ -19,8 +23,8 @@
   let box = $state<Box | null>(null);
   let busy = $state<string | null>(null);
   let message = $state<{ ok: boolean; text: string } | null>(null);
-  let editing = $state(false);
-  let mode = $state<"auto" | "custom" | "off">("auto");
+  let mode = $state<"custom" | "off">("off");
+  let route = $state<Route | null>(null);
   let custom = $state("");
   let fileInput: HTMLInputElement;
 
@@ -31,16 +35,26 @@
     try { rows = await invoke<Outgoing[]>("lineage_outgoing"); } catch { rows = []; }
     try {
       box = await invoke<Box>("get_dropbox");
-      mode = box.choice === "off" ? "off" : box.choice ? "custom" : "auto";
+      mode = box.choice && box.choice !== "off" ? "custom" : "off";
       custom = box.choice && box.choice !== "off" ? box.choice : "";
     } catch { box = null; }
+    try { route = await invoke<Route>("get_lineage_route"); } catch { route = null; }
   }
   load();
+
+  async function setRoute(next: "knotline" | "off") {
+    message = null;
+    try {
+      await invoke("set_lineage_route", { route: next });
+      localStorage.setItem("zecboat.lineage", next);
+      await load();
+    } catch (e) { message = { ok: false, text: String(e) }; }
+  }
 
   function short(s: string, n = 10) { return s.length > n * 2 ? `${s.slice(0, n)}…${s.slice(-6)}` : s; }
   function where(b: Box | null) {
     if (!b) return "…";
-    if (!b.in_use) return "none: records are handed over as files";
+    if (!b.in_use) return "none";
     return b.in_use.replace(/^https?:\/\//, "").replace(/^file:\/\//, "shared folder ");
   }
 
@@ -77,12 +91,12 @@
   }
 
   async function saveBox() {
-    const choice = mode === "auto" ? "" : mode === "off" ? "off" : custom.trim();
+    const choice = mode === "off" ? "off" : custom.trim();
     message = null;
     try {
       await invoke("set_dropbox", { choice });
       if (choice) localStorage.setItem("zecboat.dropbox", choice); else localStorage.removeItem("zecboat.dropbox");
-      editing = false; await load();
+      await load();
     } catch (e) { message = { ok: false, text: String(e) }; }
   }
 </script>
@@ -103,46 +117,56 @@
   {/each}
 {:else}
   <div class="box-row">
-    <span class="mark {box?.in_use ? 'ok' : 'wait'}">●</span>
-    <span class="where" title="Where a lineage record is left for the recipient to collect. It is sealed: only the recipient's wallet can open it. The drop-box does see the network addresses of both sides.">Drop-box: {where(box)}</span>
-    <button class="mini" onclick={() => (editing = !editing)}>{editing ? "Close" : "Change"}</button>
+    <span class="mark {route?.route === 'off' ? 'wait' : 'ok'}">●</span>
+    <span class="where" title="The lineage record is written into the same transaction as the item, sealed so that only its new owner can read it. No server is involved. It adds outputs to the transfer, so the fee is higher; the confirmation screen shows it.">
+      {#if route?.route === "off"}Lineage does not travel with a sent item{:else}Lineage travels in the transfer · Knotline{/if}
+    </span>
+    {#if route?.source === "environment"}
+      <span class="when" title="Set by the ZECBOAT_LADING_IN_MEMOS variable this wallet was started with; it outranks this switch.">set at start</span>
+    {:else if route?.route === "off"}
+      <button class="mini primary" onclick={() => setRoute("knotline")}>Turn on</button>
+    {:else}
+      <button class="mini" onclick={() => setRoute("off")}>Turn off</button>
+    {/if}
   </div>
-  {#if editing}
-    <div class="edit">
-      <label><input type="radio" bind:group={mode} value="auto" /> Automatic</label>
-      <label><input type="radio" bind:group={mode} value="custom" /> My own</label>
-      <label><input type="radio" bind:group={mode} value="off" /> None, files only</label>
-      {#if mode === "custom"}
-        <input type="text" bind:value={custom} placeholder="https://… or file:///folder" spellcheck="false" />
-      {/if}
-      <button class="mini primary" onclick={saveBox} disabled={mode === "custom" && !custom.trim()}>Save</button>
-    </div>
-  {/if}
 
   {#if rows.length}
     <div class="list">
       {#each shown as r}
         <div class="item">
-          <span class="mark {r.delivered ? 'ok' : 'wait'}" title={r.carried ? "Carried in the transfer itself" : r.delivered ? `Delivered ${r.delivered_at ?? ""}` : (r.note ?? "Not delivered yet")}>{r.delivered ? "✓" : "⚠"}</span>
+          <span class="mark {r.delivered ? 'ok' : 'wait'}" title={r.carried ? "Carried in the transfer itself" : r.delivered ? `Delivered ${r.delivered_at ?? ""}` : (r.note ?? "Not handed over yet")}>{r.delivered ? "✓" : "⚠"}</span>
           <span class="mono" title="Transfer {r.txid}">to {short(r.recipient, 8)}</span>
           <span class="when">{r.created_at.slice(0, 10)}</span>
           <span class="spacer"></span>
-          {#if !r.carried}
+          {#if !r.carried && box?.in_use}
             <button class="mini" onclick={() => retry(r.consignment_hash)} disabled={!!busy}>{r.delivered ? "Send again" : "Retry"}</button>
           {/if}
           <button class="mini" onclick={() => save(r.consignment_hash)} disabled={!!busy}>Save file</button>
         </div>
       {/each}
     </div>
-    {#if waiting > 1}
-      <button class="mini" onclick={() => retry(null)} disabled={!!busy}>Retry all {waiting} waiting</button>
-    {/if}
   {/if}
 
   <div class="import">
     <input type="file" accept=".json,application/json" bind:this={fileInput} onchange={takeFile} hidden />
     <button class="mini" onclick={() => fileInput.click()} disabled={!!busy}>Open a lineage file…</button>
   </div>
+
+  <details class="more">
+    <summary>Drop-box: {where(box)}</summary>
+    <p class="note">Optional. A place where a record is left for the recipient to collect. It cannot read or change a record, but it sees the network address of both sides. None is used unless you name one.</p>
+    <div class="edit">
+      <label><input type="radio" bind:group={mode} value="off" /> None</label>
+      <label><input type="radio" bind:group={mode} value="custom" /> My own</label>
+      {#if mode === "custom"}
+        <input type="text" bind:value={custom} placeholder="https://… or file:///folder" spellcheck="false" />
+      {/if}
+      <button class="mini primary" onclick={saveBox} disabled={mode === "custom" && !custom.trim()}>Save</button>
+    </div>
+    {#if box?.in_use && waiting > 0}
+      <button class="mini" onclick={() => retry(null)} disabled={!!busy}>Retry {waiting} waiting</button>
+    {/if}
+  </details>
 {/if}
 
 {#if message}
@@ -163,6 +187,9 @@
   .edit { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; margin-top: 0.6rem; font-size: 0.9rem; }
   .edit input[type="text"] { flex: 1 1 100%; padding: 0.45rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(0, 0, 0, 0.25); color: inherit; }
   .import { margin-top: 0.8rem; }
+  .more { margin-top: 0.8rem; font-size: 0.85rem; }
+  .more summary { cursor: pointer; opacity: 0.75; }
+  .note { margin: 0.5rem 0; opacity: 0.75; }
   .mini { font-size: 0.8rem; padding: 0.25rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.2); background: transparent; color: inherit; cursor: pointer; }
   .mini:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
   .mini:disabled { opacity: 0.5; cursor: default; }

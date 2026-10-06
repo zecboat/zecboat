@@ -327,23 +327,36 @@ pub fn dropbox_choice() -> String {
     DROPBOX_CHOICE.lock().unwrap().clone()
 }
 
-/// Whether any drop-box is in use.
-pub fn dropbox_enabled() -> bool {
-    dropbox_choice() != "off"
-}
-
-/// The drop-box base. `file://<dir>` for a shared directory, otherwise an HTTP base URL.
-/// Order: the choice made in Settings, then `ZECBOAT_DROPBOX`, then `{registry}/dropbox`.
-pub fn dropbox_base() -> String {
-    let chosen = dropbox_choice();
-    if !chosen.is_empty() && chosen != "off" {
-        return chosen;
-    }
+fn dropbox_from_env() -> Option<String> {
     std::env::var("ZECBOAT_DROPBOX")
         .ok()
         .map(|s| s.trim().trim_end_matches('/').to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| format!("{}/dropbox", crate::rpc::registry_base()))
+}
+
+/// Whether any drop-box is in use: only when one is named, in Settings or by `ZECBOAT_DROPBOX`.
+///
+/// Until 2026-10-06 a wallet with no choice fell back to `{registry}/dropbox`, that is
+/// zecboat.com. The owner rejected that: its operator would see the network address of both
+/// sides of every transfer. With the Knotline the record travels in the transfer itself, so
+/// nothing is contacted by default.
+pub fn dropbox_enabled() -> bool {
+    let chosen = dropbox_choice();
+    chosen != "off" && (!chosen.is_empty() || dropbox_from_env().is_some())
+}
+
+/// The drop-box base, or an empty string when none is in use. `file://<dir>` for a shared
+/// directory, otherwise an HTTP base URL. Order: the choice made in Settings, then
+/// `ZECBOAT_DROPBOX`.
+pub fn dropbox_base() -> String {
+    let chosen = dropbox_choice();
+    if chosen == "off" {
+        return String::new();
+    }
+    if !chosen.is_empty() {
+        return chosen;
+    }
+    dropbox_from_env().unwrap_or_default()
 }
 
 fn dropbox_file(base: &str, hash_hex: &str) -> PathBuf {
@@ -947,6 +960,11 @@ mod tests {
         assert_eq!(dropbox_get(&h).unwrap().as_deref(), Some(&b"sealed-1"[..]));
 
         std::env::remove_var("ZECBOAT_DROPBOX");
+        // Nothing named anywhere: no drop-box, and no fallback to a web address.
+        assert!(!dropbox_enabled());
+        assert_eq!(dropbox_base(), "");
+        assert!(dropbox_put(&h, b"x").is_err());
+        assert_eq!(dropbox_get(&h).unwrap(), None);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&other);
     }

@@ -1,5 +1,12 @@
-//! PROTOTYPE (2026-10-06): the **Knotline**, an asset's lineage kept on the chain as a line of
-//! sealed knots (the owner's name for variant B of the "encrypted lineage log" design note).
+//! The **Knotline**: an asset's lineage kept on the chain as a line of sealed knots (the
+//! owner's name for variant B of the "encrypted lineage log" design note, 2026-10-06).
+//!
+//! **Wire format: Knotline v1, FROZEN by the owner's decision of 2026-10-06.** Three mainnet
+//! transactions of that day already carry it. Everything in "Wire forms" below, the derivation
+//! of a knot's address, and the packing of a knot are pinned by the `v1_format_is_frozen` test.
+//! A change to any of them is a new version: it gets a new version byte (and new tags if the
+//! chunking changes), and readers keep reading v1 forever. No padding: a line that starts with
+//! one proof and every later knot take the same twelve outputs.
 //!
 //! Each transfer ties ONE knot: its own hop. The knot is written as memos of zero-value outputs
 //! to a one-time address derived from a fresh random key; the key goes to the new owner in one
@@ -282,6 +289,44 @@ mod tests {
         }
         let (bundle, _) = b.build::<i64>(OsRng).unwrap().unwrap();
         bundle.actions().iter().map(|a| a.clone().map(|_| ())).collect()
+    }
+
+    /// Knotline v1 is frozen. If this test fails, the change being made breaks every knot
+    /// already on the chain: do not edit the expected values, add a new version instead.
+    #[test]
+    fn v1_format_is_frozen() {
+        use sha2::{Digest, Sha256};
+        let hx = |b: &[u8]| b.iter().map(|v| format!("{v:02x}")).collect::<String>();
+        assert_eq!((KNOT_TAG, KEY_TAG, HEAD, CHUNK), (b"WKR1", b"WKK1", 9, 503));
+
+        // A knot's address is a fixed function of its key.
+        let (_, addr) = knot_keys(&[0x11; 32]);
+        assert_eq!(hx(&addr.to_raw_address_bytes()), "35c679162ac1cf05fe3a21d14b48a0f6617bd35ed509e6b685df34acc6edd70fb9f26b9a8e3eff4ada4abf");
+
+        // Packing: a later knot (previous key and transaction, one hop) and a first knot.
+        let h = ProofEntry {
+            kind: KIND_V1.to_string(),
+            circuit: "hop".to_string(),
+            instance: ["01".repeat(32), "02".repeat(32), "03".repeat(32)],
+            anchor_height: 3_508_581,
+            proof: base64::engine::general_purpose::STANDARD.encode(vec![7u8; 4960]),
+        };
+        let later = pack_knot(&Knot { prev: Some(([0x22; 32], [0x33; 32])), genesis: None, hops: vec![h.clone()] }).unwrap();
+        let first = pack_knot(&Knot { prev: None, genesis: Some(("ab".repeat(32), 3)), hops: vec![ProofEntry { circuit: "genesis".to_string(), ..h }] }).unwrap();
+        assert_eq!((later.len(), hx(&Sha256::digest(&later)).as_str()), (5131, "1e949f7508ddfaba4f351b07bf4a48c2aa86bcdbc3b61ac03f88670c65dc81eb"));
+        assert_eq!((first.len(), hx(&Sha256::digest(&first)).as_str()), (5103, "dcf4b5e68906d40b45493134c3c00cf8c14c93cd9c69402de0a3c061463bf3fd"));
+        assert_eq!(&later[..2], &[1, 1], "version 1, flags: has-previous");
+        assert_eq!(&first[..2], &[1, 2], "version 1, flags: has-genesis");
+
+        // Chunking: eleven memos either way, plus the key memo: twelve outputs, no padding.
+        let memos = chunks(KNOT_TAG, &later).unwrap();
+        assert_eq!((memos.len(), chunks(KNOT_TAG, &first).unwrap().len()), (11, 11));
+        assert_eq!(&memos[0][..9], &[0xF5, b'W', b'K', b'R', b'1', 0, 0, 11, 0]);
+        assert_eq!(&memos[10][..9], &[0xF5, b'W', b'K', b'R', b'1', 10, 0, 11, 0]);
+        let km = key_memo(&[0x44; 32]);
+        assert_eq!(&km[..9], &[0xF5, b'W', b'K', b'K', b'1', 0, 0, 1, 0]);
+        assert_eq!(&km[9..41], &[0x44; 32]);
+        assert!(km[41..].iter().all(|b| *b == 0));
     }
 
     #[test]

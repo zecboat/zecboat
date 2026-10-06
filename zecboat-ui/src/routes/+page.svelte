@@ -87,6 +87,14 @@
       console.error("Could not restore the saved node endpoint:", e);
     }
 
+    // 0.7.1: whether lineage travels in the transfer (Knotline) is a saved choice too.
+    try {
+      const route = localStorage.getItem("zecboat.lineage");
+      if (route) invoke("set_lineage_route", { route });
+    } catch (e) {
+      console.error("Could not restore the saved lineage route:", e);
+    }
+
     // 0.7.1: the drop-box for lineage records is a choice too, restored the same way.
     try {
       const box = localStorage.getItem("zecboat.dropbox");
