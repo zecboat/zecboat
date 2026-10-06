@@ -133,6 +133,25 @@ impl LightwalletdOracle {
         Ok(ts)
     }
 
+    /// The raw bytes of a mined transaction and its height (`GetTransaction`); `None` if the
+    /// server does not know it as mined. `txid` in display order.
+    pub fn raw_transaction(&self, txid: &[u8; 32]) -> Result<Option<(u32, Vec<u8>)>> {
+        let url = self.url.clone();
+        let hash = reversed(*txid).to_vec();
+        on_thread(move || async move {
+            let mut c = connect(&url).await?;
+            let raw = match c.get_transaction(TxFilter { block: None, index: 0, hash }).await {
+                Ok(r) => r.into_inner(),
+                Err(status) if status.code() == tonic::Code::NotFound => return Ok(None),
+                Err(e) => return Err(anyhow!("GetTransaction: {e}")),
+            };
+            if raw.height == 0 || raw.height > u32::MAX as u64 || raw.data.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some((raw.height as u32, raw.data)))
+        })
+    }
+
     /// The Ironwood Actions of a mined transaction (`GetTransaction`, then parsed locally).
     /// `txid` is in display order; lightwalletd wants the internal byte order.
     pub fn ironwood_actions(&self, txid: &[u8; 32]) -> Result<Option<(u32, Vec<IronwoodAction>)>> {

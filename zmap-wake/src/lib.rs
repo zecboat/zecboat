@@ -33,6 +33,7 @@ pub mod attest;
 pub mod circuit;
 pub mod keys;
 pub mod lading;
+pub mod knotline;
 pub mod manifest;
 pub mod oracle;
 #[cfg(feature = "lightwalletd")]

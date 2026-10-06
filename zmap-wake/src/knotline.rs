@@ -1,0 +1,347 @@
+//! PROTOTYPE (2026-10-06): the **Knotline**, an asset's lineage kept on the chain as a line of
+//! sealed knots (the owner's name for variant B of the "encrypted lineage log" design note).
+//!
+//! Each transfer ties ONE knot: its own hop. The knot is written as memos of zero-value outputs
+//! to a one-time address derived from a fresh random key; the key goes to the new owner in one
+//! memo of their own; and each knot carries the key and the transaction of the knot before it.
+//! A new owner follows the line back from the newest knot to the first and rebuilds the lading.
+//! An earlier owner never receives later keys. The public sees outputs it cannot read. There is
+//! no registry and no key built into any wallet.
+//!
+//! Nothing here touches the circuits, the proofs or the lading's format: the rebuilt lading is
+//! byte-identical to the one delivered whole, so the `consignment_hash` in the carrier's memo
+//! still binds it.
+//!
+//! Wire forms (ZIP 302 lead byte 0xF5, "arbitrary data"). The tags and the derivation string
+//! below are already on the main network (two transactions of 2026-10-06) and predate the name,
+//! so they stay as they are:
+//!   knot chunk    0xF5 | "WKR1" | chunk index u16 | chunk count u16 | data     (to the knot's address)
+//!   key memo      0xF5 | "WKK1" | 0u16 | 1u16 | key 32                         (to the new owner)
+//! Knot data: version 1 | flags (bit0 has-previous, bit1 has-genesis) | [previous key 32,
+//! previous txid 32 (stored order)] | [genesis txid 32, action index u32] | hops u16 | per hop:
+//! circuit 0/1, instance 3x32, anchor height u32, proof length u16, proof.
+
+use std::collections::HashSet;
+
+use anyhow::{anyhow, Result};
+use base64::Engine;
+use orchard::keys::{FullViewingKey, PreparedIncomingViewingKey, Scope, SpendingKey};
+use orchard::note_encryption::IronwoodDomain;
+use orchard::Action;
+use zcash_note_encryption::try_note_decryption;
+
+use crate::lading::{Lading, ProofEntry};
+use crate::oracle::decode_hex_32;
+
+pub const KNOT_TAG: &[u8; 4] = b"WKR1";
+pub const KEY_TAG: &[u8; 4] = b"WKK1";
+const HEAD: usize = 1 + 4 + 2 + 2;
+const CHUNK: usize = 512 - HEAD;
+const KIND_V1: &str = "wake-v1";
+/// The longest walk back a reader will make.
+pub const MAX_KNOTS: usize = 4096;
+
+fn hexs(x: &[u8]) -> String {
+    x.iter().map(|v| format!("{v:02x}")).collect()
+}
+
+/// The one-time address a record under `key` is written to, and the viewing key that reads it.
+/// Nobody holds a spending key for it on purpose: the outputs carry no value.
+pub fn knot_keys(key: &[u8; 32]) -> (FullViewingKey, orchard::Address) {
+    let mut counter = 0u8;
+    loop {
+        let h = blake2b_simd::Params::new()
+            .hash_length(32)
+            .personal(b"ZbWakeRecordV1__")
+            .to_state()
+            .update(key)
+            .update(&[counter])
+            .finalize();
+        let seed: [u8; 32] = h.as_bytes().try_into().expect("32 bytes");
+        if let Some(sk) = Option::<SpendingKey>::from(SpendingKey::from_bytes(seed)) {
+            let fvk = FullViewingKey::from(&sk);
+            let addr = fvk.address_at(0u32, Scope::External);
+            return (fvk, addr);
+        }
+        counter = counter.wrapping_add(1);
+    }
+}
+
+/// One record of the log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Knot {
+    /// The key and the transaction (stored byte order) of the record before this one.
+    pub prev: Option<([u8; 32], [u8; 32])>,
+    /// The genesis outpoint; present in the first record only.
+    pub genesis: Option<(String, u32)>,
+    pub hops: Vec<ProofEntry>,
+}
+
+pub fn pack_knot(r: &Knot) -> Result<Vec<u8>> {
+    let mut out = vec![1u8, r.prev.is_some() as u8 | (r.genesis.is_some() as u8) << 1];
+    if let Some((k, t)) = &r.prev {
+        out.extend_from_slice(k);
+        out.extend_from_slice(t);
+    }
+    if let Some((txid, idx)) = &r.genesis {
+        out.extend_from_slice(&decode_hex_32(txid)?);
+        out.extend_from_slice(&idx.to_le_bytes());
+    }
+    out.extend_from_slice(&u16::try_from(r.hops.len())?.to_le_bytes());
+    for h in &r.hops {
+        if h.kind != KIND_V1 {
+            return Err(anyhow!("proof kind {} cannot be packed", h.kind));
+        }
+        out.push(match h.circuit.as_str() {
+            "genesis" => 0,
+            "hop" => 1,
+            other => return Err(anyhow!("circuit {other} cannot be packed")),
+        });
+        for i in &h.instance {
+            out.extend_from_slice(&decode_hex_32(i)?);
+        }
+        out.extend_from_slice(&h.anchor_height.to_le_bytes());
+        let proof = base64::engine::general_purpose::STANDARD.decode(&h.proof)?;
+        out.extend_from_slice(&u16::try_from(proof.len())?.to_le_bytes());
+        out.extend_from_slice(&proof);
+    }
+    Ok(out)
+}
+
+pub fn unpack_knot(b: &[u8]) -> Result<Knot> {
+    let mut i = 0usize;
+    let mut take = |n: usize| -> Result<&[u8]> {
+        let s = b.get(i..i + n).ok_or_else(|| anyhow!("knot truncated"))?;
+        i += n;
+        Ok(s)
+    };
+    if take(1)?[0] != 1 {
+        return Err(anyhow!("unknown knot version"));
+    }
+    let flags = take(1)?[0];
+    if flags & !3 != 0 {
+        return Err(anyhow!("unknown knot flags"));
+    }
+    let prev = if flags & 1 != 0 { Some((take(32)?.try_into()?, take(32)?.try_into()?)) } else { None };
+    let genesis = if flags & 2 != 0 { Some((hexs(take(32)?), u32::from_le_bytes(take(4)?.try_into()?))) } else { None };
+    let n = u16::from_le_bytes(take(2)?.try_into()?) as usize;
+    if n == 0 {
+        return Err(anyhow!("a knot with no hop"));
+    }
+    let mut hops = Vec::with_capacity(n.min(64));
+    for _ in 0..n {
+        let circuit = match take(1)?[0] {
+            0 => "genesis",
+            1 => "hop",
+            _ => return Err(anyhow!("unknown circuit in knot")),
+        }
+        .to_string();
+        let instance = [hexs(take(32)?), hexs(take(32)?), hexs(take(32)?)];
+        let anchor_height = u32::from_le_bytes(take(4)?.try_into()?);
+        let len = u16::from_le_bytes(take(2)?.try_into()?) as usize;
+        let proof = base64::engine::general_purpose::STANDARD.encode(take(len)?);
+        hops.push(ProofEntry { kind: KIND_V1.to_string(), circuit, instance, anchor_height, proof });
+    }
+    Ok(Knot { prev, genesis, hops })
+}
+
+/// Split `data` over memos under `tag`.
+pub fn chunks(tag: &[u8; 4], data: &[u8]) -> Result<Vec<[u8; 512]>> {
+    let total = u16::try_from(data.chunks(CHUNK).count())?;
+    Ok(data
+        .chunks(CHUNK)
+        .enumerate()
+        .map(|(i, c)| {
+            let mut m = [0u8; 512];
+            m[0] = 0xF5;
+            m[1..5].copy_from_slice(tag);
+            m[5..7].copy_from_slice(&(i as u16).to_le_bytes());
+            m[7..9].copy_from_slice(&total.to_le_bytes());
+            m[HEAD..HEAD + c.len()].copy_from_slice(c);
+            m
+        })
+        .collect())
+}
+
+/// The memo that hands `key` to the new owner.
+pub fn key_memo(key: &[u8; 32]) -> [u8; 512] {
+    chunks(KEY_TAG, key).expect("one chunk")[0]
+}
+
+/// Reassemble what the memos carry under `tag`; `None` unless every chunk is there exactly once.
+/// A memo that lost trailing zero bytes in storage is accepted.
+pub fn from_memos<'a>(memos: impl IntoIterator<Item = &'a [u8]>, tag: &[u8; 4]) -> Option<Vec<u8>> {
+    let mut parts: Vec<(u16, u16, Vec<u8>)> = Vec::new();
+    for m in memos {
+        if m.len() < HEAD || m[0] != 0xF5 || &m[1..5] != tag {
+            continue;
+        }
+        let mut data = m[HEAD..].to_vec();
+        data.resize(CHUNK, 0);
+        parts.push((u16::from_le_bytes([m[5], m[6]]), u16::from_le_bytes([m[7], m[8]]), data));
+    }
+    parts.sort_by_key(|p| p.0);
+    let total = parts.first()?.1 as usize;
+    if total == 0 || parts.len() != total || parts.iter().enumerate().any(|(i, p)| p.0 as usize != i || p.1 as usize != total) {
+        return None;
+    }
+    Some(parts.into_iter().flat_map(|p| p.2).collect())
+}
+
+/// The key a set of the owner's own memos hands over, if one is among them.
+pub fn key_from_memos<'a>(memos: impl IntoIterator<Item = &'a [u8]>) -> Option<[u8; 32]> {
+    from_memos(memos, KEY_TAG)?.get(..32)?.try_into().ok()
+}
+
+/// The record that `key` opens among these actions, if any.
+pub fn read_knot<T>(actions: &[Action<T>], key: &[u8; 32]) -> Option<Vec<u8>> {
+    let (fvk, _) = knot_keys(key);
+    let ivk = PreparedIncomingViewingKey::new(&fvk.to_ivk(Scope::External));
+    let memos: Vec<[u8; 512]> = actions
+        .iter()
+        .filter_map(|a| try_note_decryption(&IronwoodDomain::for_action(a), &ivk, a).map(|(_, _, memo)| memo))
+        .collect();
+    from_memos(memos.iter().map(|m| &m[..]), KNOT_TAG)
+}
+
+/// The record that `key` opens in a raw transaction mined at `height`.
+pub fn read_knot_in_tx(raw: &[u8], height: u32, network: &zcash_protocol::consensus::Network, key: &[u8; 32]) -> Result<Option<Vec<u8>>> {
+    use zcash_primitives::transaction::Transaction;
+    use zcash_protocol::consensus::{BlockHeight, BranchId};
+    let branch = BranchId::for_height(network, BlockHeight::from_u32(height));
+    let tx = Transaction::read(raw, branch).map_err(|e| anyhow!("cannot parse the transaction: {e}"))?;
+    Ok(tx.ironwood_bundle().and_then(|b| {
+        let actions: Vec<_> = b.actions().iter().cloned().collect();
+        read_knot(&actions, key)
+    }))
+}
+
+/// Walk back from the record that `key` opens in transaction `txid` to the first record, and
+/// rebuild the lading. `open(key, txid)` returns the packed record that `key` opens in that
+/// transaction, or `None`.
+pub fn walk_back(
+    mut key: [u8; 32],
+    mut txid: [u8; 32],
+    open: &mut dyn FnMut(&[u8; 32], &[u8; 32]) -> Result<Option<Vec<u8>>>,
+) -> Result<(Lading, usize)> {
+    let mut seen: HashSet<[u8; 32]> = HashSet::new();
+    let mut groups: Vec<Vec<ProofEntry>> = Vec::new();
+    let genesis = loop {
+        if !seen.insert(txid) || seen.len() > MAX_KNOTS {
+            return Err(anyhow!("the Knotline loops or is longer than {MAX_KNOTS} knots"));
+        }
+        let bytes = open(&key, &txid)?.ok_or_else(|| anyhow!("no knot opens with the key in hand in transaction {}…", hexs(&txid[..6])))?;
+        let r = unpack_knot(&bytes)?;
+        groups.push(r.hops);
+        match r.prev {
+            Some((k, t)) => {
+                if r.genesis.is_some() {
+                    return Err(anyhow!("a knot names both a predecessor and a genesis"));
+                }
+                key = k;
+                txid = t;
+            }
+            None => break r.genesis.ok_or_else(|| anyhow!("the first knot names no genesis"))?,
+        }
+    };
+    let fetched = groups.len();
+    let mut lading = Lading::new(&genesis.0, genesis.1);
+    for g in groups.into_iter().rev() {
+        lading.hops.extend(g);
+    }
+    Ok((lading, fetched))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orchard::builder::{Builder, BundleType};
+    use orchard::bundle::BundleVersion;
+    use orchard::value::NoteValue;
+    use rand::rngs::OsRng;
+    use std::collections::HashMap;
+
+    fn hop(j: usize) -> ProofEntry {
+        ProofEntry {
+            kind: KIND_V1.to_string(),
+            circuit: if j == 0 { "genesis" } else { "hop" }.to_string(),
+            instance: [format!("{:064x}", j + 1), format!("{:064x}", j + 2), format!("{:064x}", j + 3)],
+            anchor_height: 3_500_000 + j as u32,
+            proof: base64::engine::general_purpose::STANDARD.encode(vec![j as u8 + 1; 4960]),
+        }
+    }
+
+    /// Unproven actions carrying a key memo to `owner` and a record under `key`.
+    fn actions(owner: orchard::Address, key: &[u8; 32], record: &[u8]) -> Vec<Action<()>> {
+        let v = BundleVersion::ironwood_v3();
+        let mut b = Builder::new(BundleType::DEFAULT, v, v.default_flags(), orchard::tree::Anchor::empty_tree()).unwrap();
+        b.add_output(None, owner, NoteValue::from_raw(0), key_memo(key)).unwrap();
+        let (_, to) = knot_keys(key);
+        for m in chunks(KNOT_TAG, record).unwrap() {
+            b.add_output(None, to, NoteValue::from_raw(0), m).unwrap();
+        }
+        let (bundle, _) = b.build::<i64>(OsRng).unwrap().unwrap();
+        bundle.actions().iter().map(|a| a.clone().map(|_| ())).collect()
+    }
+
+    #[test]
+    fn records_pack_losslessly() {
+        let first = Knot { prev: None, genesis: Some(("ab".repeat(32), 7)), hops: vec![hop(0), hop(1)] };
+        let later = Knot { prev: Some(([9u8; 32], [8u8; 32])), genesis: None, hops: vec![hop(2)] };
+        for r in [first, later] {
+            assert_eq!(unpack_knot(&pack_knot(&r).unwrap()).unwrap(), r);
+        }
+        assert_eq!(chunks(KNOT_TAG, &pack_knot(&Knot { prev: Some(([1; 32], [2; 32])), genesis: None, hops: vec![hop(3)] }).unwrap()).unwrap().len(), 11);
+        assert!(unpack_knot(&[1, 0, 0, 0]).is_err(), "no hop");
+        assert!(unpack_knot(&[2]).is_err(), "version");
+    }
+
+    #[test]
+    fn a_new_owner_walks_back_and_an_old_key_reads_nothing_newer() {
+        let owner = knot_keys(&[42u8; 32]).1; // any address will do as the owner's
+        let keys = [[1u8; 32], [2u8; 32], [3u8; 32]];
+        let ids = [[11u8; 32], [12u8; 32], [13u8; 32]];
+        let mut chain: HashMap<[u8; 32], Vec<Action<()>>> = HashMap::new();
+        let want = {
+            let mut l = Lading::new(&"ab".repeat(32), 7);
+            l.hops = vec![hop(0), hop(1), hop(2)];
+            l
+        };
+        for j in 0..3 {
+            let r = Knot {
+                prev: (j > 0).then(|| (keys[j - 1], ids[j - 1])),
+                genesis: (j == 0).then(|| ("ab".repeat(32), 7)),
+                hops: vec![hop(j)],
+            };
+            chain.insert(ids[j], actions(owner, &keys[j], &pack_knot(&r).unwrap()));
+        }
+        let mut open = |k: &[u8; 32], t: &[u8; 32]| Ok(chain.get(t).and_then(|a| read_knot(a, k)));
+        let (got, fetched) = walk_back(keys[2], ids[2], &mut open).unwrap();
+        assert_eq!(fetched, 3);
+        assert_eq!(got.to_bytes(), want.to_bytes(), "byte-identical to the lading delivered whole");
+
+        // The key of record 2 opens record 2 and what came before, never record 3.
+        assert!(read_knot(&chain[&ids[2]], &keys[1]).is_none());
+        let (older, _) = walk_back(keys[1], ids[1], &mut open).unwrap();
+        assert_eq!(older.hops.len(), 2);
+        // A wrong key, a missing transaction and a loop are errors, not partial ladings.
+        assert!(walk_back([7u8; 32], ids[2], &mut open).is_err());
+        assert!(walk_back(keys[2], [99u8; 32], &mut open).is_err());
+        let looped = Knot { prev: Some((keys[0], ids[0])), genesis: None, hops: vec![hop(1)] };
+        chain.insert(ids[0], actions(owner, &keys[0], &pack_knot(&looped).unwrap()));
+        let mut open = |k: &[u8; 32], t: &[u8; 32]| Ok(chain.get(t).and_then(|a| read_knot(a, k)));
+        assert!(walk_back(keys[0], ids[0], &mut open).unwrap_err().to_string().contains("loops"));
+    }
+
+    #[test]
+    fn the_key_memo_is_found_among_other_memos_and_trimmed_storage() {
+        let k = [5u8; 32];
+        let mut stored = key_memo(&k).to_vec();
+        while stored.last() == Some(&0) {
+            stored.pop();
+        }
+        let others: Vec<Vec<u8>> = vec![vec![0xF6], br#"{"asset_id":"x"}"#.to_vec(), stored];
+        assert_eq!(key_from_memos(others.iter().map(|m| m.as_slice())), Some(k));
+        assert_eq!(key_from_memos([&[0xF6u8][..]]), None);
+    }
+}

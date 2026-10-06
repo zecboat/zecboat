@@ -91,6 +91,15 @@ impl Chain {
         }
     }
 
+    /// The raw bytes and height of a mined transaction; `txid_internal` in stored byte order.
+    pub fn raw_transaction(&self, txid_internal: &[u8; 32]) -> Result<Option<(u32, Vec<u8>)>> {
+        let display = reversed(*txid_internal);
+        match self {
+            Chain::Node(n, _) => n.raw_transaction(&hex::encode(display)),
+            Chain::Provider(p) => p.raw_transaction(&display),
+        }
+    }
+
     /// In words, for a badge: who answered.
     pub fn described(&self) -> String {
         match self {
@@ -438,6 +447,26 @@ pub fn fetch_missing_consignments(db_path: &str) -> Result<FetchReport> {
             if crate::zmap::consignment_by_hash(&conn, hash)?.is_some() {
                 report.already_held += 1;
                 continue;
+            }
+            // Prototype, Knotline: a key memo in the carrier's transaction opens the newest knot,
+            // and each knot leads to the one before it.
+            match crate::wake_memo::lading_from_knotline(&conn, &c.txid_bytes, hash) {
+                Ok(Some((bytes, walked))) => {
+                    match crate::zmap::store_consignment(&conn, &h.asset_id, None, Some(c.note_id), &bytes, None) {
+                        Ok(_) => {
+                            println!("[wake] lading for {} rebuilt from its Knotline: {walked} knot(s) followed back", h.name);
+                            report.fetched += 1;
+                        }
+                        Err(e) => report.failed.push(format!("{}: {e}", h.name)),
+                    }
+                    continue;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("[wake] Knotline for {}: {e}", h.name);
+                    report.failed.push(format!("{}: Knotline: {e}", h.name));
+                    continue;
+                }
             }
             // First choice (prototype): the record may be in the carrier's own transaction.
             match crate::wake_memo::record_in_transaction(&conn, &c.txid_bytes, hash) {

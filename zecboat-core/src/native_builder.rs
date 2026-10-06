@@ -551,15 +551,20 @@ pub fn send_zmap_asset(
             &oracle,
         )?
     };
-    // PROTOTYPE (wake_memo): with ZECBOAT_LADING_IN_MEMOS=1 a lading of up to three proofs
-    // travels in this same transaction, as memos of zero-value outputs to the recipient.
-    let record_memos: Vec<[u8; 512]> = match &wake_lading {
-        Some(l) if crate::wake_memo::sending_enabled() => crate::wake_memo::memos_for(&l.bytes, l.hops)?.unwrap_or_default(),
-        _ => Vec::new(),
+    // PROTOTYPE (wake_memo): with ZECBOAT_LADING_IN_MEMOS set, the lading travels in this same
+    // transaction as memos of zero-value outputs: whole to the recipient (`1`), or only its
+    // newest hop as one knot on its Knotline (`knotline`).
+    let record_memos: Vec<(crate::wake_memo::ExtraTo, [u8; 512])> = match &wake_lading {
+        Some(l) => {
+            let conn = rusqlite::Connection::open_with_flags(wallet_db_path()?, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            let (extras, what) = crate::wake_memo::extra_outputs(&conn, plan.carrier.txid().as_ref(), &l.bytes, l.hops)?;
+            if !extras.is_empty() {
+                println!("[wake] carrying the lading in this transfer: {what}");
+            }
+            extras
+        }
+        None => Vec::new(),
     };
-    if !record_memos.is_empty() {
-        println!("[wake] carrying the lading in this transfer: {} memo output(s)", record_memos.len());
-    }
     match &wake_lading {
         Some(l) => println!("[wake] lading of {} proof(s) ready, sha256 {}…", l.hops, &l.hash_hex[..16]),
         None if wake.acknowledge_unproven => println!("[wake] no lading for this unit; sending it UNPROVEN as acknowledged"),
@@ -642,7 +647,14 @@ pub fn send_zmap_asset(
     // This is the ordinary state for anyone carrying pre-NU6.3 change: Orchard is closed
     // to new outputs, so old value sits there while carriers are Ironwood. Such a wallet
     // showed "insufficient funds" against a visibly healthy balance.
-    let fee_headroom = Zatoshis::from_u64(crate::zmap::CARRIER_ZAT * 6 + 5_000 * record_memos.len() as u64)
+    // Without record outputs: the long-standing 60,000. With them: the fee itself (5,000 per
+    // Action: the carrier, a change output, one per record output, and room for two fee notes)
+    // plus a small margin, instead of the 60,000 on top that refused affordable sends.
+    let fee_headroom = Zatoshis::from_u64(if record_memos.is_empty() {
+        crate::zmap::CARRIER_ZAT * 6
+    } else {
+        5_000 * (record_memos.len() as u64 + 4) + 10_000
+    })
         .map_err(|e| anyhow!("internal: bad fee headroom: {:?}", e))?;
 
     let other_pool = match source_pool {
@@ -710,10 +722,15 @@ pub fn send_zmap_asset(
     let payment = Payment::new(recipient_addr.clone(), Some(amount), Some(memo), None, None, vec![])
         .map_err(|e| anyhow!("could not construct the asset payment: {:?}", e))?;
     let mut payments = vec![payment];
-    for m in &record_memos {
+    for (to, m) in &record_memos {
         let memo = MemoBytes::from_bytes(m).map_err(|e| anyhow!("a record memo will not fit a memo field: {:?}", e))?;
+        let addr = match to {
+            crate::wake_memo::ExtraTo::Recipient => recipient_addr.clone(),
+            crate::wake_memo::ExtraTo::Address(ua) => ZcashAddress::try_from_encoded(ua)
+                .map_err(|e| anyhow!("internal: bad record address: {}", e))?,
+        };
         payments.push(
-            Payment::new(recipient_addr.clone(), Some(Zatoshis::ZERO), Some(memo), None, None, vec![])
+            Payment::new(addr, Some(Zatoshis::ZERO), Some(memo), None, None, vec![])
                 .map_err(|e| anyhow!("could not construct a record output: {:?}", e))?,
         );
     }

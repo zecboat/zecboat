@@ -60,6 +60,14 @@ required-features = ["lightwalletd"]
 name = "memo_carry"
 required-features = ["lightwalletd"]
 
+[[example]]
+name = "knotline_feasibility"
+required-features = ["lightwalletd"]
+
+[[example]]
+name = "verify_at_depth"
+required-features = ["lightwalletd"]
+
 [[bin]]
 name = "wake-issuer"
 path = "src/bin/wake-issuer.rs"

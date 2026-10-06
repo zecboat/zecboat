@@ -180,6 +180,27 @@ impl ZebradOracle {
         Ok(ts)
     }
 
+    /// The raw bytes of a mined transaction and its height; `None` if not known as mined.
+    /// `txid_hex` in display order.
+    pub fn raw_transaction(&self, txid_hex: &str) -> Result<Option<(u32, Vec<u8>)>> {
+        let v = match self.rpc("getrawtransaction", json!([txid_hex, 1])) {
+            Ok(v) => v,
+            Err(e) if e.to_string().contains("node error") => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let Some(height) = v.get("height").and_then(Value::as_u64) else {
+            return Ok(None);
+        };
+        let hex = v.get("hex").and_then(Value::as_str).ok_or_else(|| anyhow!("getrawtransaction: no hex"))?;
+        if hex.len() % 2 != 0 {
+            bail!("getrawtransaction: odd-length hex");
+        }
+        let raw = (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).context("hex"))
+            .collect::<Result<Vec<u8>>>()?;
+        Ok(Some((height as u32, raw)))
+    }
+
     /// The Ironwood Actions of a mined transaction, and the height it was mined at.
     /// `None` if the node does not know the transaction as mined.
     pub fn ironwood_actions(&self, txid_hex: &str) -> Result<Option<(u32, Vec<IronwoodAction>)>> {
