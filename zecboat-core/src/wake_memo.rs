@@ -242,7 +242,7 @@ pub fn lading_from_knotline(conn: &rusqlite::Connection, carrier_txid_internal: 
     // A transaction this wallet already holds is read from its own database; an older one is
     // asked of the chain source (own node if it answers, the provider otherwise).
     let mut chain: Option<crate::wake::Chain> = None;
-    let mut open = |k: &[u8; 32], txid: &[u8; 32]| -> Result<Option<Vec<u8>>> {
+    let mut open = |k: &[u8; 32], txid: &[u8; 32], known_height: Option<u32>| -> Result<Option<Vec<u8>>> {
         let held: Option<(Vec<u8>, Option<u32>)> = conn
             .query_row("SELECT raw, mined_height FROM transactions WHERE txid = ?1 AND raw IS NOT NULL", [txid.as_slice()], |r| Ok((r.get(0)?, r.get(1)?)))
             .ok();
@@ -250,6 +250,11 @@ pub fn lading_from_knotline(conn: &rusqlite::Connection, carrier_txid_internal: 
             Some((raw, Some(h))) => (raw, h),
             _ => {
                 let c = chain.get_or_insert_with(crate::wake::chain);
+                if let Some(h) = known_height {
+                    let mut display = *txid;
+                    display.reverse();
+                    c.hint_height(&hex::encode(display), h);
+                }
                 match c.raw_transaction(txid)? {
                     Some((h, raw)) => (raw, h),
                     None => return Ok(None),

@@ -54,7 +54,7 @@ fn main() -> Result<()> {
     let packed = log::from_memos(to_record.iter().map(|(_, m)| *m), log::KNOT_TAG).ok_or_else(|| anyhow!("record chunks do not reassemble"))?;
     let record = log::unpack_knot(&packed)?;
     println!("record: {} hop(s), names a predecessor: {}, names the genesis: {}", record.hops.len(), record.prev.is_some(), record.genesis.is_some());
-    let mut open = |_: &[u8; 32], _: &[u8; 32]| Ok(Some(packed.clone()));
+    let mut open = |_: &[u8; 32], _: &[u8; 32], _: Option<u32>| Ok(Some(packed.clone()));
     match log::walk_back(key, [0u8; 32], &mut open) {
         Ok((rebuilt, _)) if record.prev.is_none() => {
             let bytes = rebuilt.to_bytes();

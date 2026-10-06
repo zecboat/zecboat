@@ -24,7 +24,7 @@ use orchard::note::ExtractedNoteCommitment;
 use orchard::tree::Anchor;
 use tonic::transport::{Channel, Endpoint};
 use zcash_client_backend::proto::service::{
-    compact_tx_streamer_client::CompactTxStreamerClient, BlockId, ChainSpec, TxFilter,
+    compact_tx_streamer_client::CompactTxStreamerClient, BlockId, BlockRange, ChainSpec, TxFilter,
 };
 use zcash_primitives::transaction::Transaction;
 use zcash_protocol::consensus::{BlockHeight, BranchId, Network};
@@ -39,7 +39,16 @@ pub struct LightwalletdOracle {
     /// the same height.
     tip: RefCell<Option<u32>>,
     tree_cache: RefCell<HashMap<u32, IronwoodTreeState>>,
+    /// Blocks that given transactions (display order) are known to be mined in. With a hint, a
+    /// transaction is fetched together with the others of its block, so the server learns the
+    /// block and not which transaction was wanted (see [`LightwalletdOracle::hint_height`]).
+    hints: RefCell<HashMap<[u8; 32], u32>>,
+    /// Transactions already fetched and checked, so each is asked for once.
+    fetched: RefCell<HashMap<[u8; 32], (u32, Vec<u8>)>>,
 }
+
+/// At most this many transactions of a block are fetched as cover for the one wanted.
+const MAX_COVER: usize = 24;
 
 impl std::fmt::Debug for LightwalletdOracle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -85,7 +94,24 @@ impl LightwalletdOracle {
             network,
             tip: RefCell::new(None),
             tree_cache: RefCell::new(HashMap::new()),
+            hints: RefCell::new(HashMap::new()),
+            fetched: RefCell::new(HashMap::new()),
         })
+    }
+
+    /// Tell the oracle which block a transaction is mined in (`txid` in display order).
+    ///
+    /// What a light server sees is part of the privacy story: asked for one transaction by id,
+    /// it learns exactly which transaction this wallet cares about, and a wallet following a
+    /// Knotline back would hand it the item's whole trail. The caller usually knows the block
+    /// already: a proof's anchor height is the block its note was mined in, and that height is
+    /// asked of the server anyway when the anchor is checked. With the hint, the oracle fetches
+    /// the block's shielded transactions (all of them, or [`MAX_COVER`] chosen at random
+    /// including the wanted one, in random order) and keeps the one it needs. The server then
+    /// learns nothing beyond the block. A wrong hint costs nothing but the cover: the
+    /// transaction is then fetched directly.
+    pub fn hint_height(&self, txid: &[u8; 32], height: u32) {
+        self.hints.borrow_mut().insert(*txid, height);
     }
 
     /// The address this oracle asks.
@@ -143,24 +169,66 @@ impl LightwalletdOracle {
     /// pass-through mode: bytes present, height absent, for transactions about 12,000 blocks
     /// old). Treating 0 as "not mined" made a sound lineage look broken.
     fn fetch_checked(&self, txid: &[u8; 32]) -> Result<Option<(u32, Vec<u8>, Transaction)>> {
-        let url = self.url.clone();
-        let hash = reversed(*txid).to_vec();
-        let got = on_thread(move || async move {
-            let mut c = connect(&url).await?;
-            match c.get_transaction(TxFilter { block: None, index: 0, hash }).await {
-                Ok(r) => {
-                    let raw = r.into_inner();
-                    Ok(Some((raw.height, raw.data)))
-                }
-                Err(status) if status.code() == tonic::Code::NotFound => Ok(None),
-                Err(e) => Err(anyhow!("GetTransaction: {e}")),
+        let cached = self.fetched.borrow().get(txid).cloned();
+        let got = match cached {
+            Some(hit) => Some(hit),
+            None => {
+                let hint = self.hints.borrow().get(txid).copied();
+                let url = self.url.clone();
+                let want = reversed(*txid).to_vec();
+                on_thread(move || async move {
+                    use rand::seq::SliceRandom;
+                    let mut c = connect(&url).await?;
+                    // With a hint: list the block's transactions and fetch the wanted one among
+                    // the others. Without, or if the block does not hold it: ask directly.
+                    let mut ask: Vec<Vec<u8>> = vec![want.clone()];
+                    if let Some(h) = hint {
+                        let id = BlockId { height: h as u64, hash: vec![] };
+                        let range = BlockRange { start: Some(id.clone()), end: Some(id), pool_types: vec![] };
+                        if let Ok(resp) = c.get_block_range(range).await {
+                            let mut stream = resp.into_inner();
+                            if let Ok(Some(block)) = stream.message().await {
+                                let mut others: Vec<Vec<u8>> = block.vtx.into_iter().map(|t| t.txid).filter(|t| t.len() == 32).collect();
+                                if others.contains(&want) {
+                                    others.retain(|t| *t != want);
+                                    others.shuffle(&mut rand::rngs::OsRng);
+                                    others.truncate(MAX_COVER - 1);
+                                    ask.extend(others);
+                                    ask.shuffle(&mut rand::rngs::OsRng);
+                                }
+                            }
+                        }
+                    }
+                    if std::env::var_os("ZECBOAT_WAKE_TRACE").is_some() {
+                        match hint {
+                            Some(h) if ask.len() > 1 => eprintln!("[wake] asking the server for {} transactions of block {h} (one is wanted)", ask.len()),
+                            Some(h) => eprintln!("[wake] asking the server for one transaction directly (block {h} offered no cover)"),
+                            None => eprintln!("[wake] asking the server for one transaction directly (its block is not known)"),
+                        }
+                    }
+                    let mut found = None;
+                    for hash in ask {
+                        let mine = hash == want;
+                        match c.get_transaction(TxFilter { block: None, index: 0, hash }).await {
+                            Ok(r) if mine => {
+                                let raw = r.into_inner();
+                                let height = if raw.height == 0 || raw.height > u32::MAX as u64 { 0 } else { raw.height as u32 };
+                                found = Some((height, raw.data));
+                            }
+                            Ok(_) => {}
+                            Err(status) if mine && status.code() == tonic::Code::NotFound => {}
+                            Err(e) if mine => return Err(anyhow!("GetTransaction: {e}")),
+                            Err(_) => {}
+                        }
+                    }
+                    Ok(found.map(|(h, data)| (if h == 0 { hint.unwrap_or(0) } else { h }, data)))
+                })?
             }
-        })?;
+        };
         let Some((height, data)) = got else { return Ok(None) };
         if data.is_empty() {
             return Ok(None);
         }
-        let height = if height == 0 || height > u32::MAX as u64 { 0 } else { height as u32 };
         // Version 5 and later transactions name their own consensus branch, so the height only
         // matters for older ones; without a reported height the tip's branch is used.
         let at = if height > 0 { height } else { self.tip_height()? };
@@ -169,6 +237,7 @@ impl LightwalletdOracle {
         if tx.txid().as_ref() != &reversed(*txid) {
             return Err(anyhow!("the server answered with a different transaction than the one asked for"));
         }
+        self.fetched.borrow_mut().insert(*txid, (height, data.clone()));
         Ok(Some((height, data, tx)))
     }
 

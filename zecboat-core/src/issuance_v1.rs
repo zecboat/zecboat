@@ -240,6 +240,10 @@ async fn check(pin: &Pin, body: &[u8], v: &Value, sig: &[u8], asset: &Value, ass
     let (on_chain, asked, own_node) = tokio::task::block_in_place(|| {
         let chain = crate::wake::chain();
         use zmap_wake::oracle::{ChainOracle, OracleTrust};
+        // The manifest states the block; a provider then is not told which transaction of it.
+        if height > 0 {
+            chain.hint_height(txid, height);
+        }
         (chain.ironwood_actions(txid), chain.described(), chain.trust() == OracleTrust::FullNode)
     });
     match on_chain {

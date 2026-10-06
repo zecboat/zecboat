@@ -91,6 +91,18 @@ impl Chain {
         }
     }
 
+    /// Say which block a transaction is mined in (`txid_hex` in display order), when that is
+    /// already known. A provider then fetches it among the other transactions of that block,
+    /// and so is not told which transaction this wallet wanted. A node of one's own needs no
+    /// such cover.
+    pub fn hint_height(&self, txid_hex: &str, height: u32) {
+        if let Chain::Provider(p) = self {
+            if let Ok(txid) = zmap_wake::oracle::decode_hex_32(txid_hex) {
+                p.hint_height(&txid, height);
+            }
+        }
+    }
+
     /// The raw bytes and height of a mined transaction; `txid_internal` in stored byte order.
     pub fn raw_transaction(&self, txid_internal: &[u8; 32]) -> Result<Option<(u32, Vec<u8>)>> {
         let display = reversed(*txid_internal);
@@ -813,6 +825,11 @@ pub fn verify_holding(db_path: &str, asset_id: &str, genesis: Option<&(String, u
         .and_then(|v| <[u8; 32]>::try_from(v).ok());
     let oracle = chain();
     let lading = Lading::parse(&consignment.json).map_err(|e| anyhow!("stored lading unreadable: {e}"))?;
+    // The genesis proof is anchored at the block the genesis output was mined in, so the genesis
+    // transaction can be fetched under the cover of its block.
+    if let Some(first) = lading.hops.first() {
+        oracle.hint_height(&lading.genesis.txid, first.anchor_height);
+    }
 
     match verify_chain(&consignment.json, expected, &note.note.rho(), &oracle, MIN_DEPTH) {
         Ok(v) => {

@@ -223,21 +223,25 @@ pub fn read_knot_in_tx(raw: &[u8], height: u32, network: &zcash_protocol::consen
     }))
 }
 
-/// Walk back from the record that `key` opens in transaction `txid` to the first record, and
-/// rebuild the lading. `open(key, txid)` returns the packed record that `key` opens in that
-/// transaction, or `None`.
+/// Walk back from the knot that `key` opens in transaction `txid` to the first knot, and
+/// rebuild the lading. `open(key, txid, height)` returns the packed knot that `key` opens in
+/// that transaction, or `None`. `height` is the block the transaction is mined in when the
+/// walk knows it: a knot's proof is anchored at the block its note was mined in, which is the
+/// block of the previous knot's transaction. A reader can use it to fetch that transaction
+/// without telling a server which one it wants.
 pub fn walk_back(
     mut key: [u8; 32],
     mut txid: [u8; 32],
-    open: &mut dyn FnMut(&[u8; 32], &[u8; 32]) -> Result<Option<Vec<u8>>>,
+    open: &mut dyn FnMut(&[u8; 32], &[u8; 32], Option<u32>) -> Result<Option<Vec<u8>>>,
 ) -> Result<(Lading, usize)> {
+    let mut height: Option<u32> = None;
     let mut seen: HashSet<[u8; 32]> = HashSet::new();
     let mut groups: Vec<Vec<ProofEntry>> = Vec::new();
     let genesis = loop {
         if !seen.insert(txid) || seen.len() > MAX_KNOTS {
             return Err(anyhow!("the Knotline loops or is longer than {MAX_KNOTS} knots"));
         }
-        let bytes = open(&key, &txid)?.ok_or_else(|| anyhow!("no knot opens with the key in hand in transaction {}…", hexs(&txid[..6])))?;
+        let bytes = open(&key, &txid, height)?.ok_or_else(|| anyhow!("no knot opens with the key in hand in transaction {}…", hexs(&txid[..6])))?;
         let r = unpack_knot(&bytes)?;
         groups.push(r.hops);
         match r.prev {
@@ -247,6 +251,7 @@ pub fn walk_back(
                 }
                 key = k;
                 txid = t;
+                height = groups.last().and_then(|g| g.first()).map(|h| h.anchor_height);
             }
             None => break r.genesis.ok_or_else(|| anyhow!("the first knot names no genesis"))?,
         }
@@ -360,7 +365,7 @@ mod tests {
             };
             chain.insert(ids[j], actions(owner, &keys[j], &pack_knot(&r).unwrap()));
         }
-        let mut open = |k: &[u8; 32], t: &[u8; 32]| Ok(chain.get(t).and_then(|a| read_knot(a, k)));
+        let mut open = |k: &[u8; 32], t: &[u8; 32], _h: Option<u32>| Ok(chain.get(t).and_then(|a| read_knot(a, k)));
         let (got, fetched) = walk_back(keys[2], ids[2], &mut open).unwrap();
         assert_eq!(fetched, 3);
         assert_eq!(got.to_bytes(), want.to_bytes(), "byte-identical to the lading delivered whole");
@@ -374,7 +379,7 @@ mod tests {
         assert!(walk_back(keys[2], [99u8; 32], &mut open).is_err());
         let looped = Knot { prev: Some((keys[0], ids[0])), genesis: None, hops: vec![hop(1)] };
         chain.insert(ids[0], actions(owner, &keys[0], &pack_knot(&looped).unwrap()));
-        let mut open = |k: &[u8; 32], t: &[u8; 32]| Ok(chain.get(t).and_then(|a| read_knot(a, k)));
+        let mut open = |k: &[u8; 32], t: &[u8; 32], _h: Option<u32>| Ok(chain.get(t).and_then(|a| read_knot(a, k)));
         assert!(walk_back(keys[0], ids[0], &mut open).unwrap_err().to_string().contains("loops"));
     }
 
