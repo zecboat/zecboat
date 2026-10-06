@@ -531,6 +531,8 @@ pub struct Outgoing {
     pub txid: String,
     pub recipient: String,
     pub delivered: bool,
+    /// True when the lading travelled inside the transfer itself (nothing was delivered anywhere).
+    pub carried: bool,
     pub delivered_at: Option<String>,
     pub note: Option<String>,
     pub created_at: String,
@@ -547,6 +549,7 @@ pub fn outgoing(db_path: &str) -> Result<Vec<Outgoing>> {
             txid: o.txid,
             recipient: o.recipient,
             delivered: o.delivered_at.is_some(),
+            carried: o.delivery_note.as_deref() == Some(crate::zmap::CARRIED_IN_TRANSFER),
             delivered_at: o.delivered_at,
             note: o.delivery_note,
             created_at: o.created_at,
@@ -660,6 +663,19 @@ pub fn import_sealed(db_path: &str, sealed: &[u8]) -> Result<Imported> {
     } else {
         anyhow!("that file does not belong to any unit here that is waiting for its lineage record: it is sealed to another wallet, or it is not the record the sender committed to")
     })
+}
+
+/// What sending `asset_id` now would carry and cost. Collects a waiting lading first, as the
+/// send itself does, so the estimate and the send agree.
+pub async fn asset_send_estimate(asset_id: String) -> Result<crate::wake_memo::SendEstimate> {
+    let db_path = crate::paths::as_string::wallet_db_path()?;
+    tokio::task::spawn_blocking(move || {
+        let _ = fetch_missing_consignments(&db_path);
+        let conn = Connection::open(&db_path)?;
+        crate::wake_memo::send_estimate(&conn, &asset_id)
+    })
+    .await
+    .map_err(|e| anyhow!("did not finish: {e}"))?
 }
 
 /// Async wrappers for the UI.

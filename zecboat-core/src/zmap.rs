@@ -987,6 +987,21 @@ pub fn outgoing_consignments(conn: &rusqlite::Connection) -> rusqlite::Result<Ve
     rows.collect()
 }
 
+/// The note kept on a lading that travelled inside its own transfer: nothing was delivered
+/// anywhere, so the UI must not say "delivered".
+pub const CARRIED_IN_TRANSFER: &str = "in the transfer";
+
+/// Record that a lading travelled inside the transfer itself.
+pub fn mark_consignment_carried(conn: &rusqlite::Connection, sha256_hex: &str) -> rusqlite::Result<()> {
+    ensure_consignments_table(conn)?;
+    let Ok(raw) = hex::decode(sha256_hex) else { return Ok(()) };
+    conn.execute(
+        "UPDATE ext_zecboat_zmap_consignments SET delivered_at = datetime('now'), delivery_note = ?2 WHERE sha256 = ?1",
+        rusqlite::params![raw.as_slice(), CARRIED_IN_TRANSFER],
+    )?;
+    Ok(())
+}
+
 /// Record the outcome of a delivery attempt: `Ok` stamps the time and clears the note, `Err`
 /// keeps the reason and leaves a previous success untouched.
 pub fn mark_consignment_delivery(
@@ -1250,6 +1265,11 @@ mod tests {
         mark_consignment_delivery(&conn, &h, Err("later failure")).unwrap();
         let out = outgoing_consignments(&conn).unwrap();
         assert!(out[0].delivered_at.is_some() && out[0].delivery_note.is_none(), "a success stands");
+
+        mark_consignment_carried(&conn, &h).unwrap();
+        let out = outgoing_consignments(&conn).unwrap();
+        assert!(out[0].delivered_at.is_some());
+        assert_eq!(out[0].delivery_note.as_deref(), Some(CARRIED_IN_TRANSFER));
     }
 
     /// A table made before 0.7.1 gains the delivery columns on first use and keeps its rows.

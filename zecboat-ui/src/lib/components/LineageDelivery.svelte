@@ -9,7 +9,7 @@
 
   type Outgoing = {
     asset_id: string; consignment_hash: string; txid: string; recipient: string;
-    delivered: boolean; delivered_at: string | null; note: string | null; created_at: string;
+    delivered: boolean; carried: boolean; delivered_at: string | null; note: string | null; created_at: string;
   };
   type Box = { choice: string; in_use: string | null };
 
@@ -90,7 +90,9 @@
 {#if txid}
   {#each shown as r}
     <div class="line">
-      {#if r.delivered}
+      {#if r.carried}
+        <span class="mark ok">✓</span> Lineage carried in the transfer
+      {:else if r.delivered}
         <span class="mark ok">✓</span> Lineage record delivered
       {:else}
         <span class="mark wait">⚠</span> Lineage record not delivered yet
@@ -121,11 +123,13 @@
     <div class="list">
       {#each shown as r}
         <div class="item">
-          <span class="mark {r.delivered ? 'ok' : 'wait'}" title={r.delivered ? `Delivered ${r.delivered_at ?? ""}` : (r.note ?? "Not delivered yet")}>{r.delivered ? "✓" : "⚠"}</span>
+          <span class="mark {r.delivered ? 'ok' : 'wait'}" title={r.carried ? "Carried in the transfer itself" : r.delivered ? `Delivered ${r.delivered_at ?? ""}` : (r.note ?? "Not delivered yet")}>{r.delivered ? "✓" : "⚠"}</span>
           <span class="mono" title="Transfer {r.txid}">to {short(r.recipient, 8)}</span>
           <span class="when">{r.created_at.slice(0, 10)}</span>
           <span class="spacer"></span>
-          <button class="mini" onclick={() => retry(r.consignment_hash)} disabled={!!busy}>{r.delivered ? "Send again" : "Retry"}</button>
+          {#if !r.carried}
+            <button class="mini" onclick={() => retry(r.consignment_hash)} disabled={!!busy}>{r.delivered ? "Send again" : "Retry"}</button>
+          {/if}
           <button class="mini" onclick={() => save(r.consignment_hash)} disabled={!!busy}>Save file</button>
         </div>
       {/each}

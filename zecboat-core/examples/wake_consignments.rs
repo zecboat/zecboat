@@ -19,6 +19,12 @@ fn main() -> anyhow::Result<()> {
     }
     let db_path = zecboat_core::paths::as_string::wallet_db_path()?;
     match args.get(1).map(String::as_str) {
+        Some("estimate") => {
+            // What the confirmation screen would quote for sending this item now.
+            let asset_id = args.get(2).ok_or_else(|| anyhow::anyhow!("estimate <asset_id>"))?;
+            let conn = rusqlite::Connection::open(&db_path)?;
+            println!("{}", serde_json::to_string(&zecboat_core::wake_memo::send_estimate(&conn, asset_id)?)?);
+        }
         Some("list") => {
             let conn = rusqlite::Connection::open(&db_path)?;
             for c in zecboat_core::zmap::list_consignments(&conn)? {

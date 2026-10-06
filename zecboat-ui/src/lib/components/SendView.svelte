@@ -113,6 +113,11 @@
   };
   let fee = $state<Fee | null>(null);
   invoke<Fee>("fee_readiness").then((f) => { fee = f; }).catch(() => { fee = null; });
+  // What this particular item's send will carry and cost (0.7.1). The flat figure above is the
+  // fee of a plain two-output transfer; a transfer that carries lineage has more outputs, and
+  // the confirmation screen quoted 0.0002 while the wallet went on to pay 0.0007 or 0.0017.
+  type SendEstimate = { lineage: "none" | "knot" | "start" | "whole"; proofs: number; extra_outputs: number; outputs: number; fee_zat: number };
+  let estimate = $state<SendEstimate | null>(null);
   const zec = (z: number) => (z / 100_000_000).toFixed(8);
   let useHardwareWallet = $state(false);
   let isWaitingForHardware = $state(false);
@@ -170,6 +175,12 @@
   function handleReview(e: Event) {
     e.preventDefault();
     if (remainingChars < 0) return;
+    estimate = null;
+    if (assetType === "ZSA" && fromAddress.trim()) {
+      invoke<SendEstimate>("asset_send_estimate", { assetId: fromAddress.trim() })
+        .then((e) => { estimate = e; })
+        .catch(() => { estimate = null; });
+    }
     showConfirmation = true;
     txResult = null;
   }
@@ -347,9 +358,26 @@
              the fee comes from elsewhere or the asset would be destroyed. -->
         <p class="fee-note">
           The recipient receives the asset's carrier note of exactly 0.00010000 ZEC. The
-          network fee of about {zec(fee.fee_zat)} ZEC is paid from your other funds — never
+          network fee of {estimate ? zec(estimate.fee_zat) : `about ${zec(fee.fee_zat)}`} ZEC is paid from your other funds — never
           from the carrier, which would destroy the asset.
         </p>
+        {#if estimate && estimate.lineage !== "none"}
+          <!-- One line: what travels with the item, so the higher fee has its reason beside it. -->
+          <p class="fee-note">
+            {#if estimate.lineage === "knot"}
+              ⛓ Its lineage travels in this transfer: one knot, proof {estimate.proofs}.
+            {:else if estimate.lineage === "start"}
+              ⛓ Its lineage travels in this transfer: this item starts its Knotline with {estimate.proofs} proof{estimate.proofs === 1 ? "" : "s"}, once.
+            {:else}
+              ⛓ Its lineage travels in this transfer: {estimate.proofs} proof{estimate.proofs === 1 ? "" : "s"}.
+            {/if}
+          </p>
+        {/if}
+        {#if estimate && fee.spendable_zat < estimate.fee_zat}
+          <p class="fee-note" style="color: #fbbf24;">
+            ⚠ Spendable ZEC {zec(fee.spendable_zat)} is less than this fee.
+          </p>
+        {/if}
       {/if}
       
       <div class="confirm-details">

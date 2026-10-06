@@ -123,6 +123,63 @@ fn knotline_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32
     Ok((out, format!("{what}; {count} memo output(s)")))
 }
 
+/// What sending `asset_id` now would add to the transfer and cost, for the confirmation screen.
+/// It mirrors [`extra_outputs`] without proving anything: the new hop is taken at its fixed
+/// size, which is what decides the number of memo outputs.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SendEstimate {
+    /// `none` (no lineage travels in the transfer), `knot` (one knot), `start` (the item starts
+    /// its Knotline with its history so far) or `whole` (the whole lading to the recipient).
+    pub lineage: &'static str,
+    /// Proofs the lading will have after this send; 0 when it has none.
+    pub proofs: usize,
+    pub extra_outputs: usize,
+    pub outputs: usize,
+    pub fee_zat: u64,
+}
+
+pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str) -> Result<SendEstimate> {
+    // One packed hop: circuit byte, three instance fields, anchor height, proof length, proof.
+    const HOP: usize = 1 + 96 + 4 + 2 + 4960;
+    const CHUNK: usize = 512 - 9;
+    let plain = SendEstimate { lineage: "none", proofs: 0, extra_outputs: 0, outputs: 2, fee_zat: 10_000 };
+    let with = |lineage: &'static str, proofs: usize, extras: usize| SendEstimate {
+        lineage,
+        proofs,
+        extra_outputs: extras,
+        outputs: extras + 2,
+        fee_zat: 5_000 * (extras as u64 + 2),
+    };
+    let held = match crate::zmap::latest_consignment(conn, asset_id)? {
+        Some(c) => Lading::parse(&c.json).map(|l| l.hops.len()).unwrap_or(0),
+        None => 0,
+    };
+    // With no lading held, a proof can still be made if this note is the issuance output; that
+    // is not known here without the manifest, so it is estimated as a line of one proof.
+    let after = held + 1;
+    Ok(match send_mode() {
+        SendMode::Off => plain,
+        SendMode::FullRecord if after <= MAX_HOPS => {
+            let packed = 1 + 32 + 4 + 2 + after * HOP;
+            with("whole", after, packed.div_ceil(512 - HEAD))
+        }
+        SendMode::FullRecord => plain,
+        SendMode::Knotline => {
+            let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(conn)?);
+            let plan = crate::zmap::plan_asset_send(&holdings, asset_id)?;
+            let memos = memos_in_transaction(conn, plan.carrier.txid().as_ref())?;
+            let linked = zmap_wake::knotline::key_from_memos(memos.iter().map(|m| m.as_slice())).is_some() && after >= 2;
+            if linked {
+                with("knot", after, (2 + 64 + 2 + HOP).div_ceil(CHUNK) + 1)
+            } else if after <= MAX_JOIN_HOPS {
+                with("start", after, (2 + 36 + 2 + after * HOP).div_ceil(CHUNK) + 1)
+            } else {
+                plain
+            }
+        }
+    })
+}
+
 /// Knotline, receiving: if the carrier's transaction hands this wallet a key, walk the log
 /// back and return the rebuilt lading and the number of records walked. The result hashes to
 /// `expected_hash_hex` or it is an error. `None` when there is no key memo.

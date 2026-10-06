@@ -82,6 +82,13 @@ async fn lineage_import(sealed: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+// What sending this item now would carry and cost: the real fee for the confirmation screen.
+async fn asset_send_estimate(asset_id: String) -> Result<serde_json::Value, String> {
+    let r = zecboat_core::asset_send_estimate(asset_id).await.map_err(|e| e.to_string())?;
+    serde_json::to_value(r).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 // The drop-box: `choice` is what Settings stored (empty = automatic, `off`, or a base);
 // `in_use` is where a lading would go right now, or null when none is in use.
 async fn get_dropbox() -> Result<serde_json::Value, String> {
@@ -372,7 +379,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sync_status, yubikey_message, set_provider_url, get_provider_url, get_balance, get_balance_breakdown, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
-            registry_base, lineage_outgoing, lineage_redeliver, lineage_export, lineage_import, get_dropbox, set_dropbox, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
+            registry_base, asset_send_estimate, lineage_outgoing, lineage_redeliver, lineage_export, lineage_import, get_dropbox, set_dropbox, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, wallet_uses_yubikey, lock_wallet,
             create_new_account, backup_wallet, list_backups, restore_backup, rescan_from_height, export_keys, get_viewkey, check_yubikey,
             get_roster, add_roster_contact, delete_roster_contact, validate_address

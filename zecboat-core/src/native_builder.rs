@@ -986,7 +986,7 @@ pub fn send_zmap_asset(
             // lading over as a file. Before, a failure was this console line and nothing else.
             if !record_memos.is_empty() {
                 // The record is in the transaction itself: nothing to hand to a drop-box.
-                let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Ok(()));
+                let _ = crate::zmap::mark_consignment_carried(&conn, &l.hash_hex);
                 println!("[wake] lading carried in the transfer; no drop-box used");
             } else {
             match crate::wake::deliver(recipient, l) {
