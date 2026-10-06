@@ -194,11 +194,14 @@ fn legacy_metadata_uri(memo_text: &str) -> Option<String> {
 /// - short unpadded memos — this wallet's `v_received_outputs.memo` stores a bare single `0xF6`
 ///   rather than a padded block, so length cannot be assumed.
 pub fn memo_text(memo: &[u8]) -> Option<String> {
-    if memo.is_empty() || memo[0] == 0xF6 {
+    // ZIP 302: a lead byte of 0xF5 or above is not text (0xF6 is "no memo", 0xF5 is arbitrary
+    // data). Said outright since 0.7.1, because that is where a Knotline key travels: the bytes
+    // after such a lead byte must never be offered for display or copying. (They never were:
+    // 0xF5 cannot begin valid UTF-8, so the decoding below already refused them.)
+    if memo.is_empty() || memo[0] >= 0xF5 {
         return None;
     }
-    // Some producers prepend 0xF5 (reserved) or leave the byte off entirely; take the bytes as they
-    // are and stop at the first NUL, which is where padding begins.
+    // Stop at the first NUL, which is where padding begins.
     let end = memo.iter().position(|&b| b == 0).unwrap_or(memo.len());
     let text = std::str::from_utf8(&memo[..end]).ok()?.trim();
     if text.is_empty() {
@@ -1218,6 +1221,16 @@ mod tests {
         assert_eq!(c.verified_at_height, Some(3_497_364));
         assert!(latest_consignment(&conn, "asset-b").unwrap().is_none());
         assert!(consignment_by_hash(&conn, "zz").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_knotline_key_memo_is_never_text() {
+        let key_memo = zmap_wake::knotline::key_memo(&[b'A'; 32]); // a key made of printable bytes
+        assert_eq!(memo_text(&key_memo), None);
+        let chunk = zmap_wake::knotline::chunks(zmap_wake::knotline::KNOT_TAG, b"plain text inside a knot").unwrap();
+        assert_eq!(memo_text(&chunk[0]), None);
+        assert_eq!(memo_text(&[0xF6]), None);
+        assert_eq!(memo_text(b"hello\0\0").as_deref(), Some("hello"));
     }
 
     /// 0.7.1: a sent lading is listed with its recipient and delivery state; a failure is kept

@@ -73,13 +73,18 @@
             <span class="meta">
               {formatDateShort(tx.block_time)} · {confirmationsLabel(tx)}
               {#if tx.pool} · {tx.pool}{/if}
-              {#if tx.assets.length} · {tx.assets.length} asset{tx.assets.length === 1 ? "" : "s"}{/if}
+              {#if tx.assets.length && tx.type === "send" && tx.fee != null} · fee {tx.fee.toFixed(4)} ZEC{/if}
             </span>
             {#if tx.memo}<span class="memo">{tx.memo}</span>{/if}
           </span>
 
           <span class="amt {tx.type}">
-            {tx.type === "receive" ? "+" : "−"}{tx.amount.toFixed(4)} {tx.asset}
+            {#if tx.assets.length}
+              <!-- An item moved: name it. The ZEC that carries it and the fee are detail. -->
+              {tx.type === "receive" ? "+" : "−"} {tx.assets.length === 1 ? (tx.assets[0].name ?? "1 item") : `${tx.assets.length} items`}
+            {:else}
+              {tx.type === "receive" ? "+" : "−"}{tx.amount.toFixed(4)} {tx.asset}
+            {/if}
           </span>
         </button>
       {/each}

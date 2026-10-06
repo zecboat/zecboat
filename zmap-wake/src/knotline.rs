@@ -317,11 +317,25 @@ mod tests {
             proof: base64::engine::general_purpose::STANDARD.encode(vec![7u8; 4960]),
         };
         let later = pack_knot(&Knot { prev: Some(([0x22; 32], [0x33; 32])), genesis: None, hops: vec![h.clone()] }).unwrap();
-        let first = pack_knot(&Knot { prev: None, genesis: Some(("ab".repeat(32), 3)), hops: vec![ProofEntry { circuit: "genesis".to_string(), ..h }] }).unwrap();
+        let first = pack_knot(&Knot { prev: None, genesis: Some(("ab".repeat(32), 3)), hops: vec![ProofEntry { circuit: "genesis".to_string(), ..h.clone() }] }).unwrap();
         assert_eq!((later.len(), hx(&Sha256::digest(&later)).as_str()), (5131, "1e949f7508ddfaba4f351b07bf4a48c2aa86bcdbc3b61ac03f88670c65dc81eb"));
         assert_eq!((first.len(), hx(&Sha256::digest(&first)).as_str()), (5103, "dcf4b5e68906d40b45493134c3c00cf8c14c93cd9c69402de0a3c061463bf3fd"));
         assert_eq!(&later[..2], &[1, 1], "version 1, flags: has-previous");
         assert_eq!(&first[..2], &[1, 2], "version 1, flags: has-genesis");
+
+        // The lading's canonical bytes. A reader rebuilds the lading from knots and its hash
+        // must equal the one the sender put in the carrier's memo, so both must serialise the
+        // same structure to the same bytes: JSON as `Lading::to_bytes` writes it (two-space
+        // indentation, keys in declaration order, no trailing newline). If a dependency ever
+        // changes that output, this fails before any wallet ships with it.
+        let mut l = Lading::new(&"ab".repeat(32), 3);
+        l.hops.push(ProofEntry { circuit: "genesis".to_string(), ..h.clone() });
+        l.hops.push(h.clone());
+        let bytes = l.to_bytes();
+        assert!(bytes.starts_with(b"{\n  \"wake_lading\": 1,\n  \"genesis\": {\n    \"txid\": \"abab"));
+        assert!(bytes.ends_with(b"\"\n    }\n  ]\n}"));
+        assert_eq!((bytes.len(), hx(&Sha256::digest(&bytes)).as_str()), (14132, "66c4b7ab20cf0525b062b8ae9c80828f5e818c54c1d98c62af2e82e4fe3c9472"));
+        assert_eq!(Lading::parse(&bytes).unwrap().to_bytes(), bytes, "parse then serialise is the identity");
 
         // Chunking: eleven memos either way, plus the key memo: twelve outputs, no padding.
         let memos = chunks(KNOT_TAG, &later).unwrap();

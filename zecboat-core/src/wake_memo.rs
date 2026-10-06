@@ -146,6 +146,12 @@ fn knotline_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32
     use zmap_wake::knotline as log;
     let l = Lading::parse(lading_bytes).map_err(|e| anyhow!("{e}"))?;
     let n = l.hops.len();
+    // The recipient rebuilds the lading from knots and compares its hash with the one in the
+    // carrier's memo. That only works if these bytes are the canonical serialisation of their
+    // own content; a lading that is not (one written by other software, say) travels another way.
+    if l.to_bytes() != lading_bytes {
+        return Ok((Vec::new(), String::new()));
+    }
     let memos = memos_in_transaction(conn, carrier_txid_internal)?;
     let prev_key = log::key_from_memos(memos.iter().map(|m| m.as_slice()));
     let (record, what) = match prev_key {

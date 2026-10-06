@@ -1,10 +1,16 @@
 <script lang="ts">
   import { type Tx, shortId, formatDate, confirmationsLabel, privacyLabel } from "$lib/tx";
   import CopyButton from "./CopyButton.svelte";
+  import LineageDelivery from "./LineageDelivery.svelte";
 
   let { tx, onClose }: { tx: Tx; onClose: () => void } = $props();
 
   const privacy = $derived(privacyLabel(tx));
+
+  // A transfer that moved an item is named after the item (0.7.1). It used to read "Sent
+  // 0.00080000 ZEC": the item's carrier plus the fee, with nothing to say a postcard had moved.
+  const items = $derived(tx.assets.map((a) => a.name ?? "Unnamed item"));
+  const itemTitle = $derived(items.length === 1 ? items[0] : `${items.length} items`);
 
   // There is deliberately no "open in explorer" link.
   //
@@ -24,8 +30,16 @@
 
     <div class="d-head">
       <div>
-        <h3>{tx.type === "receive" ? "Received" : "Sent"} {tx.amount.toFixed(8)} {tx.asset}</h3>
-        <p class="sub">{formatDate(tx.block_time)}</p>
+        {#if items.length}
+          <h3>{tx.type === "receive" ? "Received" : "Sent"} {itemTitle}</h3>
+          <p class="sub">
+            {formatDate(tx.block_time)} · carried by {(0.0001 * items.length).toFixed(4)} ZEC{#if tx.type === "send" && tx.fee != null} · fee {tx.fee.toFixed(8)} ZEC{/if}
+          </p>
+          {#if tx.type === "send"}<LineageDelivery txid={tx.id} />{/if}
+        {:else}
+          <h3>{tx.type === "receive" ? "Received" : "Sent"} {tx.amount.toFixed(8)} {tx.asset}</h3>
+          <p class="sub">{formatDate(tx.block_time)}</p>
+        {/if}
       </div>
       <button class="x" onclick={onClose} aria-label="Close">✕</button>
     </div>
