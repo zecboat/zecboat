@@ -225,9 +225,10 @@ pub async fn genesis_outpoint(asset_id: &str) -> Option<(String, u32, GenesisSou
         .map(|(t, i, via_registry)| (t, i, if via_registry { GenesisSource::Registry } else { GenesisSource::PinnedManifest }))
 }
 
-/// The local manifest override alone (`ZECBOAT_WAKE_MANIFEST`), for headless callers.
+/// The local manifest override alone (`ZECBOAT_WAKE_MANIFEST`), for headless callers. Read only
+/// by a build with `--features test-overrides` (`crate::test_override`).
 pub fn genesis_from_local_manifest(asset_id: &str) -> Option<(String, u32)> {
-    let path = std::env::var("ZECBOAT_WAKE_MANIFEST").ok()?;
+    let path = crate::test_override("ZECBOAT_WAKE_MANIFEST")?;
     let bytes = std::fs::read(&path).ok()?;
     let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     // v0.5 shape as the mint tool writes it: entries[{asset_id, index: "3/4" | unit: 3,

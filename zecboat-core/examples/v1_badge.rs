@@ -1,5 +1,6 @@
 //! A1b harness: run the wallet's own `verify_issuance` for a list of asset ids, in a scratch
 //! HOME (a wallet COPY, so the holder-memo check has something to read, or none at all).
+//!   (build with --features test-overrides, or ZECBOAT_PINNED_V1 is ignored)
 //!   env HOME=<scratch> ZECBOAT_PINNED_V1='label|ik|file:///…/issuance_manifest.json' \
 //!       target/release/examples/v1_badge <asset_id>...
 #[tokio::main]

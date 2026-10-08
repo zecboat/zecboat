@@ -1,4 +1,23 @@
 pub mod issuance;
+
+/// A test-only environment override (`ZECBOAT_WAKE_MANIFEST`, `ZECBOAT_PINNED_V1`). Read only
+/// in builds made with `--features test-overrides` (and in this crate's own tests); any other
+/// build ignores it and says so once on stderr, so a test run against a release binary fails
+/// visibly instead of quietly verifying nothing (audit 2026-10-08, Zecboat O).
+pub fn test_override(name: &str) -> Option<String> {
+    let value = std::env::var(name).ok()?;
+    if cfg!(any(test, feature = "test-overrides")) {
+        return Some(value);
+    }
+    static WARNED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    if let Ok(mut w) = WARNED.lock() {
+        if !w.iter().any(|n| n == name) {
+            eprintln!("[zecboat] {name} is set but ignored: this build was made without test-overrides");
+            w.push(name.to_string());
+        }
+    }
+    None
+}
 pub mod issuance_v1;
 pub mod paths;
 pub mod db;

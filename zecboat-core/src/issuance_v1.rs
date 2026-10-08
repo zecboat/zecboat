@@ -54,13 +54,14 @@ pub struct Pin {
 }
 
 /// The pins: compiled ones, plus `ZECBOAT_PINNED_V1` for testing a throwaway collection:
-/// `label|ik_hex|source;label|ik_hex|source`. A test pin is always reported as such.
+/// `label|ik_hex|source;label|ik_hex|source`. A test pin is always reported as such, and is
+/// read only by a build with `--features test-overrides` (`crate::test_override`).
 pub fn pins() -> Vec<Pin> {
     let mut v: Vec<Pin> = PINNED_V1
         .iter()
         .filter_map(|(l, k, s)| Some(Pin { label: l.to_string(), ik: hex32(k)?, source: s.to_string(), test_only: false }))
         .collect();
-    if let Ok(env) = std::env::var("ZECBOAT_PINNED_V1") {
+    if let Some(env) = crate::test_override("ZECBOAT_PINNED_V1") {
         for item in env.split(';').filter(|s| !s.trim().is_empty()) {
             let parts: Vec<&str> = item.splitn(3, '|').collect();
             if let [l, k, s] = parts[..] {

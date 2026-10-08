@@ -1,6 +1,7 @@
 //! Chapter 8 harness for the receiving side, against a COPY of a wallet in a scratch HOME.
 //!
-//!   cargo build --release --example wake_consignments
+//!   cargo build --release --features test-overrides --example wake_consignments
+//!   (without the feature ZECBOAT_WAKE_MANIFEST is ignored)
 //!   env HOME=<scratch home holding .AppVault/data/wallet.db (a COPY)> \
 //!       ZECBOAT_DROPBOX=file:///path ZECBOAT_WAKE_MANIFEST=/path/manifest_v05.json \
 //!       ZECBOAT_ZEBRAD_RPC=http://127.0.0.1:8232 \

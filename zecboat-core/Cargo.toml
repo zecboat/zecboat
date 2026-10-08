@@ -118,5 +118,12 @@ zcash_note_encryption = "0.4"
 # left to generate. Both were archived to
 # zebd/zecboat_archive_20260810/removed_proto/.
 
+[features]
+# Reads ZECBOAT_WAKE_MANIFEST and ZECBOAT_PINNED_V1, which let a throwaway collection under test
+# name its own genesis outputs and issuer pin. Off by default, so a release build ignores both
+# (audit 2026-10-08, Zecboat O): whoever controls a holder's environment must not be able to
+# make a wallet trust a manifest it was not built with. Test builds: --features test-overrides.
+test-overrides = []
+
 [profile.dev.package."*"]
 opt-level = 3

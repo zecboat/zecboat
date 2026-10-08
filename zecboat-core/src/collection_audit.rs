@@ -89,13 +89,37 @@ pub fn parse_close(memo: &[u8]) -> Option<Close> {
 /// A 52-byte pin: `"zmap:manifest:v1"(16) ‖ generation(4) ‖ sha256(manifest)(32)`. The pin is
 /// fixed-length, so it is read untrimmed-to-52 (a hash ending in zero bytes survives).
 pub fn pin_matches(memo: &[u8], generation: u32, manifest_sha256: &[u8; 32]) -> bool {
+    parse_pin(memo) == Some((generation, *manifest_sha256))
+}
+
+/// `(generation, manifest hash)` of a pin memo, or `None` if the memo is not one.
+pub fn parse_pin(memo: &[u8]) -> Option<(u32, [u8; 32])> {
     let m = trim(memo);
     if m.len() > 52 || m.len() < 20 || &m[..16] != PIN_PREFIX {
-        return false;
+        return None;
     }
     let mut p = m.to_vec();
     p.resize(52, 0);
-    p[16..20] == generation.to_be_bytes() && p[20..52] == manifest_sha256[..]
+    Some((u32::from_be_bytes(p[16..20].try_into().ok()?), p[20..52].try_into().ok()?))
+}
+
+/// Check 4's second half (ZMAP §7.3.2; audit 2026-10-08, ZMAP E/F): every pin the account
+/// issued, wherever it is. A pin naming the close's generation with another hash is a split
+/// view (two manifests for one generation) and fails the check. Pins for other generations
+/// are reported, not failed: a v1 collection has one generation, but a stray pin from an
+/// earlier tool does not by itself show two manifests for this one.
+pub fn stray_pins(outs: &[Out], generation: u32, manifest_sha256: &[u8; 32]) -> (Vec<String>, Vec<String>) {
+    let (mut split, mut other) = (vec![], vec![]);
+    for o in outs {
+        let Some((g, h)) = parse_pin(&o.memo) else { continue };
+        let at = format!("{}…#{}", &o.txid[..o.txid.len().min(16)], o.index);
+        if g == generation && h != *manifest_sha256 {
+            split.push(format!("{at} pins generation {g} to another manifest {}…", &hex::encode(h)[..16]));
+        } else if g != generation {
+            other.push(format!("{at} pins generation {g}"));
+        }
+    }
+    (split, other)
 }
 
 // ── the report ───────────────────────────────────────────────────────────────────────────────
@@ -233,8 +257,11 @@ pub fn run_checks(reg: &Registration, ufvk: &str, outs: &[Out], flows: &[Flow]) 
     }
     let mhash: [u8; 32] = Sha256::digest(&manifest).into();
     add(3, "sha256(etched manifest) equals the close memo's hash", mhash == close.manifest_sha256, None);
-    add(4, "pin in the same transaction names the same generation and hash",
-        in_close.iter().any(|m| pin_matches(m, close.generation, &mhash)), None);
+    let (split, other_gen) = stray_pins(outs, close.generation, &mhash);
+    let pin_detail = split.iter().chain(other_gen.iter()).cloned().collect::<Vec<_>>().join("; ");
+    add(4, "pin in the same transaction names the same generation and hash, and no other pin names that generation",
+        in_close.iter().any(|m| pin_matches(m, close.generation, &mhash)) && split.is_empty(),
+        (!pin_detail.is_empty()).then_some(pin_detail));
     add(5, "BIP-340 signature over the manifest verifies under the close memo's ik",
         verify_bip340(&close.ik, &manifest, &sig), None);
 
@@ -758,6 +785,31 @@ mod tests {
         m.resize(512, 0);
         assert!(pin_matches(&m, 7, &h));
         assert!(!pin_matches(&m, 8, &h));
+    }
+
+    /// ZMAP §7.3.2 (audit 2026-10-08, ZMAP E/F): a second pin for the close's generation with
+    /// another hash is a split view; the same pin twice is not; another generation is reported.
+    #[test]
+    fn a_second_pin_for_the_same_generation_is_a_split_view() {
+        let pin = |g: u32, h: &[u8; 32]| {
+            let mut m = PIN_PREFIX.to_vec();
+            m.extend_from_slice(&g.to_be_bytes());
+            m.extend_from_slice(h);
+            m
+        };
+        let out = |txid: &str, memo: Vec<u8>| Out {
+            height: 1, txid: txid.to_string(), index: 0, value: 0, cmx: None, memo, outgoing: true,
+        };
+        let (h, other) = ([0x55u8; 32], [0x66u8; 32]);
+        let honest = vec![out("close", pin(1, &h)), out("again", pin(1, &h)), out("note", b"{}".to_vec())];
+        assert_eq!(stray_pins(&honest, 1, &h), (vec![], vec![]));
+        let split = vec![out("close", pin(1, &h)), out("forked", pin(1, &other))];
+        let (s, o) = stray_pins(&split, 1, &h);
+        assert_eq!((s.len(), o.len()), (1, 0));
+        assert!(s[0].starts_with("forked"));
+        let later = vec![out("close", pin(1, &h)), out("next", pin(2, &other))];
+        assert_eq!(stray_pins(&later, 1, &h).1.len(), 1);
+        assert_eq!(parse_pin(b"zmap:manifest:v1"), None, "too short to carry a generation");
     }
 
     /// F1: a stranger's note sent to the issuance address (no spend by the account) is not an
