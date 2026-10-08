@@ -16,6 +16,7 @@
   };
   type Box = { choice: string; in_use: string | null };
   type Route = { route: "knotline" | "whole" | "off"; source: "settings" | "default" | "environment" };
+  type ChainSource = { choice: "auto" | "node" | "provider"; source: "settings" | "default" };
 
   let { txid = null }: { txid?: string | null } = $props();
 
@@ -25,6 +26,7 @@
   let message = $state<{ ok: boolean; text: string } | null>(null);
   let mode = $state<"custom" | "off">("off");
   let route = $state<Route | null>(null);
+  let chain = $state<ChainSource | null>(null);
   let custom = $state("");
   let fileInput: HTMLInputElement;
 
@@ -39,6 +41,19 @@
       custom = box.choice && box.choice !== "off" ? box.choice : "";
     } catch { box = null; }
     try { route = await invoke<Route>("get_lineage_route"); } catch { route = null; }
+    try { chain = await invoke<ChainSource>("get_chain_source"); } catch { chain = null; }
+  }
+
+  // Who answers chain questions for lineage and issuance checks. "node": this wallet's own
+  // zebrad and nobody else, so a node that is briefly silent means "could not be checked right
+  // now" instead of a quiet switch to the provider (audit 2026-10-08).
+  async function setChain(next: "auto" | "node" | "provider") {
+    message = null;
+    try {
+      await invoke("set_chain_source", { choice: next });
+      localStorage.setItem("zecboat.chain", next);
+      await load();
+    } catch (e) { message = { ok: false, text: String(e) }; }
   }
   load();
 
@@ -118,8 +133,8 @@
 {:else}
   <div class="box-row">
     <span class="mark {route?.route === 'off' ? 'wait' : 'ok'}">●</span>
-    <span class="where" title="The lineage record is written into the same transaction as the item, sealed so that only its new owner can read it. No server is involved. It adds outputs to the transfer, so the fee is higher; the confirmation screen shows it.">
-      {#if route?.route === "off"}Lineage does not travel with a sent item{:else}Lineage travels in the transfer · Knotline{/if}
+    <span class="where" title="The lineage record is written into the same transaction as the item, sealed under a one-time key handed to its new owner; earlier owners cannot read what comes after their own sale. No server is needed to deliver it; a wallet without its own node still asks its provider for older records. It adds outputs to the transfer, so the fee is higher; the confirmation screen shows it.">
+      {#if route?.route === "off"}Lineage does not travel with a sent item{:else if route?.route === "whole"}Lineage travels in the transfer · whole lading (test route){:else}Lineage travels in the transfer · Knotline{/if}
     </span>
     {#if route?.source === "environment"}
       <span class="when" title="Set by the ZECBOAT_LADING_IN_MEMOS variable this wallet was started with; it outranks this switch.">set at start</span>
@@ -128,6 +143,18 @@
     {:else}
       <button class="mini" onclick={() => setRoute("off")}>Turn off</button>
     {/if}
+  </div>
+
+  <div class="box-row">
+    <span class="mark {chain?.choice === 'node' ? 'ok' : 'wait'}">●</span>
+    <span class="where" title="Lineage and issuance checks ask the chain for tree roots and outputs. Your own node answers from its own state; a provider answers with its word, and learns which blocks the check touched.">
+      {#if chain?.choice === "node"}Chain answers from your own node only{:else if chain?.choice === "provider"}Chain answers from your provider{:else}Chain answers from your node when it answers, else your provider{/if}
+    </span>
+    <select class="mini" value={chain?.choice ?? "auto"} onchange={(e) => setChain((e.currentTarget as HTMLSelectElement).value as "auto" | "node" | "provider")}>
+      <option value="auto">automatic</option>
+      <option value="node">my own node only</option>
+      <option value="provider">provider</option>
+    </select>
   </div>
 
   {#if rows.length}

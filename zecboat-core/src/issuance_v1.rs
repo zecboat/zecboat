@@ -280,6 +280,7 @@ async fn check(pin: &Pin, body: &[u8], v: &Value, sig: &[u8], asset: &Value, ass
     }
     BadgeState::Verified {
         issuer: pin.label.clone(),
+        issuer_key: Some(hex::encode(pin.ik)),
         issuance_txid: txid.to_string(),
         issuance_height: height,
         issuance_action_index: idx as u32,

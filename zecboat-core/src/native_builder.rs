@@ -518,14 +518,23 @@ pub fn send_zmap_asset(
     use zcash_client_backend::wallet::ReceivedNote;
 
     // ── 1. Resolve exactly which note moves, and what memo it must carry ────────────────────
-    let holdings = {
+    let plan = {
         let conn = rusqlite::Connection::open_with_flags(
             wallet_db_path()?,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
-        crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?)
+        let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?);
+        // Among several carriers of one asset, spend one whose lading fits it: an unsolicited
+        // copy (anyone can send a carrier with the same memo) must not be the note picked
+        // while the genuine unit sits beside it (audit 2026-10-08, Zecboat C).
+        let fits = |c: &crate::zmap::CarrierRef| -> bool {
+            crate::wake::carrier_note(&conn, &c.txid_bytes, c.output_index as u32)
+                .ok()
+                .and_then(|n| crate::zmap::consignment_for_carrier(&conn, asset_id, c.consignment_hash.as_deref(), &n.note.rho().to_bytes()).ok().flatten())
+                .is_some()
+        };
+        crate::zmap::plan_asset_send_preferring(&holdings, asset_id, &fits)?
     };
-    let plan = crate::zmap::plan_asset_send(&holdings, asset_id)?;
 
     // ── 1a. Wake (chapter 8): prove THIS carrier before anything is built ───────────────────
     //
@@ -580,7 +589,7 @@ pub fn send_zmap_asset(
     }
     let memo_bytes: Vec<u8> = match &wake_lading {
         Some(l) => crate::zmap::memo_with_consignment_hash(&plan.memo, &l.hash_hex)?,
-        None => plan.memo.clone(),
+        None => crate::zmap::memo_without_consignment_hash(&plan.memo)?,
     };
 
     let network = MainNetwork;
@@ -809,6 +818,16 @@ pub fn send_zmap_asset(
             &(),
         )
         .map_err(|e| anyhow!("could not balance the asset transfer: {:?}", e))?;
+    // The fee shown on the confirmation screen is the estimate; the one paid is this. A send
+    // that would cost more than was shown is refused (audit 2026-10-08, Zecboat G).
+    {
+        let conn = rusqlite::Connection::open_with_flags(wallet_db_path()?, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let shown = crate::wake_memo::send_estimate(&conn, asset_id).map(|e| e.fee_zat).unwrap_or(u64::MAX);
+        let fee = u64::from(balance.fee_required());
+        if fee > shown {
+            return Err(anyhow!("the fee came out at {fee} zat, above the {shown} zat shown; nothing was sent"));
+        }
+    }
 
     // ── 6. Explicit inputs → proposal → signed transaction ─────────────────────────────────
     let shielded_inputs = ShieldedInputs::from_parts(
@@ -954,9 +973,16 @@ pub fn send_zmap_asset(
     .map_err(|e| anyhow!("could not finalize the asset transfer: {:?}", e))?;
 
     // ── 9. Record where the lineage went, so a lost lading can be re-issued by the sender ──
-    {
+    //
+    // From here on the signed transaction is in the wallet's database, and the wallet will
+    // broadcast anything stored there on its next send. So nothing below may fail the send:
+    // a "failed" after this point used to leave a transaction that went out later anyway, and
+    // a retry in between double-spent the carrier (audit 2026-10-08, Zecboat F). A failure
+    // here is reported and the send goes on; the lading itself travels in the transaction.
+    let after_store = (|| -> Result<()> {
         let conn = rusqlite::Connection::open(wallet_db_path()?)
             .map_err(|e| anyhow!("could not open the wallet to record the lineage: {}", e))?;
+        conn.busy_timeout(std::time::Duration::from_secs(10))?;
         let mut successor_txid = [0u8; 32];
         successor_txid.copy_from_slice(txid.as_ref());
         let spent_index = u32::try_from(plan.carrier.output_index())
@@ -980,8 +1006,9 @@ pub fn send_zmap_asset(
         // The sender's copy makes a lost delivery re-issuable. Delivery failure is reported,
         // not fatal: the transfer is built and the recipient can ask for the lading again.
         if let Some(l) = &wake_lading {
-            crate::zmap::store_consignment(&conn, asset_id, None, None, &l.bytes, Some(&successor_txid))
+            let hh = crate::zmap::store_consignment(&conn, asset_id, None, None, &l.bytes, Some(&successor_txid))
                 .map_err(|e| anyhow!("could not keep a copy of the lading: {}", e))?;
+            let _ = crate::zmap::mark_consignment_source(&conn, &hh, "sent");
             // 0.7.1: the outcome is recorded, so the wallet can show it, retry it, and hand the
             // lading over as a file. Before, a failure was this console line and nothing else.
             if !record_memos.is_empty() {
@@ -1001,6 +1028,10 @@ pub fn send_zmap_asset(
             }
             }
         }
+        Ok(())
+    })();
+    if let Err(e) = after_store {
+        eprintln!("[wake] WARNING: the transfer is signed and will be sent, but its lineage record could not be written: {e}");
     }
 
     // Read the signed transaction back and return its **wire encoding**, which every caller

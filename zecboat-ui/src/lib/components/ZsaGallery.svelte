@@ -64,7 +64,7 @@
   // binary. Deliberately separate from the artwork check: §12.1 forbids presenting checks
   // 1-4 and 6 as "genuine" without 5, so the two results are never merged into one tick.
   type Badge =
-    | { state: 'verified'; issuer: string; issuance_txid: string; issuance_height: number; checks: string[]; caveat: string; found_in_registry_at?: number | null }
+    | { state: 'verified'; issuer: string; issuer_key?: string | null; issuance_txid: string; issuance_height: number; checks: string[]; caveat: string; found_in_registry_at?: number | null }
     | { state: 'not_listed'; issuer: string; detail: string }
     | { state: 'signature_failed'; detail: string }
     | { state: 'could_not_check'; detail: string };
@@ -90,11 +90,11 @@
       console.error("Failed to load ZSAs:", e);
       return;
     }
-    for (const a of assets) {
-      invoke<Verification>("verify_asset_image", { assetId: a.asset_id })
-        .then((v) => { if (v.verified && v.image) cardImages[a.asset_id] = v.image; })
-        .catch(() => { /* no image on the card; opening the asset shows the reason */ });
-    }
+    // No artwork request on load. Fetching every held asset's artwork from zecboat.com each
+    // time the list opened told the site the holder's whole set of items, with their address,
+    // on every visit, unsolicited items included (audit 2026-10-08, Zecboat B / ZMAP J). A
+    // card shows its artwork once the item has been opened in this session; opening is the
+    // user's own, explicit request for that one item.
   });
 
   // Asked of the backend rather than hardcoded, so ZECBOAT_REGISTRY reaches the UI too.
@@ -131,7 +131,7 @@
     // Metadata is descriptive and host-trusted. The image check is the part that needs no trust,
     // so it runs independently — one failing must not hide the other's result.
     invoke<Verification>("verify_asset_image", { assetId })
-      .then((v) => { verification = v; })
+      .then((v) => { verification = v; if (v.verified && v.image) cardImages[assetId] = v.image; })
       .catch((e: any) => { verifyError = String(e); })
       .finally(() => { isVerifying = false; });
 
@@ -197,7 +197,7 @@
           {:else if asset.wake?.consignment_hash}
             <span class="wake-chip pending" title="The sender committed to a lineage proof that has not been fetched yet.">lineage pending</span>
           {:else}
-            <span class="wake-chip none" title="No lineage proof travels with this unit. Unproven, not forged.">no lineage proof</span>
+            <span class="wake-chip none" title="No lineage proof travels with this unit: nothing shows that it descends from the mint.">no lineage proof</span>
           {/if}
         </div>
       </div>
@@ -233,8 +233,14 @@
             {#if isCheckingIssuance}
               <div class="verify-badge checking">Checking issuance against a pinned issuer key…</div>
             {:else if badge?.state === 'verified'}
-              <div class="verify-badge ok">
-                ✓ Verified — issued by {badge.issuer}{#if badge.found_in_registry_at}<span class="via-registry" title={`Found in the Zecboat Registry and audited to block ${badge.found_in_registry_at}, from the chain. zecboat.com was not needed.`}> · via Zecboat Registry</span>{/if}
+              <!-- The issuance check relates the memo's text to a manifest and the manifest's
+                   genesis output to the chain. Anyone can copy a memo, so on its own it says
+                   "this design is registered by…", not "this unit is genuine". The green tick
+                   and the word Verified belong to it only when the unit's lineage holds too
+                   (ZMAP §9: never "genuine" on checks 1-6 alone; audit 2026-10-08, ZMAP A). -->
+              {@const lineageHolds = wake?.state === 'verified' || wake?.state === 'provider_checked'}
+              <div class="verify-badge {lineageHolds ? 'ok' : 'neutral'}">
+                {lineageHolds ? '✓ Verified — issued by' : '▫ Design registered by'} {badge.issuer}{#if badge.issuer_key}<code class="ik" title={`issuance key ${badge.issuer_key}`}> · key {badge.issuer_key.slice(0, 8)}</code>{/if}{#if badge.found_in_registry_at}<span class="via-registry" title={`Found in the Zecboat Registry and audited to block ${badge.found_in_registry_at}, from the chain. zecboat.com was not needed.`}> · via Zecboat Registry</span>{/if}
                 <!-- One line is the verdict. The checks, the anchor and the caveat are one click
                      away, not gone: the caveat still travels with the tick, so the badge states
                      its own limits to anyone who asks what "verified" covered. -->
@@ -301,8 +307,10 @@
           {:else if wake?.state === 'provider_checked'}
             <!-- 0.7.1: the same proofs, with the chain's answers from the provider. Never the
                  green tick of an own-node verdict, reviewed circuit or not (WAKE-v1 §8.1). -->
-            <div class="verify-badge {WAKE_REVIEWED ? 'provider' : 'amber'}">
-              ✓ Lineage checks out · via your provider{WAKE_REVIEWED ? '' : ' · awaiting external review'}
+            <!-- Its own colour and its own mark, reviewed or not: a buyer must never take a
+                 provider's word for an own-node verdict (WAKE-v1 §8.1(c); audit 2026-10-08). -->
+            <div class="verify-badge provider">
+              ◐ Lineage checks out · via your provider {wake.asked}{WAKE_REVIEWED ? '' : ' · awaiting external review'}
               <details class="verify-details">
                 <summary>what was checked</summary>
                 <span class="check-line">✓ every proof verifies under the pinned Wake keys, on this machine</span>
@@ -317,7 +325,7 @@
           {:else if wake?.state === 'no_wake'}
             <div class="verify-badge unknown">
               No lineage proof for this unit
-              <span class="verify-detail">{wake.detail} Unproven is not forged: the memo and artwork checks above still apply.</span>
+              <span class="verify-detail">{wake.detail} Without a lineage, nothing shows that this unit descends from the mint; the memo and artwork checks above say only what it claims to be.</span>
               {#if wake.detail.includes("has not been fetched")}
                 <span class="verify-detail">The sender can save the lineage record as a file for you: open it under Settings → Lineage records.</span>
               {/if}
@@ -433,6 +441,8 @@
   .verify-badge.ok      { background: rgba(46, 160, 67, 0.15); color: #3fb950; border: 1px solid rgba(46, 160, 67, 0.4); }
   .verify-badge.bad     { background: rgba(248, 81, 73, 0.15); color: #f85149; border: 1px solid rgba(248, 81, 73, 0.4); }
   .verify-badge.provider { background: rgba(120, 170, 255, 0.12); color: #9ec1ff; border: 1px solid rgba(120, 170, 255, 0.4); }
+  .verify-badge.neutral { background: rgba(160, 160, 170, 0.12); color: #c9c9d1; border: 1px solid rgba(160, 160, 170, 0.35); }
+  .verify-badge code.ik { font-size: 0.85em; opacity: 0.85; }
   .verify-badge.amber   { background: rgba(255, 179, 0, 0.14); color: #ffb300; border: 1px solid rgba(255, 179, 0, 0.45); }
   .verify-badge.unknown { background: rgba(210, 153, 34, 0.12); color: #d29922; border: 1px solid rgba(210, 153, 34, 0.35); }
   .verify-badge.checking { background: rgba(139, 148, 158, 0.12); color: #8b949e; border: 1px solid rgba(139, 148, 158, 0.3); }

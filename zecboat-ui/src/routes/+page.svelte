@@ -95,6 +95,14 @@
       console.error("Could not restore the saved lineage route:", e);
     }
 
+    // 0.7.1: who answers chain questions (own node only, provider, or automatic) is saved too.
+    try {
+      const choice = localStorage.getItem("zecboat.chain");
+      if (choice) invoke("set_chain_source", { choice });
+    } catch (e) {
+      console.error("Could not restore the saved chain source:", e);
+    }
+
     // 0.7.1: the drop-box for lineage records is a choice too, restored the same way.
     try {
       const box = localStorage.getItem("zecboat.dropbox");

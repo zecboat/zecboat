@@ -83,7 +83,8 @@ pub fn send_mode_with_source() -> (SendMode, &'static str) {
         Ok("1") => return (SendMode::FullRecord, "environment"),
         Ok("knotline") | Ok("log") => return (SendMode::Knotline, "environment"),
         Ok("off") | Ok("0") => return (SendMode::Off, "environment"),
-        _ => {}
+        Ok(other) => eprintln!("[wake] ZECBOAT_LADING_IN_MEMOS={other:?} is not a route (knotline, 1, off); ignored"),
+        Err(_) => {}
     }
     match *ROUTE_CHOICE.lock().unwrap() {
         Some(m) => (m, "settings"),
@@ -154,8 +155,19 @@ fn knotline_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32
     }
     let memos = memos_in_transaction(conn, carrier_txid_internal)?;
     let prev_key = log::key_from_memos(memos.iter().map(|m| m.as_slice()));
+    // Chain to the key memo only when the lading being extended was itself rebuilt from the
+    // line under that key (its stored copy says so). A key memo alone proves nothing: a
+    // previous holder could add one with a random key and hand the real lading over by file,
+    // and every later sender would chain to a knot nobody can open (audit 2026-10-08,
+    // Knotline A). Otherwise the item starts a line of its own, or travels another way.
+    let rebuilt_from_line = n >= 2 && {
+        let mut before = l.clone();
+        before.hops.pop();
+        let h = hex::encode(lading_hash(&before.to_bytes()));
+        crate::zmap::consignment_by_hash(conn, &h)?.map(|c| c.source.as_deref() == Some("knotline")).unwrap_or(false)
+    };
     let (record, what) = match prev_key {
-        Some(k) if n >= 2 => (
+        Some(k) if rebuilt_from_line => (
             log::Knot { prev: Some((k, *carrier_txid_internal)), genesis: None, hops: l.hops[n - 1..].to_vec() },
             format!("Knotline: one knot, hop {n} only, tied to the knot before it"),
         ),
@@ -206,9 +218,32 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str) -> Result<Send
         outputs: extras + 2,
         fee_zat: 5_000 * (extras as u64 + 2),
     };
-    let held = match crate::zmap::latest_consignment(conn, asset_id)? {
-        Some(c) => Lading::parse(&c.json).map(|l| l.hops.len()).unwrap_or(0),
-        None => 0,
+    // The same carrier the send will spend, and the lading that carrier commits to (never the
+    // newest for the asset): the estimate must mirror the sender's own choices, or the screen
+    // announces a knot and its fee that the send then does not make (audit 2026-10-08, M).
+    let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(conn)?);
+    let conn_ref = conn;
+    let fits = |c: &crate::zmap::CarrierRef| -> bool {
+        crate::wake::carrier_note(conn_ref, &c.txid_bytes, c.output_index as u32)
+            .ok()
+            .and_then(|n| crate::zmap::consignment_for_carrier(conn_ref, asset_id, c.consignment_hash.as_deref(), &n.note.rho().to_bytes()).ok().flatten())
+            .is_some()
+    };
+    let plan = crate::zmap::plan_asset_send_preferring(&holdings, asset_id, &fits)?;
+    let committed = holdings
+        .iter()
+        .flat_map(|h| h.carriers.iter())
+        .find(|c| c.txid_bytes[..] == plan.carrier.txid().as_ref()[..] && c.output_index as u32 == plan.carrier.output_index())
+        .and_then(|c| c.consignment_hash.clone());
+    let held_lading = crate::wake::carrier_note(conn, plan.carrier.txid().as_ref(), plan.carrier.output_index() as u32)
+        .ok()
+        .and_then(|n| crate::zmap::consignment_for_carrier(conn, asset_id, committed.as_deref(), &n.note.rho().to_bytes()).ok().flatten());
+    let (held, rebuilt_from_line, canonical) = match &held_lading {
+        Some(c) => match Lading::parse(&c.json) {
+            Ok(l) => (l.hops.len(), c.source.as_deref() == Some("knotline"), l.to_bytes() == c.json),
+            Err(_) => (0, false, false),
+        },
+        None => (0, false, true),
     };
     // With no lading held, a proof can still be made if this note is the issuance output; that
     // is not known here without the manifest, so it is estimated as a line of one proof.
@@ -220,11 +255,10 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str) -> Result<Send
             with("whole", after, packed.div_ceil(512 - HEAD))
         }
         SendMode::FullRecord => plain,
+        SendMode::Knotline if !canonical => plain,
         SendMode::Knotline => {
-            let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(conn)?);
-            let plan = crate::zmap::plan_asset_send(&holdings, asset_id)?;
             let memos = memos_in_transaction(conn, plan.carrier.txid().as_ref())?;
-            let linked = zmap_wake::knotline::key_from_memos(memos.iter().map(|m| m.as_slice())).is_some() && after >= 2;
+            let linked = zmap_wake::knotline::key_from_memos(memos.iter().map(|m| m.as_slice())).is_some() && after >= 2 && rebuilt_from_line;
             if linked {
                 with("knot", after, (2 + 64 + 2 + HOP).div_ceil(CHUNK) + 1)
             } else if after <= MAX_JOIN_HOPS {
@@ -263,7 +297,9 @@ pub fn lading_from_knotline(conn: &rusqlite::Connection, carrier_txid_internal: 
                 }
                 match c.raw_transaction(txid)? {
                     Some((h, raw)) => (raw, h),
-                    None => return Ok(None),
+                    // Told apart from "the key opens nothing" (audit 2026-10-08, Knotline L):
+                    // a transaction the source does not know is "could not be checked".
+                    None => return Err(anyhow!("transaction {}… is not known to {}", hex::encode(&txid[..6]), c.described())),
                 }
             }
         };

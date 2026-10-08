@@ -129,8 +129,15 @@ if [[ "${#NEED_P[@]}" -gt 0 ]]; then
       info "downloading $f (this is large; it is fetched once)"
       curl -# -fL -o "$PARAMS/$f.part" "https://download.z.cash/downloads/$f" \
         || die "could not download $f — check the network and rerun"
-      # Only move into place once complete. A truncated params file fails at
-      # proving time with an error that says nothing about downloads.
+      # Only move into place once complete, and only if the bytes are the published ones
+      # (the hashes zcash_proofs pins; audit 2026-10-08, Zecboat N). A truncated params file
+      # fails at proving time with an error that says nothing about downloads.
+      case "$f" in
+        sapling-spend.params)  want=8e48ffd23abb3a5fd9c5589204f32d9c31285a04b78096ba40a79b75677efc13 ;;
+        sapling-output.params) want=2f0ebbcbb9bb0bcffe95a397e7eba89c29eb4dde6191c339db88570e3f3fb0e4 ;;
+      esac
+      got="$(sha256sum "$PARAMS/$f.part" | cut -d' ' -f1)"
+      [[ "$got" == "$want" ]] || { rm -f "$PARAMS/$f.part"; die "$f downloaded with the wrong sha256 ($got); not installed"; }
       mv "$PARAMS/$f.part" "$PARAMS/$f"
       info "  done ($(du -h "$PARAMS/$f" | cut -f1))"
     done

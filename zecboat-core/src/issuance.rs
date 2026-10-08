@@ -106,6 +106,10 @@ pub enum BadgeState {
     /// Checks 1, 3, 4 and 5 passed against a pinned key. **Not check 2.**
     Verified {
         issuer: String,
+        /// The issuance key (`ik`, hex) the checks were made against, so the badge can show
+        /// its fingerprint beside the name: a look-alike name under another key must not read
+        /// as the same issuer (audit 2026-10-08, ZMAP C).
+        issuer_key: Option<String>,
         issuance_txid: String,
         issuance_height: u32,
         /// The Action index of the issuance output: with `issuance_txid`, the asset's genesis
@@ -300,6 +304,13 @@ async fn verify_disclosure(issuance: &Issuance, asset_id: &str) -> std::result::
             detail: format!("the issuance transaction did not parse: {e}"),
         }
     })?;
+    // The server's word is checked against the id asked for (audit 2026-10-08, Zecboat J):
+    // a different transaction is "could not check", not a verdict either way.
+    if tx.txid().as_ref() != &txid[..] {
+        return Err(BadgeState::CouldNotCheck {
+            detail: "the server answered with a different transaction than the issuance transaction asked for".into(),
+        });
+    }
 
     // Every ZMAP mint since NU6.3 is Ironwood -- HBD's own mint has 11 Ironwood actions and
     // 0 Orchard. Reading an Orchard-only producer and concluding otherwise is a documented
@@ -432,6 +443,8 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
 
     Ok(BadgeState::Verified {
         issuer,
+        // The legacy (v0.3 disclosure) path checks a pinned ed25519 key, not an `ik`.
+        issuer_key: None,
         issuance_txid: issuance.txid,
         issuance_height: issuance.height,
         issuance_action_index: issuance.action_index as u32,

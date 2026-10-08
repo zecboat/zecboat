@@ -7,9 +7,10 @@
 //!    appended to the lading it received) and hashes the resulting lading. The memo written on
 //!    the new carrier commits to that hash. If the sender holds no lading and the note is not a
 //!    genesis output, the unit can only travel *unproven*, and only if the user said so.
-//! 2. **Deliver.** The lading is sealed to the recipient's address (`zmap_wake::seal`) and put
-//!    in a drop-box keyed by its hash. The drop-box is a directory (`file://`) or an HTTP
-//!    endpoint (`ZECBOAT_DROPBOX`, default `{registry}/dropbox`). Never plaintext, never listed.
+//! 2. **Deliver.** 0.7.1: the lading travels in the transfer itself (Knotline, `wake_memo`).
+//!    The sealed-file route remains for the cases that does not cover, and a drop-box
+//!    (a `file://` folder or an `https://` endpoint) only if the user names one; none is
+//!    contacted by default. Never plaintext, never listed.
 //! 3. **Receive.** A carrier whose memo carries `consignment_hash` and no stored lading triggers
 //!    a fetch; what comes back must open with this wallet's keys and hash to the memo's value.
 //! 4. **Verify.** `verify_chain` against the node named by `ZECBOAT_ZEBRAD_RPC`, with the note
@@ -45,18 +46,70 @@ pub enum Chain {
     Provider(LightwalletdOracle),
 }
 
-/// The chain source for this call: the node if one answers, otherwise the provider.
+/// Who answers questions about the chain. `Auto`: the node if it answers at that moment,
+/// otherwise the provider. `Node`: the node at `ZECBOAT_ZEBRAD_RPC`, and nobody else; when it
+/// does not answer the result is "could not be checked right now". `Provider`: the light
+/// server from Settings, always.
+///
+/// Until 2026-10-08 the choice was always `Auto`, so a wallet whose node was briefly silent
+/// (starting up, say) asked the provider instead, without a word: the provider learnt the
+/// blocks of every transfer in a line, which the wallet had promised nobody would (audit,
+/// Knotline C). A node user who chooses `Node` gets no silent fallback. The choice is made in
+/// Settings and restored at start like the lineage route.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChainChoice {
+    Auto,
+    Node,
+    Provider,
+}
+
+static CHAIN_CHOICE: std::sync::Mutex<Option<ChainChoice>> = std::sync::Mutex::new(None);
+
+/// From Settings: `auto`, `node`, `provider`, or empty for the default (`auto`).
+pub fn set_chain_choice(choice: &str) -> Result<()> {
+    let c = match choice.trim() {
+        "" | "auto" => None,
+        "node" => Some(ChainChoice::Node),
+        "provider" => Some(ChainChoice::Provider),
+        other => return Err(anyhow!("unknown chain source {other:?}")),
+    };
+    *CHAIN_CHOICE.lock().unwrap() = c;
+    Ok(())
+}
+
+/// For the UI: `(choice, source)` where source is `settings` or `default`.
+pub fn chain_choice_with_source() -> (&'static str, &'static str) {
+    match *CHAIN_CHOICE.lock().unwrap() {
+        Some(ChainChoice::Node) => ("node", "settings"),
+        Some(ChainChoice::Provider) => ("provider", "settings"),
+        Some(ChainChoice::Auto) => ("auto", "settings"),
+        None => ("auto", "default"),
+    }
+}
+
+/// The chain source for this call, by [`ChainChoice`].
 ///
 /// The probe is one `getblockcount`; with no node on the machine it is refused at once.
 pub fn chain() -> Chain {
     let endpoint = crate::rpc::zebrad_rpc_endpoint();
     let node = ZebradOracle::new(endpoint.clone());
-    if node.tip_height().is_ok() {
-        return Chain::Node(node, endpoint);
-    }
-    match LightwalletdOracle::new(crate::rpc::grpc_endpoint(), Network::MainNetwork) {
-        Ok(p) => Chain::Provider(p),
-        Err(_) => Chain::Node(node, endpoint),
+    let choice = CHAIN_CHOICE.lock().unwrap().unwrap_or(ChainChoice::Auto);
+    let provider = || LightwalletdOracle::new(crate::rpc::grpc_endpoint(), Network::MainNetwork);
+    match choice {
+        ChainChoice::Node => Chain::Node(node, endpoint),
+        ChainChoice::Provider => match provider() {
+            Ok(p) => Chain::Provider(p),
+            Err(_) => Chain::Node(node, endpoint),
+        },
+        ChainChoice::Auto => {
+            if node.tip_height().is_ok() {
+                return Chain::Node(node, endpoint);
+            }
+            match provider() {
+                Ok(p) => Chain::Provider(p),
+                Err(_) => Chain::Node(node, endpoint),
+            }
+        }
     }
 }
 
@@ -263,14 +316,21 @@ pub fn prepare_send_lading<P: zcash_protocol::consensus::Parameters>(
     let note_txid_hex = hex::encode(note.txid_display);
     let note_rho = note.note.rho().to_bytes();
 
-    let mut lading = match crate::zmap::latest_consignment(conn, asset_id)? {
+    // The lading this carrier's memo commits to, never "the newest for the asset" (audit
+    // 2026-10-08, ZMAP B): a stored lading that fits another carrier is not this one's.
+    let committed = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(conn)?)
+        .iter()
+        .flat_map(|h| h.carriers.iter())
+        .find(|c| c.txid_bytes == *carrier_txid_internal && c.output_index as u32 == output_index)
+        .and_then(|c| c.consignment_hash.clone());
+    let mut lading = match crate::zmap::consignment_for_carrier(conn, asset_id, committed.as_deref(), &note_rho)? {
         Some(c) => {
             let l = Lading::parse(&c.json).map_err(|e| anyhow!("the stored lading for {asset_id} is unreadable: {e}"))?;
             let last = l.hops.last().ok_or_else(|| anyhow!("the stored lading for {asset_id} has no proofs"))?;
             let last_nf = zmap_wake::oracle::decode_hex_32(&last.instance[2])?;
             if last_nf != note_rho {
                 return Err(anyhow!(
-                    "the stored lading for {asset_id} does not end at the carrier being spent \
+                    "the lading this carrier commits to does not end at the carrier being spent \
                      (its last nullifier is not this note's rho); refusing to extend a chain \
                      this note is not on"
                 ));
@@ -327,7 +387,8 @@ pub const MAX_SEALED_BYTES: usize = 4 * 1024 * 1024;
 /// the automatic choice.
 pub fn set_dropbox_choice(choice: &str) -> Result<()> {
     let c = choice.trim().trim_end_matches('/').to_string();
-    if !(c.is_empty() || c == "off" || c.starts_with("https://") || c.starts_with("http://") || c.starts_with("file://")) {
+    // Plain http:// was accepted until 2026-10-08 (audit, ZMAP Q); ZMAP §15 says https.
+    if !(c.is_empty() || c == "off" || c.starts_with("https://") || c.starts_with("file://")) {
         return Err(anyhow!("a drop-box is an https:// address, a file:// folder, or off"));
     }
     *DROPBOX_CHOICE.lock().unwrap() = c;
@@ -452,6 +513,25 @@ pub fn deliver(recipient_ua: &str, lading: &SendLading) -> Result<()> {
 // ── receiving ────────────────────────────────────────────────────────────────────────────────
 
 /// What a fetch pass did.
+/// Lines whose walk failed, by the memo's consignment hash, and when. Kept for this process
+/// only: a restart tries once more.
+static FAILED_WALKS: std::sync::Mutex<Option<std::collections::HashMap<String, std::time::Instant>>> = std::sync::Mutex::new(None);
+const WALK_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+fn walk_failed(hash: &str) {
+    if let Ok(mut g) = FAILED_WALKS.lock() {
+        g.get_or_insert_with(Default::default).insert(hash.to_ascii_lowercase(), std::time::Instant::now());
+    }
+}
+
+fn walk_failed_recently(hash: &str) -> bool {
+    FAILED_WALKS
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().and_then(|m| m.get(&hash.to_ascii_lowercase()).map(|t| t.elapsed() < WALK_RETRY_AFTER)))
+        .unwrap_or(false)
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct FetchReport {
     pub fetched: usize,
@@ -473,12 +553,19 @@ pub fn fetch_missing_consignments(db_path: &str) -> Result<FetchReport> {
                 report.already_held += 1;
                 continue;
             }
+            // A line that failed to rebuild is not tried again at once: this runs on every
+            // item-list load and before every send, and a carrier anyone can send used to
+            // start a fresh walk each time (audit 2026-10-08, Knotline B).
+            if walk_failed_recently(hash) {
+                continue;
+            }
             // Prototype, Knotline: a key memo in the carrier's transaction opens the newest knot,
             // and each knot leads to the one before it.
             match crate::wake_memo::lading_from_knotline(&conn, &c.txid_bytes, hash) {
                 Ok(Some((bytes, walked))) => {
                     match crate::zmap::store_consignment(&conn, &h.asset_id, None, Some(c.note_id), &bytes, None) {
-                        Ok(_) => {
+                        Ok(hh) => {
+                            let _ = crate::zmap::mark_consignment_source(&conn, &hh, "knotline");
                             println!("[wake] lading for {} rebuilt from its Knotline: {walked} knot(s) followed back", h.name);
                             report.fetched += 1;
                         }
@@ -490,6 +577,7 @@ pub fn fetch_missing_consignments(db_path: &str) -> Result<FetchReport> {
                 Err(e) => {
                     eprintln!("[wake] Knotline for {}: {e}", h.name);
                     report.failed.push(format!("{}: Knotline: {e}", h.name));
+                    walk_failed(hash);
                     continue;
                 }
             }
@@ -500,7 +588,8 @@ pub fn fetch_missing_consignments(db_path: &str) -> Result<FetchReport> {
                         .map_err(|e| anyhow!("{e}"))
                         .and_then(|_| Ok(crate::zmap::store_consignment(&conn, &h.asset_id, None, Some(c.note_id), &bytes, None)?))
                     {
-                        Ok(_) => {
+                        Ok(hh) => {
+                            let _ = crate::zmap::mark_consignment_source(&conn, &hh, "memo");
                             println!("[wake] lading for {} read from the transfer's own memos", h.name);
                             report.fetched += 1;
                         }
@@ -542,7 +631,8 @@ fn accept_sealed(conn: &Connection, asset_id: &str, c: &crate::zmap::CarrierRef,
         return Err(anyhow!("the delivered lading does not hash to the memo's consignment_hash"));
     }
     Lading::parse(&bytes)?;
-    crate::zmap::store_consignment(conn, asset_id, None, Some(c.note_id), &bytes, None)?;
+    let hh = crate::zmap::store_consignment(conn, asset_id, None, Some(c.note_id), &bytes, None)?;
+    let _ = crate::zmap::mark_consignment_source(conn, &hh, "file");
     Ok(())
 }
 
@@ -797,18 +887,55 @@ fn classify(e: &WakeFailure) -> bool {
     )
 }
 
-/// Verify the lading held for `asset_id` against the node, for the carrier the wallet would
-/// spend next (the same deterministic choice `plan_asset_send` makes).
+/// Verify the lading held for `asset_id`: every unspent carrier of it is checked against the
+/// lading its own memo commits to, and the best result is the asset's state. Until 2026-10-08
+/// one carrier (the smallest txid) was checked against the newest lading stored for the asset,
+/// so an unsolicited copy of a unit, sent by anyone who knew the address, could make the
+/// genuine unit show Broken and refuse to send (audit, ZMAP B / Zecboat C / ZMAP I).
 pub fn verify_holding(db_path: &str, asset_id: &str, genesis: Option<&(String, u32, GenesisSource)>) -> Result<WakeState> {
     let conn = Connection::open(db_path)?;
     let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?);
     let Some(h) = holdings.iter().find(|h| h.asset_id == asset_id) else {
         return Ok(WakeState::NoWake { detail: "this wallet holds no carrier of that asset".into() });
     };
-    let Some(carrier) = h.carriers.iter().min_by_key(|c| (c.txid.clone(), c.output_index)) else {
+    if h.carriers.is_empty() {
         return Ok(WakeState::NoWake { detail: "no unspent carrier".into() });
-    };
-    let Some(consignment) = crate::zmap::latest_consignment(&conn, asset_id)? else {
+    }
+    let mut carriers: Vec<&crate::zmap::CarrierRef> = h.carriers.iter().collect();
+    carriers.sort_by_key(|c| (c.txid.clone(), c.output_index));
+    let mut best: Option<WakeState> = None;
+    for c in carriers {
+        let state = verify_carrier(&conn, asset_id, c, genesis)?;
+        if best.as_ref().map(|b| wake_rank(&state) > wake_rank(b)).unwrap_or(true) {
+            best = Some(state);
+        }
+    }
+    Ok(best.unwrap_or(WakeState::NoWake { detail: "no unspent carrier".into() }))
+}
+
+/// Order of preference when an asset has several carriers: a proven one over an unproven one,
+/// an unproven one over a broken one, a broken one (the sender's own lading failed) over a
+/// carrier that came with nothing.
+fn wake_rank(s: &WakeState) -> u8 {
+    match s {
+        WakeState::Verified { .. } => 5,
+        WakeState::ProviderChecked { .. } => 4,
+        WakeState::Unverified { .. } => 3,
+        WakeState::Broken { .. } => 2,
+        WakeState::NoWake { .. } => 1,
+    }
+}
+
+/// One carrier against the lading its memo commits to.
+fn verify_carrier(
+    conn: &Connection,
+    asset_id: &str,
+    carrier: &crate::zmap::CarrierRef,
+    genesis: Option<&(String, u32, GenesisSource)>,
+) -> Result<WakeState> {
+    let note = carrier_note(conn, &carrier.txid_bytes, carrier.output_index as u32)?;
+    let rho = note.note.rho().to_bytes();
+    let Some(consignment) = crate::zmap::consignment_for_carrier(conn, asset_id, carrier.consignment_hash.as_deref(), &rho)? else {
         return Ok(WakeState::NoWake {
             detail: match &carrier.consignment_hash {
                 Some(hh) => format!("the memo commits to lading {}… but it has not been fetched", &hh[..16]),
@@ -817,7 +944,6 @@ pub fn verify_holding(db_path: &str, asset_id: &str, genesis: Option<&(String, u
         });
     };
 
-    let note = carrier_note(&conn, &carrier.txid_bytes, carrier.output_index as u32)?;
     let expected = carrier
         .consignment_hash
         .as_deref()
@@ -836,7 +962,7 @@ pub fn verify_holding(db_path: &str, asset_id: &str, genesis: Option<&(String, u
             let g_ok = genesis.map(|(t, i, _)| t.eq_ignore_ascii_case(&lading.genesis.txid) && *i == lading.genesis.action_index);
             match g_ok {
                 Some(true) if v.trust == OracleTrust::FullNode => {
-                    let _ = crate::zmap::mark_consignment_verified(&conn, &consignment.sha256, Some(oracle.tip_height().unwrap_or(0)));
+                    let _ = crate::zmap::mark_consignment_verified(conn, &consignment.sha256, Some(oracle.tip_height().unwrap_or(0)));
                     Ok(WakeState::Verified {
                         hops: v.hops,
                         min_anchor_depth: v.min_anchor_depth,
@@ -878,7 +1004,7 @@ pub fn verify_holding(db_path: &str, asset_id: &str, genesis: Option<&(String, u
             }
         }
         Err(e) if classify(&e) => {
-            let _ = crate::zmap::mark_consignment_verified(&conn, &consignment.sha256, None);
+            let _ = crate::zmap::mark_consignment_verified(conn, &consignment.sha256, None);
             Ok(WakeState::Broken { failure: format!("{e:?}").split(|c: char| !c.is_alphanumeric()).next().unwrap_or("Failure").to_string(), detail: e.to_string() })
         }
         Err(e) => Ok(WakeState::Unverified { detail: e.to_string(), consignment_hash: Some(consignment.sha256.clone()) }),

@@ -99,11 +99,14 @@ echo '```' >> "$S/GATE.md"
 cd "$S/artifacts"
 sha256sum ./*.zip ./*.tar.gz | sed 's|\./||' > SHA256SUMS
 openssl pkeyutl -sign -inkey "$KEY" -rawin -in SHA256SUMS -out SHA256SUMS.sig || die "signing failed"
-python3 -c "import binascii;open('/tmp/.p.der','wb').write(binascii.unhexlify('302a300506032b6570032100'+open('$PUB').read().strip()))"
-openssl pkey -pubin -inform DER -in /tmp/.p.der -out /tmp/.p.pem 2>/dev/null
-openssl pkeyutl -verify -pubin -inkey /tmp/.p.pem -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig >/dev/null 2>&1 \
+# Private temporary names: fixed paths under /tmp could be pre-created by another user on a
+# shared host and the check made to pass or fail at will (audit 2026-10-08, Zecboat N).
+PDER="$(mktemp)"; PPEM="$(mktemp)"
+python3 -c "import binascii,sys;open(sys.argv[1],'wb').write(binascii.unhexlify('302a300506032b6570032100'+open(sys.argv[2]).read().strip()))" "$PDER" "$PUB"
+openssl pkey -pubin -inform DER -in "$PDER" -out "$PPEM" 2>/dev/null
+openssl pkeyutl -verify -pubin -inkey "$PPEM" -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig >/dev/null 2>&1 \
   || die "signature does not verify under the published key"
-rm -f /tmp/.p.der /tmp/.p.pem
+rm -f "$PDER" "$PPEM"
 
 cd "$SRC_REPO"
 {

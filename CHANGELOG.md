@@ -34,10 +34,10 @@ first public release of everything listed under 0.7.0, with that fixed.
   be sent by any means; **Open a lineage file…** takes one in. A finished send of an item shows
   the same mark under the transaction id. Before, delivery was tried once and a failure was a
   line on the console.
-- **The drop-box is a choice.** Automatic (zecboat.com), your own (`https://…` or a shared
-  `file://` folder), or none at all, with records handed over as files. A drop-box cannot read
-  or replace a record; it can withhold one, and it sees the network address of both sides. That
-  is why it is optional.
+- **No drop-box unless you name one.** The lineage travels in the transfer (the Knotline);
+  a record can also be saved as a file. A drop-box (`https://…` or a shared `file://` folder)
+  is contacted only if you name it in Settings: it cannot read or replace a record, it can
+  withhold one, and it sees the network address of both sides. zecboat.com runs none.
 
 ### For those who build or integrate
 

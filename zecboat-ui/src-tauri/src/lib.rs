@@ -110,6 +110,20 @@ async fn set_lineage_route(route: String) -> Result<(), String> {
     zecboat_core::set_send_mode_choice(&route).map_err(|e| e.to_string())
 }
 
+// Who answers questions about the chain for lineage and issuance checks: `auto`, `node` or
+// `provider`; `source` is `settings` or `default`. A node user who chooses `node` is never
+// switched to the provider without a word (audit 2026-10-08).
+#[tauri::command]
+async fn get_chain_source() -> Result<serde_json::Value, String> {
+    let (choice, source) = zecboat_core::chain_choice_with_source();
+    Ok(serde_json::json!({ "choice": choice, "source": source }))
+}
+
+#[tauri::command]
+async fn set_chain_source(choice: String) -> Result<(), String> {
+    zecboat_core::set_chain_choice(&choice).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn set_dropbox(choice: String) -> Result<(), String> {
     zecboat_core::set_dropbox_choice(&choice).map_err(|e| e.to_string())
@@ -392,7 +406,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sync_status, yubikey_message, set_provider_url, get_provider_url, get_balance, get_balance_breakdown, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
-            registry_base, get_lineage_route, set_lineage_route, asset_send_estimate, lineage_outgoing, lineage_redeliver, lineage_export, lineage_import, get_dropbox, set_dropbox, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
+            registry_base, get_lineage_route, set_lineage_route, get_chain_source, set_chain_source, asset_send_estimate, lineage_outgoing, lineage_redeliver, lineage_export, lineage_import, get_dropbox, set_dropbox, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, wallet_uses_yubikey, lock_wallet,
             create_new_account, backup_wallet, list_backups, restore_backup, rescan_from_height, export_keys, get_viewkey, check_yubikey,
             get_roster, add_roster_contact, delete_roster_contact, validate_address

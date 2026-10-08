@@ -239,7 +239,7 @@ fn split(words: &str, asset_id: &str, to_other: &str, to_self: &str, lading_path
     let mut lading = zmap_wake::lading::Lading::parse(&lading_bytes)?;
     let conn = rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let note = zecboat_core::wake::carrier_note(&conn, plan.carrier.txid().as_ref(), plan.carrier.output_index())?;
-    let oracle = zecboat_core::wake::oracle();
+    let oracle = zecboat_core::wake::chain(); // 0.7.1: own node, else the provider (the trait is the same)
     let ts = oracle.ironwood_tree_state(note.mined_height)?;
     let w = zmap_wake::wallet_notes::witness_at(&wallet_db, &note, &ts)?;
     let proof = zmap_wake::prove_hop(&w).map_err(|e| anyhow::anyhow!("{e:?}"))?;

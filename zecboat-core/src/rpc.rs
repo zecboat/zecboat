@@ -1470,6 +1470,24 @@ pub static PROVIDER_URL: Lazy<Mutex<String>> = Lazy::new(|| {
 ///
 /// Anyone running their own registry points here too, which is the more important reason: a wallet
 /// that can only fetch assets from one company's host is not much of an open format.
+/// Read a response body up to `max` bytes; more is an error, not a bigger allocation
+/// (audit 2026-10-08, Zecboat K).
+pub(crate) async fn read_bounded(mut res: reqwest::Response, max: usize) -> anyhow::Result<String> {
+    if let Some(n) = res.content_length() {
+        if n as usize > max {
+            anyhow::bail!("response of {n} bytes exceeds the {max}-byte limit");
+        }
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = res.chunk().await? {
+        if buf.len() + chunk.len() > max {
+            anyhow::bail!("response exceeds the {max}-byte limit");
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8(buf)?)
+}
+
 pub fn registry_base() -> String {
     std::env::var("ZECBOAT_REGISTRY")
         .ok()
@@ -3471,9 +3489,12 @@ pub async fn get_zsas() -> Result<Vec<Value>> {
     // to one. Best effort; a fetch failure must not hide the holdings.
     {
         let p = db_path.clone();
-        match tokio::task::spawn_blocking(move || crate::wake::fetch_missing_consignments(&p)).await {
-            Ok(Ok(r)) if r.fetched > 0 || !r.failed.is_empty() => println!("[wake] consignments: {r:?}"),
-            Ok(Err(e)) => eprintln!("[wake] consignment fetch skipped: {e}"),
+        // Bounded wait: a long or hostile line must not hold the item list (audit 2026-10-08,
+        // Knotline B). The walk goes on in its thread and its result lands in the database.
+        match tokio::time::timeout(std::time::Duration::from_secs(20), tokio::task::spawn_blocking(move || crate::wake::fetch_missing_consignments(&p))).await {
+            Ok(Ok(Ok(r))) if r.fetched > 0 || !r.failed.is_empty() => println!("[wake] consignments: {r:?}"),
+            Ok(Ok(Err(e))) => eprintln!("[wake] consignment fetch skipped: {e}"),
+            Err(_) => println!("[wake] consignments: still collecting; the item list is not waiting"),
             _ => {}
         }
     }
@@ -3551,21 +3572,19 @@ pub async fn view_asset(asset_id: String) -> Result<String> {
         ));
     }
 
-    // Prefer the URI the memo itself declares; fall back to the canonical layout.
-    let db_path = crate::paths::as_string::wallet_db_path()?;
-    let declared = match crate::db::WalletPool::new(&db_path) {
-        Ok(pool) => pool
-            .get_zmap_holdings()
-            .await
-            .ok()
-            .and_then(|hs| hs.into_iter().find(|h| h.asset_id == asset_id))
-            .and_then(|h| h.metadata_uri),
-        Err(_) => None,
-    };
-    let url = declared
-        .unwrap_or_else(|| format!("{}/collection/{}.json", registry_base(), asset_id));
-
-    let res = reqwest::Client::new()
+    // Only the configured registry, by asset id. The memo's own `metadata_uri` is never fetched:
+    // it is written by whoever made the carrier, so fetching it told that party the holder's
+    // address and the moment the item was opened (audit 2026-10-08, ZMAP D / Zecboat A). No
+    // redirects, https only, and a bounded body.
+    let url = format!("{}/collection/{}.json", registry_base(), asset_id);
+    if !url.starts_with("https://") {
+        return Err(anyhow::anyhow!("The asset registry must be reached over https ({})", url));
+    }
+    const MAX_METADATA_BYTES: usize = 256 * 1024;
+    let res = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?
         .get(&url)
         .send()
         .await
@@ -3583,8 +3602,7 @@ pub async fn view_asset(asset_id: String) -> Result<String> {
 
     // A missing record is served as the site's HTML page rather than a 404, so the status code alone
     // is not proof. Require it to parse as JSON.
-    let body = res
-        .text()
+    let body = read_bounded(res, MAX_METADATA_BYTES)
         .await
         .map_err(|e| anyhow::anyhow!("Unreadable response from {}: {}", url, e))?;
     let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|_| {

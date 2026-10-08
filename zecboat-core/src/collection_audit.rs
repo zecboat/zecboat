@@ -62,7 +62,8 @@ pub fn parse_close(memo: &[u8]) -> Option<Close> {
             // `count` comes off the chain. Mode 0 carries the commitments inline, and a memo
             // holds 512 bytes, so more than 16 is malformed; without this bound a crafted count
             // asked for count × 32 bytes (registry review F2: 137 GB from u32::MAX).
-            if count == 0 || count > 16 {
+            // ZMAP §7.4: a close memo holds at most 13 inline commitments (audit 2026-10-08, M).
+            if count == 0 || count > 13 {
                 return None;
             }
             let want = count as usize * 32;
