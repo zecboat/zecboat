@@ -240,7 +240,7 @@ async fn a_stored_seed_that_matches_no_account_is_refused() {
     // Import ADDS an account, so the wallet now holds two and the stored mnemonic belongs
     // to one of them. This must still work — an earlier draft compared against the first
     // account only and would have refused every wallet that had ever imported.
-    zecboat_core::export_keys()
+    zecboat_core::export_keys(held_password())
         .await
         .expect("a legitimately imported wallet must still open its own seed");
 
@@ -265,7 +265,7 @@ async fn a_stored_seed_that_matches_no_account_is_refused() {
 
     let msg = format!(
         "{:#}",
-        zecboat_core::export_keys().await.expect_err(
+        zecboat_core::export_keys(held_password()).await.expect_err(
             "a stored seed belonging to no account was accepted; the wallet would sign with \
              the wrong key and say nothing"
         )
@@ -322,11 +322,20 @@ async fn import_defaults_to_sapling_activation_and_stores_the_seed() {
     assert_eq!(n, 1, "import stored no seed phrase — the wallet could never export it");
 
     // And it must be the phrase that was imported, not the one that was replaced.
-    let exported = zecboat_core::export_keys().await.expect("export");
+    let exported = zecboat_core::export_keys(held_password()).await.expect("export");
     assert!(
         exported.contains("zoo zoo"),
         "the stored phrase is not the imported one: {exported}"
     );
+    // Audit 2026-10-08 (Zecboat L): the phrase alone, and only for the passphrase.
+    assert!(!exported.contains("Seed Phrase"), "export returned prose with the phrase: {exported}");
+    let refused = format!(
+        "{:#}",
+        zecboat_core::export_keys("not-the-passphrase".into())
+            .await
+            .expect_err("an unlocked wallet showed its seed for a wrong passphrase")
+    );
+    assert!(refused.contains("Incorrect password"), "unexpected refusal: {refused}");
 }
 
 /// A backup taken mid-session must contain writes still sitting in the write-ahead log.
@@ -524,4 +533,12 @@ async fn backup_carries_consignments_written_after_the_pool_opened() {
     assert_eq!(rows.len(), 1, "the backup does not carry the consignment");
     assert_eq!(rows[0].sha256, hash);
     assert_eq!(rows[0].json, lading);
+}
+
+/// The passphrase the wallet was unlocked with. Taken out of the lock before the call:
+/// `export_keys` locks it too, and a guard inside the call's arguments lives until the end
+/// of the statement, `.await` included.
+fn held_password() -> String {
+    let held = zecboat_core::rpc::WALLET_PASSWORD.lock().unwrap().clone();
+    held.expect("unlocked")
 }

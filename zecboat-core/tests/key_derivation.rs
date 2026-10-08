@@ -751,11 +751,7 @@ async fn an_imported_phrase_is_stored_normalised_not_as_typed() {
         .await
         .expect("import must accept the contaminated phrase");
 
-    let exported = zecboat_core::export_keys().await.expect("export");
-    let stored = exported
-        .rsplit_once("Seed Phrase:\n")
-        .map(|(_, p)| p)
-        .expect("export_keys prints the phrase after a fixed header");
+    let stored = zecboat_core::export_keys(held_password()).await.expect("export");
     assert_eq!(
         stored, w.phrase,
         "import_wallet stored the phrase as typed; recover_wallet_from_seed stores it \
@@ -802,4 +798,12 @@ async fn the_view_key_shown_is_the_one_the_wallet_scans_with() {
         "the refusal must say the derived key does not match the account: {msg}"
     );
     assert!(!msg.contains(w.phrase) && !msg.contains("abandon"), "the refusal echoed the phrase");
+}
+
+/// The passphrase the wallet was unlocked with. Taken out of the lock before the call:
+/// `export_keys` locks it too, and a guard inside the call's arguments lives until the end
+/// of the statement, `.await` included.
+fn held_password() -> String {
+    let held = zecboat_core::rpc::WALLET_PASSWORD.lock().unwrap().clone();
+    held.expect("unlocked")
 }

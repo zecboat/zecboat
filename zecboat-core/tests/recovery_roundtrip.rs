@@ -90,10 +90,7 @@ fn identity_of(db: &Path) -> (String, Vec<String>) {
 
 /// The phrase as Settings → Export shows it: decrypted from the stored ciphertext.
 async fn exported_phrase() -> String {
-    let out = zecboat_core::export_keys().await.expect("export_keys");
-    out.rsplit_once("Seed Phrase:\n")
-        .map(|(_, p)| p.to_string())
-        .expect("export_keys prints the phrase after a fixed header")
+    zecboat_core::export_keys(held_password()).await.expect("export_keys")
 }
 
 /// The example, kept: the words the wizard returns restore the same wallet, into a
@@ -179,4 +176,12 @@ async fn the_key_a_send_signs_with_is_the_key_the_wallet_scans_with() {
         let signs_with = usk.to_unified_full_viewing_key().encode(&MainNetwork);
         assert_eq!(signs_with, scans_with, "{label}: a send would sign with a key that is not this wallet's");
     }
+}
+
+/// The passphrase the wallet was unlocked with. Taken out of the lock before the call:
+/// `export_keys` locks it too, and a guard inside the call's arguments lives until the end
+/// of the statement, `.await` included.
+fn held_password() -> String {
+    let held = zecboat_core::rpc::WALLET_PASSWORD.lock().unwrap().clone();
+    held.expect("unlocked")
 }

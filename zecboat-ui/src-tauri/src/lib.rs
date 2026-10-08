@@ -319,8 +319,8 @@ async fn restore_backup(backup_name: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn export_keys() -> Result<String, String> {
-    zecboat_core::export_keys().await.map_err(|e| e.to_string())
+async fn export_keys(passphrase: String) -> Result<String, String> {
+    zecboat_core::export_keys(passphrase).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -4439,10 +4439,32 @@ fn extract_mnemonic_internal() -> Result<zeroize::Zeroizing<String>> {
     Ok(phrase)
 }
 
-pub async fn export_keys() -> Result<String> {
+/// The recovery phrase, and nothing else, once the passphrase is given again (audit 2026-10-08,
+/// Zecboat L). An unlocked wallet left open is not consent to show its seed: whoever reaches
+/// the Settings screen must still know the passphrase. In YubiKey mode the typed string is the
+/// PIN, which the device proved at unlock; it is compared with the one that opened the wallet,
+/// so export needs no second touch. The phrase alone is returned, so a copy holds no prose.
+pub async fn export_keys(passphrase: String) -> Result<String> {
+    let held = WALLET_PASSWORD
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("the wallet is locked"))?;
+    if crate::paths::yubikey_stub_path()?.exists() {
+        if !same_secret(passphrase.as_bytes(), held.as_bytes()) {
+            anyhow::bail!("Incorrect PIN.");
+        }
+    } else {
+        verify_wallet_passphrase(&passphrase)?;
+    }
     let mnemonic = extract_mnemonic_internal()?;
     // The String handed to the UI is the one copy that cannot be wiped: it is displayed.
-    Ok(format!("Keys exported safely.\nSeed Phrase:\n{}", mnemonic.as_str()))
+    Ok(mnemonic.as_str().to_string())
+}
+
+/// Equality that does not stop at the first differing byte.
+fn same_secret(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 pub async fn get_viewkey() -> Result<String> {
