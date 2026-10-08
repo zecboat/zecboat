@@ -3714,24 +3714,19 @@ pub async fn fee_readiness() -> Result<Value> {
 /// Formats the registry may publish. The extension is **routing only**: verification is by hash.
 const IMAGE_EXTENSIONS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
 
-/// Every URL to try for an asset's artwork, in order.
+/// Every URL to try for an asset's artwork, in order: the **asset id** in each format.
 ///
-/// Identity v1 collections publish each image under its **asset id**, exactly as their signed
-/// manifest names it (`/collection/<asset_id>.jpg`), and zecboat.com's collection pages use the
-/// same address. Under identity v1 the asset id is no longer the image hash, so that name is tried
-/// first and the image hash second: the hash name is how earlier wallets look, and how every
-/// pre-v1 asset is published. For a pre-v1 asset the asset id *is* the image hash, so the list
-/// collapses to one name and behaves exactly as before.
-///
-/// The name is only an address. Whatever is found must still hash to `expected`.
-fn artwork_candidate_urls(base: &str, asset_id: &str, expected: &str) -> Vec<String> {
-    let mut names = vec![asset_id];
-    if expected != asset_id {
-        names.push(expected);
-    }
-    names
-        .into_iter()
-        .flat_map(|n| IMAGE_EXTENSIONS.iter().map(move |ext| format!("{}/collection/{}.{}", base, n, ext)))
+/// Collections publish each image under its asset id, as their signed manifest names it
+/// (`/collection/<asset_id>.jpg`); for a pre-v1 asset the asset id is the image hash, so the
+/// same rule covers both. The memo's `image_hash` is never put in a URL (audit 2026-10-08,
+/// Zecboat B / ZMAP J): it is chosen by whoever wrote the memo, so a sender could plant a
+/// unique value and learn from the registry's logs when, and from where, the item is opened.
+/// It is still what the fetched image must hash to. On 2026-10-08 every published image on
+/// zecboat.com was reachable by its asset id, so nothing is lost.
+fn artwork_candidate_urls(base: &str, asset_id: &str) -> Vec<String> {
+    IMAGE_EXTENSIONS
+        .iter()
+        .map(|ext| format!("{}/collection/{}.{}", base, asset_id, ext))
         .collect()
 }
 
@@ -3767,7 +3762,7 @@ pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
     let mut found: Option<(String, String, bytes::Bytes)> = None;
     let mut first_unverified: Option<(String, String, bytes::Bytes)> = None;
 
-    for url in artwork_candidate_urls(&registry_base(), &asset_id, &expected) {
+    for url in artwork_candidate_urls(&registry_base(), &asset_id) {
         let res = match client.get(&url).send().await {
             Ok(r) => r,
             Err(e) => {
@@ -4600,23 +4595,12 @@ mod tests {
     const LPC10_IMG: &str = "73801910be7eeb98e5e3a0b5e2adc5ddb519af45bb76cd1ac24350d9e70495f3";
 
     #[test]
-    fn artwork_v1_tries_asset_id_first_then_image_hash() {
-        let urls = super::artwork_candidate_urls("https://zecboat.com", LPC10_ID, LPC10_IMG);
-        assert_eq!(urls.len(), 8);
-        // The name the signed manifest uses comes first, every format, then the hash name.
-        assert_eq!(urls[0], format!("https://zecboat.com/collection/{LPC10_ID}.png"));
-        assert_eq!(urls[1], format!("https://zecboat.com/collection/{LPC10_ID}.jpg"));
-        assert!(urls[..4].iter().all(|u| u.contains(LPC10_ID)));
-        assert!(urls[4..].iter().all(|u| u.contains(LPC10_IMG)));
-        assert_eq!(urls[5], format!("https://zecboat.com/collection/{LPC10_IMG}.jpg"));
-    }
-
-    #[test]
-    fn artwork_pre_v1_unchanged_when_id_is_the_image_hash() {
-        // Before identity v1 the asset id IS the image hash: one name, four formats, as before.
-        let urls = super::artwork_candidate_urls("https://zecboat.com", LPC10_IMG, LPC10_IMG);
+    fn artwork_is_asked_for_by_asset_id_only() {
+        // The memo's image hash (LPC10_IMG here) never reaches a URL: a sender chooses it.
+        let urls = super::artwork_candidate_urls("https://zecboat.com", LPC10_ID);
         assert_eq!(urls, ["png", "jpg", "jpeg", "webp"].iter()
-            .map(|e| format!("https://zecboat.com/collection/{LPC10_IMG}.{e}")).collect::<Vec<_>>());
+            .map(|e| format!("https://zecboat.com/collection/{LPC10_ID}.{e}")).collect::<Vec<_>>());
+        assert!(urls.iter().all(|u| !u.contains(LPC10_IMG)));
     }
 
     use super::*;
