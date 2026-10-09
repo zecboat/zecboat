@@ -3,12 +3,11 @@
 //!   cargo build --release --features test-overrides --example wake_consignments
 //!   (without the feature ZECBOAT_WAKE_MANIFEST is ignored)
 //!   env HOME=<scratch home holding .AppVault/data/wallet.db (a COPY)> \
-//!       ZECBOAT_DROPBOX=file:///path ZECBOAT_WAKE_MANIFEST=/path/manifest_v05.json \
+//!       ZECBOAT_WAKE_MANIFEST=/path/manifest_v05.json \
 //!       ZECBOAT_ZEBRAD_RPC=http://127.0.0.1:8232 \
 //!       target/release/examples/wake_consignments <list|fetch|verify <asset_id>|state>
 //!
-//! `list` prints stored ladings; `fetch` pulls what the drop-box holds for carriers whose memo
-//! commits to a lading; `verify` runs the four-state badge for one asset; `state` prints what
+//! `list` prints stored ladings; `fetch` collects the ladings carriers' memos commit to; `verify` runs the four-state badge for one asset; `state` prints what
 //! `get_zsas` would report. Nothing here builds or broadcasts a transaction.
 use std::env;
 

@@ -51,16 +51,16 @@ fn main() -> anyhow::Result<()> {
         Some(zcash_protocol::consensus::BlockHeight::from_u32(tip + 40))
     };
     // Wake (chapter 8): the genesis outpoint from ZECBOAT_WAKE_MANIFEST if set; the unit may
-    // travel unproven only with WAKE_ALLOW_UNPROVEN=1. The lading goes to ZECBOAT_DROPBOX.
+    // travel unproven only with WAKE_ALLOW_UNPROVEN=1. The lading travels in the transfer.
     let wake = zecboat_core::wake::SendOptions {
         genesis: zecboat_core::wake::genesis_ref_from_local_manifest(asset_id),
         acknowledge_unproven: env::var("WAKE_ALLOW_UNPROVEN").map(|v| v == "1").unwrap_or(false),
         abandon_lineage: false,
     };
-    // Collect any lading the drop-box (or the carrier's own transaction) holds for this copy first,
+    // Collect any lading the carrier's line or transaction holds for this copy first,
     // as the wallet does when it lists its assets.
     match zecboat_core::wake::fetch_missing_consignments(&db_path) {
-        Ok(r) => println!("ladings: fetched {}, already held {}, not found {}, failed {:?}", r.fetched, r.already_held, r.not_in_dropbox, r.failed),
+        Ok(r) => println!("ladings: fetched {}, already held {}, not found {}, failed {:?}", r.fetched, r.already_held, r.in_progress.len(), r.failed),
         Err(e) => println!("lading fetch skipped: {e}"),
     }
     let t = std::time::Instant::now();

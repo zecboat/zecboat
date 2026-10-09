@@ -1,5 +1,5 @@
 //! Feasibility check (2026-10-05): carry a lineage record inside the transfer itself, as memos
-//! of extra shielded outputs to the recipient, instead of handing it to a drop-box.
+//! of extra shielded outputs to the recipient, instead of handing it over as a file.
 //!
 //!   cargo run --release --features lightwalletd --example memo_carry -- <wallet-copy.db> <server-url>
 //!

@@ -84,6 +84,14 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
     if let Some(state) = crate::issuance_v1::verify(&asset_id).await {
         return Ok(state);
     }
+    // The memo claims a key this wallet knows, and that key's manifest does not list the
+    // asset: the forgery answer, named (gate fifth pass, Finding 1).
+    if let Some(claimed) = crate::issuance_v1::known_issuer_named_by_holder(&asset_id) {
+        return Ok(BadgeState::NotListed {
+            issuer: claimed.clone(),
+            detail: format!("this unit's memo names {claimed}'s key, but {claimed}'s manifest does not list this asset"),
+        });
+    }
     let known = crate::issuance_v1::PINNED_V1.iter().map(|(l, _, _)| *l).collect::<Vec<_>>().join(", ");
     Ok(BadgeState::Unknown {
         detail: format!("a collection this wallet does not know: not listed in any manifest it holds ({known}) nor in a collection audited from the Zecboat Registry"),

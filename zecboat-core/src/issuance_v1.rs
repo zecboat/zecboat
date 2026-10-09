@@ -143,6 +143,27 @@ fn holder_memo(asset_id: &str) -> Option<Value> {
     holder_memos(asset_id).into_iter().next()
 }
 
+/// The collection a memo's `ik` belongs to, when this wallet knows that key: a pinned
+/// collection's label, or the name of a registered collection whose audit passed and closed
+/// (so its manifest lists every unit there will ever be). `None` for a key the wallet has
+/// never seen. Pure, so it can be tested per pinned key.
+pub fn known_issuer_for_ik(ik_hex: &str, audits: &[crate::collection_audit::AuditReport]) -> Option<String> {
+    if let Some((label, _, _)) = PINNED_V1.iter().find(|(_, k, _)| k.eq_ignore_ascii_case(ik_hex)) {
+        return Some(label.to_string());
+    }
+    audits.iter().find(|a| a.passed && a.close_height.is_some() && a.ik.eq_ignore_ascii_case(ik_hex)).map(|a| a.name.clone())
+}
+
+/// The collection the holder's own memo for `asset_id` claims, when its `ik` is a key this
+/// wallet knows. An asset so claimed that no held manifest lists is the forgery answer, not
+/// "unknown" (gate fifth pass, Finding 1): the key's manifest is exhaustive once the collection
+/// is closed, and the pinned ones are.
+pub fn known_issuer_named_by_holder(asset_id: &str) -> Option<String> {
+    let ik = holder_memo(asset_id)?["ik"].as_str()?.to_ascii_lowercase();
+    let audits: Vec<crate::collection_audit::AuditReport> = crate::collection_audit::cached_audits().map(|v| v.into_iter().map(|(_, a)| a).collect()).unwrap_or_default();
+    known_issuer_for_ik(&ik, &audits)
+}
+
 /// The signed manifests of the pinned collections, built into the wallet: the seed of a fresh
 /// install's knowledge, before its first registry scan. The chain copy (a passed audit's
 /// etched manifest) is preferred whenever the wallet holds one. **Nothing here is fetched from
@@ -318,7 +339,7 @@ pub async fn verify(asset_id: &str) -> Option<BadgeState> {
     // checked by exactly the same rules, with the registered key in place of a pinned one. The
     // trust root is the registry's key, pinned above; zecboat.com is not consulted.
     let Some(a) = crate::collection_audit::audited_collection_listing(asset_id) else {
-        // Registered, but not (or not since phase 4) checked: say so in grey. Falling through
+        // Registered, but not (or not since phase 4) checked: say so in amber. Falling through
         // would give "not listed", the forgery verdict, for a collection that is merely
         // unchecked.
         let memo_ik = holder_memo(asset_id).and_then(|m| m["ik"].as_str().map(str::to_ascii_lowercase));
@@ -530,6 +551,13 @@ mod tests {
         }
         assert!(pinned_listing_offline(&"0".repeat(64)).is_none());
         assert_eq!(pinned_issuance_ufvks().len(), SEEDS.len());
+        // A memo naming a pinned key for an asset its manifest does not list is the forgery
+        // answer, named after that collection (gate fifth pass, Finding 1).
+        for (label, k, _) in PINNED_V1 {
+            assert_eq!(known_issuer_for_ik(k, &[]).as_deref(), Some(*label));
+            assert_eq!(known_issuer_for_ik(&k.to_ascii_uppercase(), &[]).as_deref(), Some(*label));
+        }
+        assert!(known_issuer_for_ik(&"0".repeat(64), &[]).is_none());
     }
 
     #[test]

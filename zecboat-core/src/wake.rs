@@ -8,9 +8,9 @@
 //!    the new carrier commits to that hash. If the sender holds no lading and the note is not a
 //!    genesis output, the unit can only travel *unproven*, and only if the user said so.
 //! 2. **Deliver.** 0.7.1: the lading travels in the transfer itself (Knotline, `wake_memo`).
-//!    The sealed-file route remains for the cases that does not cover, and a drop-box
-//!    (a `file://` folder or an `https://` endpoint) only if the user names one; none is
-//!    contacted by default. Never plaintext, never listed.
+//!    The sealed-file route remains for the cases that does not cover. The drop-box route
+//!    (a folder or an https endpoint the user named) was removed in hardening 20: nothing in
+//!    the middle, nothing to defend. Never plaintext, never listed.
 //! 3. **Receive.** A carrier whose memo carries `consignment_hash` and no stored lading triggers
 //!    a fetch; what comes back must open with this wallet's keys and hash to the memo's value.
 //! 4. **Verify.** `verify_chain` against the chain source the wallet chose (`chain()`: its own
@@ -481,7 +481,7 @@ pub fn prepare_send_lading<P: zcash_protocol::consensus::Parameters>(
     Ok(Some(SendLading { hops: lading.hops.len(), bytes, hash_hex }))
 }
 
-// ── sealing and the drop-box ─────────────────────────────────────────────────────────────────
+// ── sealing ──────────────────────────────────────────────────────────────────────────────────
 
 /// Seal `bytes` to the Orchard receiver of `recipient_ua`.
 pub fn seal_for(recipient_ua: &str, bytes: &[u8]) -> Result<Vec<u8>> {
@@ -495,164 +495,9 @@ pub fn seal_for(recipient_ua: &str, bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(sealed.to_bytes())
 }
 
-/// The drop-box chosen in Settings (0.7.1). Empty: no choice made, so the environment or the
-/// default applies. `off`: no drop-box at all; ladings are handed over as files.
-static DROPBOX_CHOICE: once_cell::sync::Lazy<std::sync::Mutex<String>> =
-    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(String::new()));
-
-/// Largest sealed lading the wallet will accept from a drop-box or a file. A lading grows by
-/// about 7 KB per hop; this leaves room for several hundred.
+/// Largest sealed lading the wallet will accept as a file. A lading grows by about 7 KB per
+/// hop; this leaves room for several hundred.
 pub const MAX_SEALED_BYTES: usize = 4 * 1024 * 1024;
-
-/// Set the drop-box from Settings: an `https://` base, a `file://` folder, `off`, or empty for
-/// the automatic choice.
-pub fn set_dropbox_choice(choice: &str) -> Result<()> {
-    let c = choice.trim().trim_end_matches('/').to_string();
-    // Plain http:// was accepted until 2026-10-08 (audit, ZMAP Q); ZMAP §15 says https.
-    if !(c.is_empty() || c == "off" || c.starts_with("https://") || c.starts_with("file://")) {
-        return Err(anyhow!("a drop-box is an https:// address, a file:// folder, or off"));
-    }
-    *DROPBOX_CHOICE.lock().unwrap() = c;
-    Ok(())
-}
-
-/// What Settings last set: empty, `off`, or a base.
-pub fn dropbox_choice() -> String {
-    DROPBOX_CHOICE.lock().unwrap().clone()
-}
-
-fn dropbox_from_env() -> Option<String> {
-    // The same rule as the Settings path: https or a local folder, nothing else (review
-    // 2026-10-09, session 4, Issue M: the environment value was not checked).
-    std::env::var("ZECBOAT_DROPBOX")
-        .ok()
-        .map(|s| s.trim().trim_end_matches('/').to_string())
-        .filter(|s| !s.is_empty())
-        .filter(|s| {
-            let ok = s.starts_with("https://") || s.starts_with("file://");
-            if !ok {
-                eprintln!("[wake] ZECBOAT_DROPBOX={s:?} is neither https:// nor file://; ignored");
-            }
-            ok
-        })
-}
-
-/// Whether any drop-box is in use: only when one is named, in Settings or by `ZECBOAT_DROPBOX`.
-///
-/// Until 2026-10-06 a wallet with no choice fell back to `{registry}/dropbox`, that is
-/// zecboat.com. The owner rejected that: its operator would see the network address of both
-/// sides of every transfer. With the Knotline the record travels in the transfer itself, so
-/// nothing is contacted by default.
-pub fn dropbox_enabled() -> bool {
-    let chosen = dropbox_choice();
-    chosen != "off" && (!chosen.is_empty() || dropbox_from_env().is_some())
-}
-
-/// The drop-box base, or an empty string when none is in use. `file://<dir>` for a shared
-/// directory, otherwise an HTTP base URL. Order: the choice made in Settings, then
-/// `ZECBOAT_DROPBOX`.
-pub fn dropbox_base() -> String {
-    let chosen = dropbox_choice();
-    if chosen == "off" {
-        return String::new();
-    }
-    if !chosen.is_empty() {
-        return chosen;
-    }
-    dropbox_from_env().unwrap_or_default()
-}
-
-fn dropbox_file(base: &str, hash_hex: &str) -> PathBuf {
-    PathBuf::from(base.trim_start_matches("file://")).join(format!("{hash_hex}.json"))
-}
-
-/// Put a sealed lading under its hash. Overwrites nothing: the first delivery stands.
-pub fn dropbox_put(hash_hex: &str, sealed: &[u8]) -> Result<()> {
-    if !dropbox_enabled() {
-        return Err(anyhow!("no drop-box is in use (Settings); hand the lineage file to the recipient yourself"));
-    }
-    let base = dropbox_base();
-    if base.starts_with("file://") {
-        let path = dropbox_file(&base, hash_hex);
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        if !path.exists() {
-            std::fs::write(&path, sealed)?;
-        }
-        return Ok(());
-    }
-    let url = format!("{base}/{hash_hex}");
-    let res = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .no_proxy()
-        .build()?
-        .put(&url)
-        .header("content-type", "application/json")
-        .body(sealed.to_vec())
-        .send()
-        .map_err(|e| anyhow!("{url}: {e}"))?;
-    if !res.status().is_success() {
-        return Err(anyhow!("{url}: HTTP {}", res.status()));
-    }
-    Ok(())
-}
-
-/// Fetch a sealed lading by hash. `Ok(None)` when the drop-box has nothing under it.
-pub fn dropbox_get(hash_hex: &str) -> Result<Option<Vec<u8>>> {
-    if !dropbox_enabled() {
-        return Ok(None);
-    }
-    let base = dropbox_base();
-    if base.starts_with("file://") {
-        let path = dropbox_file(&base, hash_hex);
-        return match std::fs::read(&path) {
-            Ok(b) => Ok(Some(b)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e.into()),
-        };
-    }
-    let url = format!("{base}/{hash_hex}");
-    // The same rules as every other client: no redirects (a drop-box must not send the
-    // request, which carries the lading's hash, to another host or to plain http), and a
-    // body read in bounded pieces, never whole (gate fourth pass, L-4).
-    let mut res = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .build()?
-        .get(&url)
-        .send()
-        .map_err(|e| anyhow!("{url}: {e}"))?;
-    if res.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
-    }
-    if !res.status().is_success() {
-        return Err(anyhow!("{url}: HTTP {}", res.status()));
-    }
-    if res.content_length().map(|n| n as usize > MAX_SEALED_BYTES).unwrap_or(false) {
-        return Err(anyhow!("{url}: the drop-box answered with more than {MAX_SEALED_BYTES} bytes; refused"));
-    }
-    let mut bytes = Vec::new();
-    let mut chunk = [0u8; 16 * 1024];
-    loop {
-        let n = std::io::Read::read(&mut res, &mut chunk).map_err(|e| anyhow!("{url}: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&chunk[..n]);
-        if bytes.len() > MAX_SEALED_BYTES {
-            return Err(anyhow!("{url}: the drop-box answered with more than {MAX_SEALED_BYTES} bytes; refused"));
-        }
-    }
-    Ok(Some(bytes))
-}
-
-/// Deliver a lading for a sent carrier: seal to the recipient and put it in the drop-box.
-pub fn deliver(recipient_ua: &str, lading: &SendLading) -> Result<()> {
-    let sealed = seal_for(recipient_ua, &lading.bytes)?;
-    dropbox_put(&lading.hash_hex, &sealed)
-}
 
 // ── receiving ────────────────────────────────────────────────────────────────────────────────
 
@@ -708,7 +553,6 @@ pub fn walk_in_progress(c: &crate::zmap::CarrierRef) -> bool {
 pub struct FetchReport {
     pub fetched: usize,
     pub already_held: usize,
-    pub not_in_dropbox: usize,
     pub failed: Vec<String>,
     /// Carriers (`txid#index`) whose line another pass was still walking when this one looked.
     /// A caller that needs the lading (the send) waits or refuses; it never reads "in progress"
@@ -736,9 +580,10 @@ pub fn collect_lineage(db_path: &str, asset_id: &str) -> Result<FetchReport> {
     fetch_missing_consignments_scoped(db_path, FetchScope::on_demand(asset_id))
 }
 
-/// For every held carrier whose memo commits to a lading this wallet does not hold, try the
-/// drop-box. What comes back must open with this wallet's keys and hash to the memo's value.
-/// What one fetch pass is for (review 2026-10-09, Knotline A).
+/// What one fetch pass is for (review 2026-10-09, Knotline A): for every held carrier whose
+/// memo commits to a lading this wallet does not hold, walk its Knotline or read the
+/// transfer's own memos. What comes back must pass the checks that need no oracle and hash
+/// to the memo's value.
 pub struct FetchScope {
     /// Only this asset's carriers; `None` for every holding.
     pub asset: Option<String>,
@@ -841,7 +686,7 @@ pub fn fetch_missing_consignments_scoped(db_path: &str, scope: FetchScope) -> Re
         // ever fails "transiently" still drifts back (gate fourth pass, L-2). Equal weight:
         // the older note first, since a copy sent after a purchase cannot overtake it.
         let mut carriers: Vec<&crate::zmap::CarrierRef> = h.carriers.iter().collect();
-        carriers.sort_by_key(|c| (crate::zmap::walk_order_key(&conn, &c.txid, c.output_index), c.note_id));
+        carriers.sort_by_cached_key(|c| (crate::zmap::walk_order_key(&conn, &c.txid, c.output_index), c.note_id));
         for c in carriers {
             if started.elapsed() > scope.pass_deadline {
                 // Out of time for the pass: nothing is recorded against carriers not reached.
@@ -871,8 +716,8 @@ pub fn fetch_missing_consignments_scoped(db_path: &str, scope: FetchScope) -> Re
             }
             // A line that failed to rebuild is not walked again at once; the delay doubles and
             // survives a restart (audit 2026-10-08, Knotline B; review 2026-10-09, Knotline A).
-            // The back-off holds the walk only: the transfer's own memos and a named drop-box
-            // are still tried (review 2026-10-09, regression over 12-15, Issue D).
+            // The back-off holds the walk only: the transfer's own memos are still read
+            // (review 2026-10-09, regression over 12-15, Issue D).
             let key = walk_key(c);
             let in_backoff = crate::zmap::walk_failure(&conn, &c.txid, c.output_index)?.map(|(_, _, left)| left > 0).unwrap_or(false);
             if in_backoff {
@@ -962,16 +807,9 @@ pub fn fetch_missing_consignments_scoped(db_path: &str, scope: FetchScope) -> Re
                 Ok(None) => {}
                 Err(e) => eprintln!("[wake] could not look for the record in the transfer: {e}"),
             }
-            let sealed = match dropbox_get(hash) {
-                Ok(Some(b)) => b,
-                Ok(None) => { report.not_in_dropbox += 1; continue; }
-                Err(e) => { report.failed.push(format!("{}: {e}", h.name)); continue; }
-            };
-            let result = accept_sealed(&conn, &h.asset_id, c, &sealed);
-            match result {
-                Ok(()) => report.fetched += 1,
-                Err(e) => report.failed.push(format!("{}: {e}", h.name)),
-            }
+            // No other route runs on its own: a record that is neither on the line nor in the
+            // transfer's memos is handed over as a file (the drop-box route left in hardening
+            // 20, by the owner's decision: nothing in the middle, nothing to defend).
         }
     }
     Ok(report)
@@ -1060,58 +898,6 @@ pub fn outgoing(db_path: &str) -> Result<Vec<Outgoing>> {
         .collect())
 }
 
-/// How long the unattended pass keeps trying to deliver a record.
-pub const AUTO_RETRY_DAYS: i64 = 30;
-
-/// The unattended delivery pass, at most once per [`AUTO_RETRY_EVERY`], and never waited for:
-/// an unreachable drop-box must not hold up whatever triggered it.
-pub fn redeliver_in_background(db_path: String) {
-    const AUTO_RETRY_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
-    static LAST: once_cell::sync::Lazy<std::sync::Mutex<Option<std::time::Instant>>> =
-        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
-    {
-        let mut last = LAST.lock().unwrap();
-        if last.map(|t| t.elapsed() < AUTO_RETRY_EVERY).unwrap_or(false) {
-            return;
-        }
-        *last = Some(std::time::Instant::now());
-    }
-    std::thread::spawn(move || match redeliver(&db_path, None) {
-        Ok(r) if r.delivered > 0 => println!("[wake] {} waiting lading(s) delivered", r.delivered),
-        _ => {}
-    });
-}
-
-/// What a delivery pass did.
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct DeliveryReport {
-    pub delivered: usize,
-    pub failed: Vec<String>,
-}
-
-/// Deliver ladings that have not reached a drop-box: all of them, or the one named. Naming one
-/// delivers it again even if it was delivered before (a drop-box keeps the first copy).
-pub fn redeliver(db_path: &str, only: Option<&str>) -> Result<DeliveryReport> {
-    let conn = Connection::open(db_path)?;
-    let mut report = DeliveryReport::default();
-    for o in crate::zmap::outgoing_consignments(&conn)? {
-        match only {
-            Some(h) if !h.eq_ignore_ascii_case(&o.sha256) => continue,
-            // The unattended pass leaves alone what was delivered and what is older than
-            // AUTO_RETRY_DAYS: a record nobody collected in that time is asked for by hand.
-            None if o.delivered_at.is_some() || o.age_days > AUTO_RETRY_DAYS => continue,
-            _ => {}
-        }
-        let outcome = seal_for(&o.recipient, &o.json).and_then(|sealed| dropbox_put(&o.sha256, &sealed));
-        match &outcome {
-            Ok(()) => report.delivered += 1,
-            Err(e) => report.failed.push(format!("{}…: {e}", &o.sha256[..16.min(o.sha256.len())])),
-        }
-        let why = outcome.as_ref().err().map(|e| e.to_string());
-        let _ = crate::zmap::mark_consignment_delivery(&conn, &o.sha256, match &why { None => Ok(()), Some(w) => Err(w.as_str()) });
-    }
-    Ok(report)
-}
 
 /// The lading `hash_hex`, sealed to its recipient, as a file's bytes and a file name. Only the
 /// recipient's keys open it, so the file can travel by any channel.
@@ -1135,8 +921,8 @@ pub struct Imported {
 }
 
 /// Take a sealed lading handed over as a file. It is tried against every held carrier whose
-/// memo commits to a lading this wallet does not hold yet; the same rules as a drop-box fetch
-/// apply, so a file that is not for this wallet, or not the committed lading, is refused.
+/// memo commits to a lading this wallet does not hold yet, under the same rules as any
+/// lading, so a file that is not for this wallet, or not the committed lading, is refused.
 pub fn import_sealed(db_path: &str, sealed: &[u8]) -> Result<Imported> {
     if sealed.len() > MAX_SEALED_BYTES {
         return Err(anyhow!("that file is larger than {MAX_SEALED_BYTES} bytes; not a lineage file this wallet accepts"));
@@ -1187,11 +973,6 @@ pub async fn asset_send_estimate(asset_id: String) -> Result<crate::wake_memo::S
 pub async fn lineage_outgoing() -> Result<Vec<Outgoing>> {
     let db_path = crate::paths::as_string::wallet_db_path()?;
     tokio::task::spawn_blocking(move || outgoing(&db_path)).await.map_err(|e| anyhow!("did not finish: {e}"))?
-}
-
-pub async fn lineage_redeliver(only: Option<String>) -> Result<DeliveryReport> {
-    let db_path = crate::paths::as_string::wallet_db_path()?;
-    tokio::task::spawn_blocking(move || redeliver(&db_path, only.as_deref())).await.map_err(|e| anyhow!("did not finish: {e}"))?
 }
 
 /// Write the sealed lading into the user's Downloads folder (their home if there is none) and
@@ -1561,6 +1342,19 @@ fn verify_carrier(
     // not be checked" instead of Broken, and a lading anchored later than its genesis block
     // could never be checked through a provider (gate second pass, Issue B). Should a hint
     // still prove wrong, the question is asked once more without one.
+    // No manifest names a genesis for this asset: the chain can only answer "unverified",
+    // and asking it would hand a provider the transaction the lading's author named, with no
+    // cover (gate fifth pass, Finding 6). Said without asking.
+    if genesis.is_none() {
+        return Ok(WakeState::Unverified {
+            detail: format!(
+                "the lading names {}… output {} as the genesis, but no trusted manifest names a genesis for this asset, so its chain checks were not run",
+                &lading.genesis.txid[..16],
+                lading.genesis.action_index
+            ),
+            consignment_hash: Some(consignment.sha256.clone()),
+        });
+    }
     let (oracle, outcome) = {
         let o = chain();
         if let Some(g) = genesis {
@@ -1758,42 +1552,6 @@ mod tests {
         assert_eq!(genesis_from_local_manifest("cc"), None);
         std::env::remove_var("ZECBOAT_WAKE_MANIFEST");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn file_dropbox_round_trip() {
-        let dir = std::env::temp_dir().join(format!("wake-dropbox-{}", std::process::id()));
-        std::env::set_var("ZECBOAT_DROPBOX", format!("file://{}", dir.display()));
-        let h = "ab".repeat(32);
-        assert_eq!(dropbox_get(&h).unwrap(), None);
-        dropbox_put(&h, b"sealed-1").unwrap();
-        dropbox_put(&h, b"sealed-2").unwrap(); // first delivery stands
-        assert_eq!(dropbox_get(&h).unwrap().as_deref(), Some(&b"sealed-1"[..]));
-
-        // 0.7.1, in this test because the choice is process-wide: Settings outranks the
-        // environment, `off` means no drop-box at all, and clearing it gives the environment back.
-        let other = std::env::temp_dir().join(format!("wake-dropbox-chosen-{}", std::process::id()));
-        set_dropbox_choice(&format!("file://{}/", other.display())).unwrap();
-        assert_eq!(dropbox_base(), format!("file://{}", other.display()));
-        assert_eq!(dropbox_get(&h).unwrap(), None, "the chosen folder is empty");
-        set_dropbox_choice("off").unwrap();
-        assert!(!dropbox_enabled());
-        assert!(dropbox_put(&h, b"x").unwrap_err().to_string().contains("no drop-box is in use"));
-        assert_eq!(dropbox_get(&h).unwrap(), None);
-        assert!(set_dropbox_choice("ftp://example").is_err());
-        assert_eq!(dropbox_choice(), "off", "a refused value changes nothing");
-        set_dropbox_choice("").unwrap();
-        assert_eq!(dropbox_base(), format!("file://{}", dir.display()));
-        assert_eq!(dropbox_get(&h).unwrap().as_deref(), Some(&b"sealed-1"[..]));
-
-        std::env::remove_var("ZECBOAT_DROPBOX");
-        // Nothing named anywhere: no drop-box, and no fallback to a web address.
-        assert!(!dropbox_enabled());
-        assert_eq!(dropbox_base(), "");
-        assert!(dropbox_put(&h, b"x").is_err());
-        assert_eq!(dropbox_get(&h).unwrap(), None);
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(&other);
     }
 
     #[test]

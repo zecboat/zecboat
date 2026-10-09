@@ -308,8 +308,9 @@
               <span class="verify-detail">{badge.detail}</span>
             </div>
           {:else if badge?.state === 'unknown'}
-            <!-- Not a verdict either: no manifest this wallet holds says anything about it. -->
-            <div class="verify-badge unknown">
+            <!-- Not a verdict either: no manifest this wallet holds says anything about it. Grey,
+                 apart from the amber "could not check" (gate fifth pass, Finding 7). -->
+            <div class="verify-badge neutral">
               Collection not known to this wallet
               <span class="verify-detail">{badge.detail}</span>
             </div>

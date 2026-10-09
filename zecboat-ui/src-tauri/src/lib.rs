@@ -48,7 +48,7 @@ async fn verify_lineage(asset_id: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-// Fetch any lading the drop-box holds for a carrier whose memo commits to one.
+// Collect any lading a held carrier's memo commits to that this wallet does not hold.
 async fn fetch_consignments() -> Result<serde_json::Value, String> {
     let r = zecboat_core::fetch_consignments().await.map_err(|e| e.to_string())?;
     serde_json::to_value(r).map_err(|e| e.to_string())
@@ -59,16 +59,9 @@ async fn fetch_consignments() -> Result<serde_json::Value, String> {
 // console. These make it something the user can see, retry, redirect, and carry by hand.
 
 #[tauri::command]
-// Every lading this wallet made for a send, with whether it reached a drop-box.
+// Every lading this wallet made for a send, with whether it travelled in the transfer.
 async fn lineage_outgoing() -> Result<serde_json::Value, String> {
     let r = zecboat_core::lineage_outgoing().await.map_err(|e| e.to_string())?;
-    serde_json::to_value(r).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-// Deliver waiting ladings again: all of them, or the one named by its hash.
-async fn lineage_redeliver(consignment_hash: Option<String>) -> Result<serde_json::Value, String> {
-    let r = zecboat_core::lineage_redeliver(consignment_hash).await.map_err(|e| e.to_string())?;
     serde_json::to_value(r).map_err(|e| e.to_string())
 }
 
@@ -116,15 +109,6 @@ async fn asset_send_estimate(asset_id: String) -> Result<serde_json::Value, Stri
 }
 
 #[tauri::command]
-// The drop-box: `choice` is what Settings stored (empty = automatic, `off`, or a base);
-// `in_use` is where a lading would go right now, or null when none is in use.
-async fn get_dropbox() -> Result<serde_json::Value, String> {
-    let choice = zecboat_core::dropbox_choice();
-    let in_use = Some(zecboat_core::dropbox_base()).filter(|b| !b.is_empty());
-    Ok(serde_json::json!({ "choice": choice, "in_use": in_use }))
-}
-
-#[tauri::command]
 // How lineage travels with a sent item: `route` is `knotline`, `whole` or `off`; `source` says
 // who decided it (`settings`, `default`, or `environment` for a test override).
 async fn get_lineage_route() -> Result<serde_json::Value, String> {
@@ -149,11 +133,6 @@ async fn get_chain_source() -> Result<serde_json::Value, String> {
 #[tauri::command]
 async fn set_chain_source(choice: String) -> Result<(), String> {
     zecboat_core::set_chain_choice(&choice).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn set_dropbox(choice: String) -> Result<(), String> {
-    zecboat_core::set_dropbox_choice(&choice).map_err(|e| e.to_string())
 }
 
 /// Transactions the wallet built and signed but never saw confirmed.
@@ -433,7 +412,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sync_status, yubikey_message, set_provider_url, get_provider_url, get_balance, get_balance_breakdown, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
-            registry_base, get_lineage_route, set_lineage_route, get_chain_source, set_chain_source, asset_send_estimate, asset_carrier_states, collect_lineage, lineage_outgoing, lineage_redeliver, lineage_export, lineage_import, get_dropbox, set_dropbox, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
+            registry_base, get_lineage_route, set_lineage_route, get_chain_source, set_chain_source, asset_send_estimate, asset_carrier_states, collect_lineage, lineage_outgoing, lineage_export, lineage_import, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, wallet_uses_yubikey, lock_wallet,
             create_new_account, backup_wallet, list_backups, restore_backup, rescan_from_height, export_keys, get_viewkey, check_yubikey,
             get_roster, add_roster_contact, delete_roster_contact, validate_address

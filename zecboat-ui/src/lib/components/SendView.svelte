@@ -542,8 +542,8 @@
         </div>
       {/if}
       {#if txResult.success && txResult.txid}
-        <!-- 0.7.1: whether the lineage record of an asset send reached the recipient's
-             drop-box. Renders nothing for a ZEC send, which has no such record. -->
+        <!-- 0.7.1: whether the lineage record of an asset send travelled in the transfer.
+             Renders nothing for a ZEC send, which has no such record. -->
         <LineageDelivery txid={txResult.txid} />
       {/if}
     </div>

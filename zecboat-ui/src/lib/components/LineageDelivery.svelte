@@ -5,7 +5,7 @@
   // transfer itself (the Knotline), so there is nothing to deliver and nobody in the middle. The
   // repair kit: a sent record can be saved as a file for the recipient, and a file can be opened,
   // for the cases the Knotline does not cover (an older wallet on the other side, the switch off).
-  // A drop-box is still possible but only if one is named; none is contacted by default.
+  // Nothing in the middle: the drop-box route was removed in hardening 20.
   //
   // `txid` narrows the component to the record of one transfer: the line under a finished send.
   import { invoke } from "@tauri-apps/api/core";
@@ -14,32 +14,22 @@
     asset_id: string; consignment_hash: string; txid: string; recipient: string;
     delivered: boolean; carried: boolean; delivered_at: string | null; note: string | null; created_at: string;
   };
-  type Box = { choice: string; in_use: string | null };
   type Route = { route: "knotline" | "whole" | "off"; source: "settings" | "default" | "environment" };
   type ChainSource = { choice: "auto" | "node" | "provider"; source: string };
 
   let { txid = null }: { txid?: string | null } = $props();
 
   let rows = $state<Outgoing[]>([]);
-  let box = $state<Box | null>(null);
   let busy = $state<string | null>(null);
   let message = $state<{ ok: boolean; text: string } | null>(null);
-  let mode = $state<"custom" | "off">("off");
   let route = $state<Route | null>(null);
   let chain = $state<ChainSource | null>(null);
-  let custom = $state("");
   let fileInput: HTMLInputElement;
 
   const shown = $derived(txid ? rows.filter((r) => r.txid === txid.toLowerCase()) : rows);
-  const waiting = $derived(rows.filter((r) => !r.delivered).length);
 
   async function load() {
     try { rows = await invoke<Outgoing[]>("lineage_outgoing"); } catch { rows = []; }
-    try {
-      box = await invoke<Box>("get_dropbox");
-      mode = box.choice && box.choice !== "off" ? "custom" : "off";
-      custom = box.choice && box.choice !== "off" ? box.choice : "";
-    } catch { box = null; }
     try { route = await invoke<Route>("get_lineage_route"); } catch { route = null; }
     try { chain = await invoke<ChainSource>("get_chain_source"); } catch { chain = null; }
   }
@@ -67,22 +57,6 @@
   }
 
   function short(s: string, n = 10) { return s.length > n * 2 ? `${s.slice(0, n)}…${s.slice(-6)}` : s; }
-  function where(b: Box | null) {
-    if (!b) return "…";
-    if (!b.in_use) return "none";
-    return b.in_use.replace(/^https?:\/\//, "").replace(/^file:\/\//, "shared folder ");
-  }
-
-  async function retry(hash: string | null) {
-    busy = hash ?? "all"; message = null;
-    try {
-      const r = await invoke<{ delivered: number; failed: string[] }>("lineage_redeliver", { consignmentHash: hash });
-      message = r.failed.length
-        ? { ok: false, text: `Not delivered: ${r.failed[0].split(": ").slice(1).join(": ") || r.failed[0]}` }
-        : { ok: true, text: r.delivered ? "Delivered." : "Nothing was waiting." };
-    } catch (e) { message = { ok: false, text: String(e) }; }
-    busy = null; await load();
-  }
 
   async function save(hash: string) {
     busy = hash; message = null;
@@ -105,15 +79,6 @@
     busy = null; fileInput.value = "";
   }
 
-  async function saveBox() {
-    const choice = mode === "off" ? "off" : custom.trim();
-    message = null;
-    try {
-      await invoke("set_dropbox", { choice });
-      if (choice) localStorage.setItem("zecboat.dropbox", choice); else localStorage.removeItem("zecboat.dropbox");
-      await load();
-    } catch (e) { message = { ok: false, text: String(e) }; }
-  }
 </script>
 
 {#if txid}
@@ -121,11 +86,8 @@
     <div class="line">
       {#if r.carried}
         <span class="mark ok">✓</span> Lineage carried in the transfer
-      {:else if r.delivered}
-        <span class="mark ok">✓</span> Lineage record delivered
       {:else}
-        <span class="mark wait">⚠</span> Lineage record not delivered yet
-        <button class="mini" onclick={() => retry(r.consignment_hash)} disabled={!!busy}>Retry</button>
+        <span class="mark wait">⚠</span> Lineage record not in the transfer: save it as a file for the recipient
         <button class="mini" onclick={() => save(r.consignment_hash)} disabled={!!busy}>Save file</button>
       {/if}
     </div>
@@ -165,9 +127,6 @@
           <span class="mono" title="Transfer {r.txid}">to {short(r.recipient, 8)}</span>
           <span class="when">{r.created_at.slice(0, 10)}</span>
           <span class="spacer"></span>
-          {#if !r.carried && box?.in_use}
-            <button class="mini" onclick={() => retry(r.consignment_hash)} disabled={!!busy}>{r.delivered ? "Send again" : "Retry"}</button>
-          {/if}
           <button class="mini" onclick={() => save(r.consignment_hash)} disabled={!!busy}>Save file</button>
         </div>
       {/each}
@@ -179,21 +138,6 @@
     <button class="mini" onclick={() => fileInput.click()} disabled={!!busy}>Open a lineage file…</button>
   </div>
 
-  <details class="more">
-    <summary>Drop-box: {where(box)}</summary>
-    <p class="note">Optional. A place where a record is left for the recipient to collect. It cannot read or change a record, but it sees the network address of both sides. None is used unless you name one.</p>
-    <div class="edit">
-      <label><input type="radio" bind:group={mode} value="off" /> None</label>
-      <label><input type="radio" bind:group={mode} value="custom" /> My own</label>
-      {#if mode === "custom"}
-        <input type="text" bind:value={custom} placeholder="https://… or file:///folder" spellcheck="false" />
-      {/if}
-      <button class="mini primary" onclick={saveBox} disabled={mode === "custom" && !custom.trim()}>Save</button>
-    </div>
-    {#if box?.in_use && waiting > 0}
-      <button class="mini" onclick={() => retry(null)} disabled={!!busy}>Retry {waiting} waiting</button>
-    {/if}
-  </details>
 {/if}
 
 {#if message}
@@ -211,12 +155,7 @@
   .mono { font-family: ui-monospace, monospace; font-size: 0.8rem; }
   .when { opacity: 0.6; font-size: 0.8rem; }
   .spacer { flex: 1; }
-  .edit { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; margin-top: 0.6rem; font-size: 0.9rem; }
-  .edit input[type="text"] { flex: 1 1 100%; padding: 0.45rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(0, 0, 0, 0.25); color: inherit; }
   .import { margin-top: 0.8rem; }
-  .more { margin-top: 0.8rem; font-size: 0.85rem; }
-  .more summary { cursor: pointer; opacity: 0.75; }
-  .note { margin: 0.5rem 0; opacity: 0.75; }
   .mini { font-size: 0.8rem; padding: 0.25rem 0.6rem; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.2); background: transparent; color: inherit; cursor: pointer; }
   .mini:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
   .mini:disabled { opacity: 0.5; cursor: default; }

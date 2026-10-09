@@ -75,19 +75,5 @@ async fn main() -> Result<()> {
     let wake = serde_json::to_value(zecboat_core::verify_lineage(got.asset_id).await?)?;
     println!("  lineage after import: {}", wake["state"]);
 
-    // The same hand-over through a drop-box, when one is named: put the sealed record there as
-    // a sending wallet would, then let the ordinary fetch pass collect it.
-    let base = zecboat_core::dropbox_base();
-    println!("-- drop-box round trip via {base}");
-    rusqlite::Connection::open(&db)?.execute("DELETE FROM ext_zecboat_zmap_consignments WHERE id = (SELECT MAX(id) FROM ext_zecboat_zmap_consignments)", [])?;
-    let hash_hex = hex::encode(&hash);
-    let sealed = zecboat_core::wake::seal_for(&ua, &json)?;
-    let (h2, s2) = (hash_hex.clone(), sealed.clone());
-    tokio::task::spawn_blocking(move || zecboat_core::wake::dropbox_put(&h2, &s2)).await??;
-    let h3 = hash_hex.clone();
-    let back = tokio::task::spawn_blocking(move || zecboat_core::wake::dropbox_get(&h3)).await??;
-    println!("  put {} bytes; the drop-box returns {} bytes, identical: {}", sealed.len(), back.as_ref().map(|b| b.len()).unwrap_or(0), back.as_deref() == Some(&sealed[..]));
-    let r = zecboat_core::fetch_consignments().await?;
-    println!("  fetch pass: fetched {}, already held {}, not in drop-box {}, failed {:?}", r.fetched, r.already_held, r.not_in_dropbox, r.failed);
     Ok(())
 }

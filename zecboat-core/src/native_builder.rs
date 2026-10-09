@@ -1118,31 +1118,20 @@ pub fn send_zmap_asset(
         // The sender's copy makes a lost delivery re-issuable. Delivery failure is reported,
         // not fatal: the transfer is built and the recipient can ask for the lading again.
         if let Some(l) = &wake_lading {
-            // A failed store (database busy, disk full) must not also skip the delivery on a
-            // route where the record is not in the transaction (gate fourth pass, L-5): the
-            // delivery runs from the lading in memory either way, and the store's failure is
-            // reported after it.
+            // The sender's copy: with the Knotline the record is in the transaction itself;
+            // otherwise it stays here, to be saved as a file for the recipient (the drop-box
+            // route left in hardening 20). The store is the only write that matters for the
+            // hand-over, so its failure is reported last, after the record is marked.
             let stored = crate::zmap::store_consignment(&conn, asset_id, None, None, &l.bytes, Some(&successor_txid));
             if let Ok(hh) = &stored {
                 let _ = crate::zmap::mark_consignment_source(&conn, hh, "sent");
-            }
-            // 0.7.1: the outcome is recorded, so the wallet can show it, retry it, and hand the
-            // lading over as a file. Before, a failure was this console line and nothing else.
-            if !record_memos.is_empty() {
-                // The record is in the transaction itself: nothing to hand to a drop-box.
-                let _ = crate::zmap::mark_consignment_carried(&conn, &l.hash_hex);
-                println!("[wake] lading carried in the transfer; no drop-box used");
-            } else {
-            match crate::wake::deliver(recipient, l) {
-                Ok(()) => {
-                    let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Ok(()));
-                    println!("[wake] lading sealed to the recipient and delivered to {}", crate::wake::dropbox_base())
+                if !record_memos.is_empty() {
+                    let _ = crate::zmap::mark_consignment_carried(&conn, &l.hash_hex);
+                    println!("[wake] lading carried in the transfer");
+                } else {
+                    let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Err("not in the transfer: save it as a file for the recipient"));
+                    println!("[wake] lading kept in this wallet under sha256 {}; save it as a file for the recipient", l.hash_hex);
                 }
-                Err(e) => {
-                    let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Err(&e.to_string()));
-                    eprintln!("[wake] WARNING: the lading was NOT delivered ({e}); it is kept in this wallet under sha256 {}", l.hash_hex)
-                }
-            }
             }
             stored.map_err(|e| anyhow!("could not keep a copy of the lading: {}", e))?;
         }

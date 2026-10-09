@@ -40,10 +40,10 @@ first public release of everything listed under 0.7.0, with that fixed.
   be sent by any means; **Open a lineage file…** takes one in. A finished send of an item shows
   the same mark under the transaction id. Before, delivery was tried once and a failure was a
   line on the console.
-- **No drop-box unless you name one.** The lineage travels in the transfer (the Knotline);
-  a record can also be saved as a file. A drop-box (`https://…` or a shared `file://` folder)
-  is contacted only if you name it in Settings: it cannot read or replace a record, it can
-  withhold one, and it sees the network address of both sides. zecboat.com runs none.
+- **No drop-box at all.** The lineage travels in the transfer (the Knotline); a record can
+  also be saved as a file and sent by any means. The optional drop-box route of the 0.7.0
+  draft (an address you could name in Settings) is gone: nothing in the middle, nothing that
+  sees both sides' network addresses, nothing to defend. zecboat.com never ran one.
 
 ### For those who build or integrate
 
@@ -51,7 +51,7 @@ first public release of everything listed under 0.7.0, with that fixed.
   (`examples/light_verify.rs`), is safe to call from any thread or runtime, and caches the tip and
   tree states; `ZebradOracle` talks plain HTTP itself and keeps `curl` only for `https://` nodes.
 - `zecboat-core`: `wake::Chain` (node or provider), `WakeState::ProviderChecked`,
-  `wake::{outgoing, redeliver, export_sealed, import_sealed}`, the drop-box choice, and two
+  `wake::{outgoing, export_sealed, import_sealed}` and two
   delivery columns on the consignments table, added in place on first use.
 - Wake v1 §8.1 says a server-asserted verdict is reported as unverified. The wallet now reports
   it as its own named state, never as verified by the holder's node. The spec wording is to be
@@ -81,7 +81,7 @@ first public release of everything listed under 0.7.0, with that fixed.
   get the "✓ Verified — issued by …" badge, marked "via Zecboat Registry", and their lineage can
   reach Verified, using the manifest recorded on chain. No per-collection line in the wallet is
   needed, and it works with zecboat.com unreachable. Only a complete, passed check counts; a
-  registered collection that has not been checked shows grey "not checked yet", never red.
+  registered collection that has not been checked shows amber "not checked yet", never red.
 
 - **YubiKey protection for the wallet identity file.** `encryption-identity.txt` can now be
   encrypted to a PIV key that cannot leave the device, so no copy of the wallet directory is

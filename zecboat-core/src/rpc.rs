@@ -1657,6 +1657,9 @@ async fn try_broadcast_zebrad(raw_tx_hex: &str) -> std::result::Result<String, B
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .no_proxy()
+        // A node that answers with a redirect is not the node that was named: a signed
+        // transaction goes to the address chosen and nowhere else (gate fifth pass, Finding 3).
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| BroadcastFailure::Unreachable(format!("could not build an HTTP client: {}", e)))?;
 
@@ -2631,9 +2634,11 @@ pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, 
             // This asset's carriers only (review 2026-10-09, Knotline A): the send used to walk
             // every holding's line and wait for all of them.
             match tokio::task::spawn_blocking(move || crate::wake::fetch_missing_consignments_scoped(&db_path, crate::wake::FetchScope::for_send(&aid))).await {
-                Ok(Ok(r)) if !r.in_progress.is_empty() => {
-                    anyhow::bail!("the lineage of {} is still being collected ({}); try again in a moment", r.in_progress.join(", "), "another pass is walking its Knotline")
-                }
+                // A walk still running for SOME carrier of the asset is not a reason to refuse:
+                // the builder refuses only when the copy it would spend is the one being
+                // collected, and a stranger's copy must not block the genuine unit (gate fifth
+                // pass, Finding 5).
+                Ok(Ok(r)) if !r.in_progress.is_empty() => println!("[wake] a line of {} is still being walked ({}); the send goes on with what is held", r.in_progress.len(), r.in_progress.join(", ")),
                 Ok(Ok(r)) if r.fetched > 0 => println!("[wake] collected {} waiting lading(s) before the send", r.fetched),
                 Ok(Err(e)) => eprintln!("[wake] could not collect waiting ladings before the send: {e}"),
                 _ => {}
@@ -3497,16 +3502,12 @@ pub async fn add_invoice(invoice_id: String, date: String, items: String, total_
 /// carrier count. The remaining fields are additive.
 pub async fn get_zsas() -> Result<Vec<Value>> {
     let db_path = crate::paths::as_string::wallet_db_path()?;
-    // Wake (chapter 8): pick up any lading the drop-box holds for a carrier whose memo commits
-    // to one. Best effort; a fetch failure must not hide the holdings.
+    // Wake (chapter 8): collect any lading a carrier's memo commits to that this wallet does
+    // not hold. Best effort; a fetch failure must not hide the holdings.
     // In a thread nobody waits for, with a budget, for assets this wallet has a reason to
     // trust; the item list used to wait 20 s on any line a stranger sent (review 2026-10-09,
     // Knotline A). Its result lands in the database and shows on the next open.
     crate::wake::fetch_missing_consignments_in_background(db_path.clone());
-    // 0.7.1: and send out any lading of ours that has not reached a drop-box yet (the drop-box
-    // was unreachable at send time, or none was in use then). Not waited for: an unreachable
-    // drop-box must not delay the holdings.
-    crate::wake::redeliver_in_background(db_path.clone());
     let pool = crate::db::WalletPool::new(&db_path)?;
     let holdings = pool.get_zmap_holdings().await?;
     let ladings: std::collections::HashMap<String, crate::zmap::Consignment> = {

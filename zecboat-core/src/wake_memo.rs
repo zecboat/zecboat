@@ -1,6 +1,6 @@
 //! PROTOTYPE (2026-10-05): a lineage record carried inside the transfer itself.
 //!
-//! Instead of leaving the lading in a drop-box or a file, the sender splits it over the memos
+//! Instead of handing the lading over as a file, the sender splits it over the memos
 //! of extra zero-value outputs to the recipient, in the same transaction as the carrier. The
 //! recipient's wallet finds them in a transaction it reads anyway. No server, no third party.
 //!
@@ -34,7 +34,7 @@ const KIND_V1: &str = "wake-v1";
 /// How this wallet sends a lading inside the transfer (`ZECBOAT_LADING_IN_MEMOS`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SendMode {
-    /// Unset: not in the transfer at all (drop-box or file, as in 0.7.1).
+    /// Unset: not in the transfer at all (handed over as a file).
     Off,
     /// `1`: the whole lading, to the recipient, up to [`MAX_HOPS`] proofs.
     FullRecord,
@@ -47,7 +47,7 @@ pub enum SendMode {
 ///
 /// The Knotline, by the owner's decision of 2026-10-06 for 0.7.1: lineage travels in the
 /// transfer unless the user turns it off in Settings. Off means the record stays in the
-/// sender's wallet to be handed over as a file (or left in a drop-box the user has named).
+/// sender's wallet to be handed over as a file.
 pub const DEFAULT_SEND_MODE: SendMode = SendMode::Knotline;
 
 /// The route chosen in Settings; `None` when Settings has not chosen.
@@ -229,7 +229,7 @@ fn knotline_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32
             format!("Knotline: this item starts its line, publishing its {n} hop(s) once"),
         ),
         // More hops than a start of line carries, and no line to chain to: the lading travels
-        // another way (a file, or a named drop-box), and the memo still commits to its hash.
+        // another way (a file), and the memo still commits to its hash.
         _ => return Ok((Vec::new(), format!("no knot: {n} hops is more than a line is started with ({MAX_JOIN_HOPS}); the lading travels as a file"))),
     };
     let mut key = [0u8; 32];
