@@ -2578,12 +2578,12 @@ fn zec_to_zatoshis(amount: f64) -> Result<u64> {
 }
 
 pub async fn send_transaction(address: &str, amount: f64, memo: &str, asset_id: Option<&str>) -> Result<String> {
-    send_transaction_with_wake(address, amount, memo, asset_id, false).await
+    send_transaction_with_wake(address, amount, memo, asset_id, false, None).await
 }
 
 /// [`send_transaction`] with the Wake acknowledgement (chapter 8): when `acknowledge_unproven`
 /// is false and the unit has no lading, the send is refused with [`crate::wake::UNPROVEN_PREFIX`].
-pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, asset_id: Option<&str>, acknowledge_unproven: bool) -> Result<String> {
+pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, asset_id: Option<&str>, acknowledge_unproven: bool, max_fee_zat: Option<u64>) -> Result<String> {
     // 1. Validate and convert to zatoshis — on the value path only.
     //
     // A ZSA transfer moves a carrier note whose value is fixed at CARRIER_ZAT and
@@ -2696,6 +2696,7 @@ pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, 
                 asset_id.as_deref(),
                 target_height,
                 &wake,
+                max_fee_zat,
             )
         })
         .await
@@ -3730,6 +3731,52 @@ fn artwork_candidate_urls(base: &str, asset_id: &str) -> Vec<String> {
         .collect()
 }
 
+/// Every request to the registry goes through one client: https only, no redirects, a
+/// timeout, and a body bound chosen by the caller. Until 2026-10-09 only the metadata fetch
+/// had these; artwork and manifests followed redirects to any host and read without bound
+/// (review, regression Finding 10). `file://` sources are read directly, for tests.
+pub(crate) async fn registry_fetch(url: &str, max_bytes: usize) -> Result<(String, Vec<u8>)> {
+    if let Some(path) = url.strip_prefix("file://") {
+        let b = std::fs::read(path).map_err(|e| anyhow::anyhow!("{path}: {e}"))?;
+        return Ok((String::new(), b));
+    }
+    if !url.starts_with("https://") {
+        return Err(anyhow::anyhow!("the registry is reached over https only ({url})"));
+    }
+    let res = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("{url}: {e}"))?;
+    if !res.status().is_success() {
+        return Err(anyhow::anyhow!("{url}: HTTP {}", res.status()));
+    }
+    let content_type = res
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    if res.content_length().map(|n| n as usize > max_bytes).unwrap_or(false) {
+        return Err(anyhow::anyhow!("{url}: larger than {max_bytes} bytes"));
+    }
+    let mut body = Vec::new();
+    let mut res = res;
+    while let Some(chunk) = res.chunk().await.map_err(|e| anyhow::anyhow!("{url}: {e}"))? {
+        if body.len() + chunk.len() > max_bytes {
+            return Err(anyhow::anyhow!("{url}: larger than {max_bytes} bytes"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok((content_type, body))
+}
+
+/// Artwork is bounded at this size: a photograph as JPEG is a few hundred kilobytes.
+const MAX_ARTWORK_BYTES: usize = 8 * 1024 * 1024;
+
 pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
     if asset_id.len() != 64 || !asset_id.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(anyhow::anyhow!(
@@ -3757,33 +3804,22 @@ pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
     // or substituted for a different image, still fails the hash check below. PNG is tried first
     // because it was the original convention; JPEG matters because photographic artwork is roughly
     // an order of magnitude smaller as JPEG, which is what makes a large collection practical.
-    let client = reqwest::Client::new();
     let mut attempts: Vec<String> = Vec::new();
     let mut found: Option<(String, String, bytes::Bytes)> = None;
     let mut first_unverified: Option<(String, String, bytes::Bytes)> = None;
 
     for url in artwork_candidate_urls(&registry_base(), &asset_id) {
-        let res = match client.get(&url).send().await {
+        let (content_type, body) = match registry_fetch(&url, MAX_ARTWORK_BYTES).await {
             Ok(r) => r,
             Err(e) => {
-                attempts.push(format!("{} ({})", url, e));
+                attempts.push(format!("{e}"));
                 continue;
             }
         };
-        if !res.status().is_success() {
-            attempts.push(format!("{} (HTTP {})", url, res.status()));
-            continue;
-        }
         // A missing artefact is served as the site's HTML page with HTTP 200, so the status code
-        // alone proves nothing. Require an image content type before spending time hashing it —
+        // alone proves nothing. Require an image content type before spending time hashing it,
         // and treat a non-image as "not published in this format", not as a hard failure, so the
         // next extension still gets a turn.
-        let content_type = res
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
         if !content_type.starts_with("image/") {
             attempts.push(format!(
                 "{} ({})",
@@ -3792,21 +3828,17 @@ pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
             ));
             continue;
         }
-        match res.bytes().await {
-            // With two names to try, a wrong file at the first must not hide the right file at
-            // the second: keep going until something hashes to `expected`. If nothing does, the
-            // first image found is reported as not verified, as before.
-            Ok(b) => {
-                if crate::zmap::verify_image(&b, &expected).unwrap_or(false) {
-                    found = Some((url, content_type, b));
-                    break;
-                }
-                attempts.push(format!("{} (hash mismatch)", url));
-                if first_unverified.is_none() {
-                    first_unverified = Some((url, content_type, b));
-                }
-            }
-            Err(e) => attempts.push(format!("{} (truncated: {})", url, e)),
+        let b = bytes::Bytes::from(body);
+        // A wrong file at one name must not hide the right file at the next: keep going until
+        // something hashes to `expected`. If nothing does, the first image found is reported
+        // as not verified, as before.
+        if crate::zmap::verify_image(&b, &expected).unwrap_or(false) {
+            found = Some((url, content_type, b));
+            break;
+        }
+        attempts.push(format!("{} (hash mismatch)", url));
+        if first_unverified.is_none() {
+            first_unverified = Some((url, content_type, b));
         }
     }
     let found = found.or(first_unverified);
@@ -4440,13 +4472,24 @@ fn extract_mnemonic_internal() -> Result<zeroize::Zeroizing<String>> {
 /// PIN, which the device proved at unlock; it is compared with the one that opened the wallet,
 /// so export needs no second touch. The phrase alone is returned, so a copy holds no prose.
 pub async fn export_keys(passphrase: String) -> Result<String> {
-    let held = WALLET_PASSWORD
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("the wallet is locked"))?;
-    if crate::paths::yubikey_stub_path()?.exists() {
-        if !same_secret(passphrase.as_bytes(), held.as_bytes()) {
+    if WALLET_PASSWORD.lock().unwrap().is_none() {
+        anyhow::bail!("the wallet is locked");
+    }
+    let stub_path = crate::paths::yubikey_stub_path()?;
+    if stub_path.exists() {
+        // The device proves the PIN, as at unlock: one touch, and the key's own retry counter
+        // applies. Comparing the typed PIN with the one held in memory (2026-10-08) made this
+        // call an offline PIN oracle with no lockout (review 2026-10-09, regression Finding 3).
+        let stub = std::fs::read_to_string(&stub_path)?;
+        let line = stub
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("AGE-PLUGIN-YUBIKEY-"))
+            .ok_or_else(|| anyhow::anyhow!("the YubiKey stub contains no identity line"))?;
+        let identity = crate::yubi::decrypt_with_yubikey(&std::fs::read(crate::paths::identity_path()?)?, line, &passphrase)
+            .map_err(|_| anyhow::anyhow!("Incorrect PIN."))?;
+        let ok = String::from_utf8(identity).map(|t| t.lines().any(|l| l.starts_with("AGE-SECRET-KEY-"))).unwrap_or(false);
+        if !ok {
             anyhow::bail!("Incorrect PIN.");
         }
     } else {
@@ -4455,11 +4498,6 @@ pub async fn export_keys(passphrase: String) -> Result<String> {
     let mnemonic = extract_mnemonic_internal()?;
     // The String handed to the UI is the one copy that cannot be wiped: it is displayed.
     Ok(mnemonic.as_str().to_string())
-}
-
-/// Equality that does not stop at the first differing byte.
-fn same_secret(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 pub async fn get_viewkey() -> Result<String> {

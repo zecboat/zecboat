@@ -152,6 +152,9 @@ struct ManifestAsset {
     issuance: Option<Issuance>,
 }
 
+/// A signed issuance manifest is tens of kilobytes; a megabyte is far above any real one.
+pub(crate) const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, Deserialize, Clone)]
 struct Issuance {
     txid: String,
@@ -275,31 +278,31 @@ async fn verify_disclosure(issuance: &Issuance, asset_id: &str) -> std::result::
         detail: "the manifest's disclosure OCK is not 64 hex characters".into(),
     })?;
 
-    let endpoint = crate::rpc::grpc_endpoint();
-    let mut client = crate::rpc::lightwallet::compact_tx_streamer_client::CompactTxStreamerClient::connect(
-        endpoint.clone(),
-    )
-    .await
-    .map_err(|e| BadgeState::CouldNotCheck {
-        detail: format!("could not reach the node at {endpoint} to fetch the issuance transaction: {e}"),
+    // Through the chain source in force (own node, or provider under the cover of the
+    // manifest's block), as the v1 check already does. Until 2026-10-09 this asked the provider
+    // by id whatever the setting, so a "my own node only" user still told the provider which
+    // issuance transaction they were looking at (review, regression Finding 7).
+    let raw_data = tokio::task::block_in_place(|| {
+        let chain = crate::wake::chain();
+        if issuance.height > 0 {
+            chain.hint_height(&issuance.txid, issuance.height);
+        }
+        let described = chain.described();
+        match chain.raw_transaction(&txid) {
+            Ok(Some((_, data))) => Ok(data),
+            Ok(None) => Err(BadgeState::CouldNotCheck {
+                detail: format!("{described} does not know the issuance transaction"),
+            }),
+            Err(e) => Err(BadgeState::CouldNotCheck {
+                detail: format!("could not fetch the issuance transaction from {described}: {e}"),
+            }),
+        }
     })?;
-
-    let raw = client
-        .get_transaction(tonic::Request::new(crate::rpc::lightwallet::TxFilter {
-            block: None,
-            index: 0,
-            hash: txid.to_vec(),
-        }))
-        .await
-        .map_err(|e| BadgeState::CouldNotCheck {
-            detail: format!("the node could not return the issuance transaction: {e}"),
-        })?
-        .into_inner();
 
     let branch = BranchId::try_from(NU63_BRANCH_ID).map_err(|_| BadgeState::CouldNotCheck {
         detail: "internal: NU6.3 branch id rejected".into(),
     })?;
-    let tx = Transaction::read(Cursor::new(&raw.data), branch).map_err(|e| {
+    let tx = Transaction::read(Cursor::new(&raw_data), branch).map_err(|e| {
         BadgeState::CouldNotCheck {
             detail: format!("the issuance transaction did not parse: {e}"),
         }
@@ -376,17 +379,11 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
     }
 
     let base = crate::rpc::registry_base();
-    let client = reqwest::Client::new();
 
-    let fetch = |url: String| {
-        let c = client.clone();
-        async move {
-            let res = c.get(&url).send().await.map_err(|e| format!("{url}: {e}"))?;
-            if !res.status().is_success() {
-                return Err(format!("{url}: HTTP {}", res.status()));
-            }
-            res.bytes().await.map(|b| b.to_vec()).map_err(|e| format!("{url}: {e}"))
-        }
+    // Manifests and signatures through the one bounded registry client (review 2026-10-09,
+    // regression Finding 10).
+    let fetch = |url: String| async move {
+        crate::rpc::registry_fetch(&url, MAX_MANIFEST_BYTES).await.map(|(_, b)| b).map_err(|e| e.to_string())
     };
 
     // Every pinned collection, at its own path, against its own key. The first manifest

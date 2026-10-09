@@ -223,21 +223,17 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str) -> Result<Send
     // announces a knot and its fee that the send then does not make (audit 2026-10-08, M).
     let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(conn)?);
     let conn_ref = conn;
-    let fits = |c: &crate::zmap::CarrierRef| -> bool {
-        crate::wake::carrier_note(conn_ref, &c.txid_bytes, c.output_index as u32)
-            .ok()
-            .and_then(|n| crate::zmap::consignment_for_carrier(conn_ref, asset_id, c.consignment_hash.as_deref(), &n.note.rho().to_bytes()).ok().flatten())
-            .is_some()
-    };
-    let plan = crate::zmap::plan_asset_send_preferring(&holdings, asset_id, &fits)?;
-    let committed = holdings
+    let rank = |c: &crate::zmap::CarrierRef| -> u8 { crate::wake::carrier_send_rank(conn_ref, asset_id, c) };
+    let plan = crate::zmap::plan_asset_send_preferring(&holdings, asset_id, &rank)?;
+    let chosen = holdings
         .iter()
         .flat_map(|h| h.carriers.iter())
-        .find(|c| c.txid_bytes[..] == plan.carrier.txid().as_ref()[..] && c.output_index as u32 == plan.carrier.output_index())
-        .and_then(|c| c.consignment_hash.clone());
+        .find(|c| c.txid_bytes[..] == plan.carrier.txid().as_ref()[..] && c.output_index as u32 == plan.carrier.output_index());
+    let committed = chosen.and_then(|c| c.consignment_hash.clone());
+    let note_id = chosen.map(|c| c.note_id);
     let held_lading = crate::wake::carrier_note(conn, plan.carrier.txid().as_ref(), plan.carrier.output_index() as u32)
         .ok()
-        .and_then(|n| crate::zmap::consignment_for_carrier(conn, asset_id, committed.as_deref(), &n.note.rho().to_bytes()).ok().flatten());
+        .and_then(|n| crate::zmap::consignment_for_carrier(conn, asset_id, committed.as_deref(), &n.note.rho().to_bytes(), note_id).ok().flatten());
     let (held, rebuilt_from_line, canonical) = match &held_lading {
         Some(c) => match Lading::parse(&c.json) {
             Ok(l) => (l.hops.len(), c.source.as_deref() == Some("knotline"), l.to_bytes() == c.json),

@@ -483,17 +483,18 @@ pub struct AssetSendPlan {
 ///
 /// Fails rather than guessing when the wallet cannot satisfy the request exactly.
 pub fn plan_asset_send(holdings: &[ZmapHolding], asset_id: &str) -> Result<AssetSendPlan> {
-    plan_asset_send_preferring(holdings, asset_id, &|_| true)
+    plan_asset_send_preferring(holdings, asset_id, &|_| 0)
 }
 
-/// As [`plan_asset_send`], but carriers for which `fits` is true come first. The send path
-/// passes "has a lading that fits this carrier", so an unsolicited copy of a unit (a carrier
-/// with the same memo, sorting first by txid) is never the one spent while the genuine unit
-/// sits beside it (audit 2026-10-08, Zecboat C).
+/// As [`plan_asset_send`], but the carrier with the highest `rank` is taken, ties by txid. The
+/// send path ranks carriers by the outcome of verifying their lineage, so an unsolicited copy of
+/// a unit (a carrier with the same memo, which anyone can send) is never the note spent while a
+/// genuine unit sits beside it. Until 2026-10-09 the preference was "has a stored lading", and a
+/// copy that brought its own lading, however broken, counted (review, regression Finding 2).
 pub fn plan_asset_send_preferring(
     holdings: &[ZmapHolding],
     asset_id: &str,
-    fits: &dyn Fn(&CarrierRef) -> bool,
+    rank: &dyn Fn(&CarrierRef) -> u8,
 ) -> Result<AssetSendPlan> {
     let h = holdings
         .iter()
@@ -505,7 +506,7 @@ pub fn plan_asset_send_preferring(
     let carrier = h
         .carriers
         .iter()
-        .min_by_key(|c| (!fits(c), c.txid.clone(), c.output_index))
+        .min_by_key(|c| (u8::MAX - rank(c), c.txid.clone(), c.output_index))
         .ok_or_else(|| anyhow::anyhow!("asset {} has no unspent carrier note", asset_id))?;
 
     let source_pool = pool_type(carrier.pool).ok_or_else(|| {
@@ -1151,25 +1152,95 @@ pub fn latest_consignment(
 /// stored for the asset id, so a second carrier with a copied memo and its own lading (anyone
 /// can send one) displaced the genuine lading: the genuine unit showed Broken, could not be
 /// sent, and a poisoned lading could be extended and committed onward (audit, ZMAP B /
-/// Zecboat C / ZMAP I). A carrier's lading is the one its memo commits to by hash; a carrier
-/// whose memo commits to nothing (a sender before 0.7.0) gets the newest stored lading that
-/// ends at this note, i.e. whose last nullifier is the note's ρ. A lading that fits neither is
-/// nobody's and is never shown against this carrier.
+/// Zecboat C / ZMAP I). A carrier's lading is the one its memo commits to by hash. A carrier
+/// whose memo commits to nothing (a unit at its first holder, or a sender before 0.7.0) gets
+/// only a lading that **arrived with this note** (`received_note_id`) and ends at it; until
+/// 2026-10-09 it got the newest lading for the asset that ended at the note's ρ, and ρ is
+/// public, so a copy sent by anyone could still displace it (review, regression Finding 1).
+/// A lading stored before notes were recorded (no `received_note_id`) is adopted by the first
+/// note it ends at, once. A lading that fits neither is nobody's and is never shown against
+/// this carrier.
 pub fn consignment_for_carrier(
     conn: &rusqlite::Connection,
     asset_id: &str,
     committed_hash: Option<&str>,
     rho: &[u8; 32],
+    note_id: Option<i64>,
 ) -> rusqlite::Result<Option<Consignment>> {
     if let Some(h) = committed_hash {
         return consignment_by_hash(conn, h);
     }
+    let Some(me) = note_id else { return Ok(None) };
+    let mut adoptable: Option<Consignment> = None;
     for c in consignments_for_asset(conn, asset_id)? {
-        if lading_ends_at(&c.json, rho) {
-            return Ok(Some(c));
+        if !lading_ends_at(&c.json, rho) {
+            continue;
+        }
+        match c.received_note_id {
+            Some(n) if n == me => return Ok(Some(c)),
+            None if c.source.as_deref() != Some("sent") && adoptable.is_none() => adoptable = Some(c),
+            _ => {}
         }
     }
+    if let Some(mut c) = adoptable {
+        let raw = hex::decode(&c.sha256).unwrap_or_default();
+        conn.execute(
+            "UPDATE ext_zecboat_zmap_consignments SET received_note_id = ?2 WHERE sha256 = ?1 AND received_note_id IS NULL",
+            rusqlite::params![raw, me],
+        )?;
+        c.received_note_id = Some(me);
+        return Ok(Some(c));
+    }
     Ok(None)
+}
+
+/// A lading that arrived for a carrier and failed the oracle-free checks (hash, canonical form,
+/// proofs, chain rule, ρ) before it was stored. Kept per note, as evidence about the sender of
+/// that copy: the copy shows Broken; nothing else is touched (review 2026-10-09, regression
+/// Findings 1 and 11).
+pub fn ensure_rejected_table(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ext_zecboat_zmap_rejected_ladings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            received_note_id INTEGER NOT NULL,
+            sha256 BLOB NOT NULL,
+            source TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+        [],
+    )?;
+    Ok(())
+}
+
+pub fn record_rejected_lading(conn: &rusqlite::Connection, note_id: i64, sha256: &[u8; 32], source: &str, reason: &str) -> rusqlite::Result<()> {
+    ensure_rejected_table(conn)?;
+    conn.execute(
+        "INSERT INTO ext_zecboat_zmap_rejected_ladings (received_note_id, sha256, source, reason) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![note_id, sha256.as_slice(), source, reason],
+    )?;
+    Ok(())
+}
+
+/// `(reason, source, sha256 hex)` of the newest rejected lading for a note, if any.
+pub fn rejected_lading_for_note(conn: &rusqlite::Connection, note_id: i64) -> rusqlite::Result<Option<(String, String, String)>> {
+    let exists: bool = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ext_zecboat_zmap_rejected_ladings'")?
+        .exists([])?;
+    if !exists {
+        return Ok(None);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT reason, source, sha256 FROM ext_zecboat_zmap_rejected_ladings WHERE received_note_id = ?1 ORDER BY id DESC LIMIT 1",
+    )?;
+    let mut rows = stmt.query([note_id])?;
+    match rows.next()? {
+        Some(r) => {
+            let sha: Vec<u8> = r.get(2)?;
+            Ok(Some((r.get(0)?, r.get(1)?, hex::encode(sha))))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Whether the lading's last proof reveals nullifier `rho`, i.e. the note with that ρ is the
@@ -1332,35 +1403,52 @@ mod tests {
         // stored later, it used to displace the genuine one for every carrier of the asset.
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         // Built with `to_bytes`: only the canonical encoding parses as a lading.
-        let lading = |txid: &str, nf: &str| {
+        let lading = |txid: &str, nf: &str, height: u32| {
             use zmap_wake::lading::{Genesis, Lading, ProofEntry};
             Lading {
                 wake_lading: 1,
-                genesis: Genesis { txid: txid.into(), action_index: 0 },
+                genesis: Genesis { txid: txid.repeat(32), action_index: 0 },
                 hops: vec![ProofEntry {
                     kind: "wake-v1".into(),
                     circuit: "genesis".into(),
-                    instance: ["00".into(), "00".into(), nf.repeat(64)],
-                    anchor_height: 1,
+                    instance: ["0".repeat(64), "0".repeat(64), nf.repeat(64)],
+                    anchor_height: height,
                     proof: String::new(),
                 }],
             }
             .to_bytes()
         };
-        let genuine = lading("aa", "1");
-        let decoy = lading("bb", "2");
+        let genuine = lading("aa", "1", 1);
+        let decoy = lading("bb", "2", 1);
         let h_genuine = store_consignment(&conn, "asset-a", None, Some(1), &genuine, None).unwrap();
         let h_decoy = store_consignment(&conn, "asset-a", None, Some(2), &decoy, None).unwrap();
         assert_eq!(latest_consignment(&conn, "asset-a").unwrap().unwrap().sha256, h_decoy, "newest for the asset is the decoy");
         // By committed hash: each carrier gets its own.
         let rho_genuine = [0x11u8; 32];
-        assert_eq!(consignment_for_carrier(&conn, "asset-a", Some(&h_genuine), &rho_genuine).unwrap().unwrap().sha256, h_genuine);
-        assert_eq!(consignment_for_carrier(&conn, "asset-a", Some(&h_decoy), &rho_genuine).unwrap().unwrap().sha256, h_decoy);
+        assert_eq!(consignment_for_carrier(&conn, "asset-a", Some(&h_genuine), &rho_genuine, Some(1)).unwrap().unwrap().sha256, h_genuine);
+        assert_eq!(consignment_for_carrier(&conn, "asset-a", Some(&h_decoy), &rho_genuine, Some(2)).unwrap().unwrap().sha256, h_decoy);
         // A hash nothing was stored under: nothing, never "the newest".
-        assert!(consignment_for_carrier(&conn, "asset-a", Some(&"0".repeat(64)), &rho_genuine).unwrap().is_none());
-        // No committed hash (an old sender): the newest lading that ends at this note's ρ.
-        assert_eq!(consignment_for_carrier(&conn, "asset-a", None, &rho_genuine).unwrap().unwrap().sha256, h_genuine);
-        assert!(consignment_for_carrier(&conn, "asset-a", None, &[0x33u8; 32]).unwrap().is_none());
+        assert!(consignment_for_carrier(&conn, "asset-a", Some(&"0".repeat(64)), &rho_genuine, Some(1)).unwrap().is_none());
+        // No committed hash (a unit at its first holder, an old sender): only a lading that
+        // arrived with THIS note. A copy sent later with a lading that ends at the same ρ
+        // (ρ is public) used to displace it (review 2026-10-09, regression Finding 1).
+        let copy = lading("cc", "1", 2);
+        let h_copy = store_consignment(&conn, "asset-a", None, Some(9), &copy, None).unwrap();
+        assert_eq!(latest_consignment(&conn, "asset-a").unwrap().unwrap().sha256, h_copy);
+        assert_eq!(consignment_for_carrier(&conn, "asset-a", None, &rho_genuine, Some(1)).unwrap().unwrap().sha256, h_genuine);
+        assert_eq!(consignment_for_carrier(&conn, "asset-a", None, &rho_genuine, Some(9)).unwrap().unwrap().sha256, h_copy);
+        assert!(consignment_for_carrier(&conn, "asset-a", None, &rho_genuine, Some(3)).unwrap().is_none(), "a lading is never a third note's");
+        assert!(consignment_for_carrier(&conn, "asset-a", None, &rho_genuine, None).unwrap().is_none());
+        assert!(consignment_for_carrier(&conn, "asset-a", None, &[0x33u8; 32], Some(1)).unwrap().is_none());
+        // A lading stored before notes were recorded is adopted by the first note it ends at, once.
+        let old = lading("dd", "4", 1);
+        let h_old = store_consignment(&conn, "asset-a", None, None, &old, None).unwrap();
+        assert_eq!(consignment_for_carrier(&conn, "asset-a", None, &[0x44u8; 32], Some(5)).unwrap().unwrap().sha256, h_old);
+        assert!(consignment_for_carrier(&conn, "asset-a", None, &[0x44u8; 32], Some(6)).unwrap().is_none(), "adopted once");
+        // A rejected lading is remembered for its note, and for no other.
+        record_rejected_lading(&conn, 9, &[7u8; 32], "knotline", "BadProof(0)").unwrap();
+        assert_eq!(rejected_lading_for_note(&conn, 9).unwrap().map(|r| r.0), Some("BadProof(0)".into()));
+        assert!(rejected_lading_for_note(&conn, 1).unwrap().is_none());
     }
 
     #[test]
@@ -1962,6 +2050,32 @@ mod memo_v1_tests {
     }
 
     /// A memo whose asset id does not derive from its ik and desc is a forgery: never re-issued.
+    #[test]
+    fn a_v1_memo_whose_id_does_not_derive_is_not_a_unit() {
+        // ZMAP §4 at parse time (audit 2026-10-08, ZMAP K; test added 2026-10-09, regression
+        // Finding 13): a memo carrying ik and desc with an asset id that does not derive from
+        // them is refused here, not only when sending.
+        assert!(parse_memo(BCN26_010.as_bytes()).is_some(), "the genuine memo parses");
+        let forged = BCN26_010.replace("4b52e4b2", "deadbeef");
+        assert!(parse_memo(forged.as_bytes()).is_none(), "a forged id is not listed");
+    }
+
+    #[test]
+    fn an_unproven_send_strips_the_stale_consignment_hash() {
+        // ZMAP L (2026-10-08), test added 2026-10-09: the memo copied for an unproven send must
+        // not repeat the hash of a lading that is not being passed on.
+        let with = memo_with_consignment_hash(BCN26_010.as_bytes(), HASH).unwrap();
+        let t = memo_text(&with).unwrap();
+        assert!(t.contains("consignment_hash"));
+        let without = memo_without_consignment_hash(&with).unwrap();
+        let u = memo_text(&without).unwrap();
+        assert!(!u.contains("consignment_hash"), "{u}");
+        let a = parse_memo(&with).unwrap();
+        let b = parse_memo(&without).unwrap();
+        assert_eq!((a.asset_id, a.name), (b.asset_id, b.name), "the identity is unchanged");
+        assert_eq!(b.consignment_hash, None);
+    }
+
     #[test]
     fn forged_v1_memo_is_refused_on_transfer() {
         let forged = BCN26_010.replace("4b52e4b2", "deadbeef");

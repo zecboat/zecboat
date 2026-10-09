@@ -260,6 +260,7 @@ pub fn send_transaction(
     asset_id: Option<&str>,
     target_height_u32: u32,
     wake: &crate::wake::SendOptions,
+    max_fee_zat: Option<u64>,
 ) -> Result<(String, Vec<ProposedInput>)> {
     // 1. Validate Amount
     let _tx_amount = ZatBalance::from_u64(amount_zat)
@@ -352,7 +353,7 @@ pub fn send_transaction(
     // honouring a caller's version of either would let the UI change an asset's identity in flight.
     if let Some(id) = asset_id.map(str::trim).filter(|s| !s.is_empty()) {
         let usk = spending_key_from_phrase(&_spending_key)?;
-        let hex = crate::native_builder::send_zmap_asset(&mut wallet_db, &usk, id, address, None, wake)?;
+        let hex = crate::native_builder::send_zmap_asset(&mut wallet_db, &usk, id, address, None, wake, max_fee_zat)?;
         return Ok((hex, Vec::new()));
     }
 

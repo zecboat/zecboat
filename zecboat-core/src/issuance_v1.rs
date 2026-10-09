@@ -109,11 +109,10 @@ async fn fetch(source: &str, suffix: &str) -> std::result::Result<Vec<u8>, Strin
         return std::fs::read(&p).map_err(|e| format!("{p}: {e}"));
     }
     let url = format!("{}/{}{}", crate::rpc::registry_base(), source.trim_start_matches('/'), suffix);
-    let res = reqwest::get(&url).await.map_err(|e| format!("{url}: {e}"))?;
-    if !res.status().is_success() {
-        return Err(format!("{url}: HTTP {}", res.status()));
-    }
-    res.bytes().await.map(|b| b.to_vec()).map_err(|e| format!("{url}: {e}"))
+    crate::rpc::registry_fetch(&url, crate::issuance::MAX_MANIFEST_BYTES)
+        .await
+        .map(|(_, b)| b)
+        .map_err(|e| e.to_string())
 }
 
 /// The holder's own carrier memo for `asset_id`, as JSON, if this wallet holds one.

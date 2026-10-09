@@ -101,7 +101,7 @@ fn burn(words: &str, recipient: &str) -> anyhow::Result<()> {
     // Layer 3: the asset path refuses a destination that cannot carry a memo.
     let (mut db2, _) = open_db()?;
     let r3 = zecboat_core::native_builder::send_zmap_asset(&mut db2, &usk, "a21c64a9012d95a0b923f825f3d16b483a76804393948ff085715509f278c837",
-        "t1Hsc1LR8yKnbbe3twRp88p6vFfC5t7DLbs", None, &zecboat_core::wake::SendOptions { genesis: None, acknowledge_unproven: true });
+        "t1Hsc1LR8yKnbbe3twRp88p6vFfC5t7DLbs", None, &zecboat_core::wake::SendOptions { genesis: None, acknowledge_unproven: true }, None);
     println!("B6.3 send_zmap_asset to a transparent address: {}",
         match &r3 { Ok(_) => "BUILT (wrong)".to_string(), Err(e) => format!("REFUSED: {}", e.to_string().lines().next().unwrap_or("")) });
     Ok(())

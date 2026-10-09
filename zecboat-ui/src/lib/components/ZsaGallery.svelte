@@ -19,12 +19,17 @@
   // "could not confirm" (no verdict); no_wake is "no lading held" (unproven, not forged); broken
   // is evidence of forgery or tampering.
   type Wake =
-    | { state: 'verified'; hops: number; min_anchor_depth: number; genesis_txid: string; genesis_action_index: number; genesis_source: string; consignment_hash: string }
+    | { state: 'verified'; hops: number; min_anchor_depth: number; genesis_txid: string; genesis_action_index: number; genesis_source: string; consignment_hash: string; asked: string }
     | { state: 'provider_checked'; hops: number; min_anchor_depth: number; genesis_txid: string; genesis_action_index: number; genesis_source: string; consignment_hash: string; asked: string }
     | { state: 'unverified'; detail: string; consignment_hash: string | null }
     | { state: 'no_wake'; detail: string }
     | { state: 'broken'; failure: string; detail: string };
   let wake = $state<Wake | null>(null);
+  // Every copy of the asset this wallet holds, each judged on its own, when there is more
+  // than one: the badge above is the best of them, and a copy someone sent with a broken
+  // lineage must be visible beside a genuine unit, not hidden under it (review 2026-10-09).
+  type CarrierState = { txid: string; output_index: number; state: Wake };
+  let copies = $state<CarrierState[] | null>(null);
   let isCheckingLineage = $state(false);
   // WAKE-v1 §11: no implementation may report "verified" on the strength of a wake proof until
   // the circuit's external review. Until then a passing lineage shows AMBER, "awaiting external
@@ -122,11 +127,17 @@
     // Lineage, independent of both: the issuance badge says who minted the design; this says
     // this unit descends from that minting. One can pass while the other fails.
     wake = null;
+    copies = null;
     isCheckingLineage = true;
     invoke<Wake>("verify_lineage", { assetId })
       .then((w) => { wake = w; })
       .catch((e: any) => { wake = { state: 'unverified', detail: String(e), consignment_hash: null }; })
       .finally(() => { isCheckingLineage = false; });
+    if ((assets.find((a) => a.asset_id === assetId)?.quantity ?? 1) > 1) {
+      invoke<CarrierState[]>("asset_carrier_states", { assetId })
+        .then((c) => { copies = c; })
+        .catch(() => { copies = null; });
+    }
 
     // Metadata is descriptive and host-trusted. The image check is the part that needs no trust,
     // so it runs independently — one failing must not hide the other's result.
@@ -302,7 +313,7 @@
                 <summary>what was checked</summary>
                 <span class="check-line">✓ every proof verifies under the pinned Wake keys</span>
                 <span class="check-line">✓ each note's ρ is the previous note's nullifier (consensus-bound)</span>
-                <span class="check-line">✓ every anchor is a tree root on your node, shallowest {wake.min_anchor_depth.toLocaleString()} blocks deep</span>
+                <span class="check-line">✓ every anchor is a tree root on your node ({wake.asked}), shallowest {wake.min_anchor_depth.toLocaleString()} blocks deep</span>
                 <span class="check-line">✓ the genesis output {wake.genesis_txid.slice(0, 16)}… #{wake.genesis_action_index} is the one the {wake.genesis_source === 'local_manifest' ? 'local test manifest' : wake.genesis_source === 'registry' ? 'Zecboat Registry (audited, from the chain)' : "issuer's pinned manifest"} names</span>
                 <span class="check-line mono">lading sha256 {wake.consignment_hash.slice(0, 16)}…</span>
                 <span class="check-line caveat">Wake is a draft circuit without external review (WAKE-v1 §11). This badge is exploratory.</span>
@@ -343,6 +354,21 @@
             <div class="verify-badge bad">
               ✕ Lineage proof is broken ({wake.failure})
               <span class="verify-detail">{wake.detail}</span>
+            </div>
+          {/if}
+          {#if copies && copies.length > 1}
+            <div class="verify-badge neutral">
+              {copies.length} copies of this unit in this wallet:
+              {copies.filter((c) => c.state.state === 'verified' || c.state.state === 'provider_checked').length} check out,
+              {copies.filter((c) => c.state.state === 'no_wake' || c.state.state === 'unverified').length} unproven,
+              {copies.filter((c) => c.state.state === 'broken').length} broken.
+              <details class="verify-details">
+                <summary>each copy</summary>
+                {#each copies as c}
+                  <span class="check-line mono">{c.txid.slice(0, 12)}… #{c.output_index}: {c.state.state}{c.state.state === 'broken' ? ` (${c.state.failure})` : ''}</span>
+                {/each}
+                <span class="check-line caveat">A send spends the copy that checks out best; a broken copy is one someone sent you with a lineage that failed, and it never speaks for the others.</span>
+              </details>
             </div>
           {/if}
           {#if isLoadingMetadata}

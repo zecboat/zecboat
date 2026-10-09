@@ -505,6 +505,7 @@ pub fn send_zmap_asset(
     recipient: &str,
     expiry_height: Option<BlockHeight>,
     wake: &crate::wake::SendOptions,
+    max_fee_zat: Option<u64>,
 ) -> Result<String> {
     use zcash_client_backend::data_api::wallet::input_selection::{
         LockFilter, LockedInputPolicy, NonEmptyBTreeSet, SpendPolicy,
@@ -524,16 +525,13 @@ pub fn send_zmap_asset(
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
         let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?);
-        // Among several carriers of one asset, spend one whose lading fits it: an unsolicited
-        // copy (anyone can send a carrier with the same memo) must not be the note picked
-        // while the genuine unit sits beside it (audit 2026-10-08, Zecboat C).
-        let fits = |c: &crate::zmap::CarrierRef| -> bool {
-            crate::wake::carrier_note(&conn, &c.txid_bytes, c.output_index as u32)
-                .ok()
-                .and_then(|n| crate::zmap::consignment_for_carrier(&conn, asset_id, c.consignment_hash.as_deref(), &n.note.rho().to_bytes()).ok().flatten())
-                .is_some()
-        };
-        crate::zmap::plan_asset_send_preferring(&holdings, asset_id, &fits)?
+        // Among several carriers of one asset, spend the one whose lineage checks out best: an
+        // unsolicited copy (anyone can send a carrier with the same memo, and its own lading)
+        // must not be the note picked while the genuine unit sits beside it. "Has a lading"
+        // was the rule until 2026-10-09; a copy with a garbage lading had one (audit 2026-10-08,
+        // Zecboat C; review 2026-10-09, regression Finding 2).
+        let rank = |c: &crate::zmap::CarrierRef| -> u8 { crate::wake::carrier_send_rank(&conn, asset_id, c) };
+        crate::zmap::plan_asset_send_preferring(&holdings, asset_id, &rank)?
     };
 
     // ── 1a. Wake (chapter 8): prove THIS carrier before anything is built ───────────────────
@@ -818,14 +816,29 @@ pub fn send_zmap_asset(
             &(),
         )
         .map_err(|e| anyhow!("could not balance the asset transfer: {:?}", e))?;
-    // The fee shown on the confirmation screen is the estimate; the one paid is this. A send
-    // that would cost more than was shown is refused (audit 2026-10-08, Zecboat G).
+    // The fee the screen showed is the estimate the caller passes down; the one paid is this.
+    // A send that would cost more is not refused for good: it is handed back as a question
+    // (`FEE_CHANGED:<fee>`), and the screen shows the real figure and asks again. The estimate
+    // counts outputs; the fee counts inputs too, and a fee paid from the other pool or from
+    // several small notes costs more (audit 2026-10-08, Zecboat G; review 2026-10-09,
+    // regression Finding 5: the refusal used to be final, and no bound at all when the
+    // estimate failed).
     {
-        let conn = rusqlite::Connection::open_with_flags(wallet_db_path()?, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        let shown = crate::wake_memo::send_estimate(&conn, asset_id).map(|e| e.fee_zat).unwrap_or(u64::MAX);
         let fee = u64::from(balance.fee_required());
+        let shown = match max_fee_zat {
+            Some(m) => m,
+            None => {
+                let conn = rusqlite::Connection::open_with_flags(wallet_db_path()?, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+                crate::wake_memo::send_estimate(&conn, asset_id)
+                    .map(|e| e.fee_zat)
+                    .map_err(|e| anyhow!("the fee could not be estimated, so no bound could be checked: {e}"))?
+            }
+        };
         if fee > shown {
-            return Err(anyhow!("the fee came out at {fee} zat, above the {shown} zat shown; nothing was sent"));
+            return Err(anyhow!(
+                "FEE_CHANGED:{fee}:the network fee for this transfer is {fee} zat, not the {shown} zat shown \
+                 (the fee counts the notes that pay it as well as the outputs); confirm to send at {fee} zat"
+            ));
         }
     }
 

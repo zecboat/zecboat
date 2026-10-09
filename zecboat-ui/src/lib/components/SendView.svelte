@@ -112,6 +112,9 @@
     fee_zat: number; can_pay_fee: boolean;
   };
   let fee = $state<Fee | null>(null);
+  // A send whose real fee came out above the estimate shown: the figure to confirm.
+  let feeNotice = $state<{ fee_zat: number; text: string } | null>(null);
+  let acceptedFeeZat = $state<number | null>(null);
   invoke<Fee>("fee_readiness").then((f) => { fee = f; }).catch(() => { fee = null; });
   // What this particular item's send will carry and cost (0.7.1). The flat figure above is the
   // fee of a plain two-output transfer; a transfer that carries lineage has more outputs, and
@@ -215,7 +218,9 @@
           amount: parseFloat(amount),
           memo: memo,
           assetId: assetId || undefined,
-          acknowledgeUnproven: assetId ? acknowledgeUnproven : undefined
+          acknowledgeUnproven: assetId ? acknowledgeUnproven : undefined,
+          // The fee this screen showed; a higher real fee comes back as a question, below.
+          maxFeeZat: assetId ? (acceptedFeeZat ?? estimate?.fee_zat ?? undefined) : undefined
         });
         
         txResult = {
@@ -231,12 +236,22 @@
       showConfirmation = false;
       unprovenNotice = null;
       acknowledgeUnproven = false;
+      feeNotice = null;
+      acceptedFeeZat = null;
     } catch (err: any) {
       const raw = String(err);
       // Wake: not a failure, a question. Keep the confirmation open with the acknowledgement
       // control so the same review can be resent with it ticked.
       if (raw.includes("WAKE_UNPROVEN:")) {
         unprovenNotice = raw.split("WAKE_UNPROVEN:")[1]?.trim() || raw;
+        isSending = false;
+        return;
+      }
+      // The real fee is above the one shown: not a failure, a question. Show the real figure
+      // on the same confirmation and send again with it accepted (review 2026-10-09).
+      const feeChanged = raw.match(/FEE_CHANGED:(\d+):/);
+      if (feeChanged) {
+        feeNotice = { fee_zat: Number(feeChanged[1]), text: raw.split(feeChanged[0])[1]?.trim() || raw };
         isSending = false;
         return;
       }
@@ -433,8 +448,17 @@
             </label>
           </div>
         {/if}
+        {#if feeNotice}
+          <!-- The real fee came out above the estimate shown (the estimate counts outputs, the
+               fee counts the notes that pay it too). Not a failure: the real figure, and the
+               same button sends at it (review 2026-10-09). -->
+          <div class="fee-warning" style="margin-top: 0.75rem;">
+            <strong>The network fee is {(feeNotice.fee_zat / 1e8).toFixed(8)} ZEC, not {((acceptedFeeZat ?? estimate?.fee_zat ?? 0) / 1e8).toFixed(8)} as shown.</strong>
+            <span>{feeNotice.text}</span>
+          </div>
+        {/if}
         <button class="btn secondary" onclick={cancelSend} disabled={isSending}>Cancel</button>
-        <button class="btn primary" onclick={confirmAndSend} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven) || (yubikeyWallet && !yubikeyPresent)}>
+        <button class="btn primary" onclick={() => { if (feeNotice) { acceptedFeeZat = feeNotice.fee_zat; feeNotice = null; } confirmAndSend(); }} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven) || (yubikeyWallet && !yubikeyPresent)}>
           {#if isSending && yubiMsg}
             <span>👉 {yubiMsg}</span>
           {:else if isSending}

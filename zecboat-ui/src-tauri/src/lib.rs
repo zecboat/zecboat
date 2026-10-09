@@ -29,8 +29,10 @@ async fn get_transparent_balance() -> Result<f64, String> {
 // `acknowledge_unproven` (Wake, chapter 8): an asset send whose unit has no lineage proof is
 // refused with a `WAKE_UNPROVEN:` error unless the user has acknowledged that the recipient
 // receives it unproven. Absent means not acknowledged.
-async fn send_transaction(address: String, amount: f64, memo: String, asset_id: Option<String>, acknowledge_unproven: Option<bool>) -> Result<String, String> {
-    zecboat_core::send_transaction_with_wake(&address, amount, &memo, asset_id.as_deref(), acknowledge_unproven.unwrap_or(false))
+// `max_fee_zat`: the fee the screen showed. A send whose real fee is higher comes back as a
+// `FEE_CHANGED:<fee>:` error for the screen to show and ask again (review 2026-10-09).
+async fn send_transaction(address: String, amount: f64, memo: String, asset_id: Option<String>, acknowledge_unproven: Option<bool>, max_fee_zat: Option<u64>) -> Result<String, String> {
+    zecboat_core::send_transaction_with_wake(&address, amount, &memo, asset_id.as_deref(), acknowledge_unproven.unwrap_or(false), max_fee_zat)
         .await
         .map_err(|e| e.to_string())
 }
@@ -83,6 +85,18 @@ async fn lineage_import(sealed: String) -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 // What sending this item now would carry and cost: the real fee for the confirmation screen.
+/// Every copy of an asset this wallet holds, each with its own lineage state (review 2026-10-09).
+async fn asset_carrier_states(asset_id: String) -> Result<serde_json::Value, String> {
+    let genesis = zecboat_core::wake::genesis_outpoint(&asset_id).await;
+    let db = zecboat_core::paths::as_string::wallet_db_path().map_err(|e| e.to_string())?;
+    let states = tauri::async_runtime::spawn_blocking(move || zecboat_core::wake::holding_carrier_states(&db, &asset_id, genesis.as_ref()))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(states).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn asset_send_estimate(asset_id: String) -> Result<serde_json::Value, String> {
     let r = zecboat_core::asset_send_estimate(asset_id).await.map_err(|e| e.to_string())?;
     serde_json::to_value(r).map_err(|e| e.to_string())
@@ -406,7 +420,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sync_status, yubikey_message, set_provider_url, get_provider_url, get_balance, get_balance_breakdown, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
-            registry_base, get_lineage_route, set_lineage_route, get_chain_source, set_chain_source, asset_send_estimate, lineage_outgoing, lineage_redeliver, lineage_export, lineage_import, get_dropbox, set_dropbox, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
+            registry_base, get_lineage_route, set_lineage_route, get_chain_source, set_chain_source, asset_send_estimate, asset_carrier_states, lineage_outgoing, lineage_redeliver, lineage_export, lineage_import, get_dropbox, set_dropbox, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, wallet_uses_yubikey, lock_wallet,
             create_new_account, backup_wallet, list_backups, restore_backup, rescan_from_height, export_keys, get_viewkey, check_yubikey,
             get_roster, add_roster_contact, delete_roster_contact, validate_address

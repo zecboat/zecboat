@@ -63,7 +63,7 @@ fn main() -> anyhow::Result<()> {
         Err(e) => println!("lading fetch skipped: {e}"),
     }
     let t = std::time::Instant::now();
-    let hex = zecboat_core::native_builder::send_zmap_asset(&mut wallet_db, &usk, asset_id, recipient, expiry, &wake)?;
+    let hex = zecboat_core::native_builder::send_zmap_asset(&mut wallet_db, &usk, asset_id, recipient, expiry, &wake, None)?;
     println!("built, proved, signed and stored in {:.1?}; {} bytes; NOT broadcast", t.elapsed(), hex.len() / 2);
     let out = format!("{home}/paired_tx.hex");
     std::fs::write(&out, &hex)?;

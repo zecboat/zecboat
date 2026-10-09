@@ -16,7 +16,7 @@
   };
   type Box = { choice: string; in_use: string | null };
   type Route = { route: "knotline" | "whole" | "off"; source: "settings" | "default" | "environment" };
-  type ChainSource = { choice: "auto" | "node" | "provider"; source: "settings" | "default" };
+  type ChainSource = { choice: "auto" | "node" | "provider"; source: string };
 
   let { txid = null }: { txid?: string | null } = $props();
 
@@ -148,7 +148,7 @@
   <div class="box-row">
     <span class="mark {chain?.choice === 'node' ? 'ok' : 'wait'}">●</span>
     <span class="where" title="Lineage and issuance checks ask the chain for tree roots and outputs. Your own node answers from its own state; a provider answers with its word, and learns which blocks the check touched.">
-      {#if chain?.choice === "node"}Chain answers from your own node only{:else if chain?.choice === "provider"}Chain answers from your provider{:else}Chain answers from your node when it answers, else your provider{/if}
+      {#if chain?.choice === "node"}Chain answers from your own node only{:else if chain?.choice === "provider"}Chain answers from your provider{:else}Chain answers from your node when it answers, else your provider{/if}{#if chain?.source?.startsWith("default")} · decided at start, change it here{/if}
     </span>
     <select class="mini" value={chain?.choice ?? "auto"} onchange={(e) => setChain((e.currentTarget as HTMLSelectElement).value as "auto" | "node" | "provider")}>
       <option value="auto">automatic</option>

@@ -847,6 +847,16 @@ mod tests {
         ok[18..22].copy_from_slice(&1u32.to_be_bytes());
         ok.extend_from_slice(&[0x33; 32]);
         assert_eq!(parse_close(&ok).map(|c| c.count), Some(1));
+        // ZMAP §7.4: at most 13 inline commitments (audit 2026-10-08, M; edges tested
+        // 2026-10-09, regression Finding 13): 13 parses, 14 is malformed.
+        let at = |n: u32| {
+            let mut v = m.clone();
+            v[18..22].copy_from_slice(&n.to_be_bytes());
+            v.extend(std::iter::repeat(0x44u8).take(n as usize * 32));
+            parse_close(&v).map(|c| c.count)
+        };
+        assert_eq!(at(13), Some(13));
+        assert_eq!(at(14), None);
     }
 
     /// F10: a newer failed Check of the same collection revokes an older pass; the newest
