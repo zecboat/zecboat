@@ -169,7 +169,13 @@ pub const SEEDS: &[Seed] = &[
 pub fn pinned_listing_offline(asset_id: &str) -> Option<[u8; 32]> {
     if let Some(a) = crate::collection_audit::audited_collection_listing(asset_id) {
         if let Some(ik) = hex32(&a.ik) {
-            if PINNED_V1.iter().any(|(_, k, _)| k.eq_ignore_ascii_case(&a.ik)) {
+            // The chain copy's signature is checked here as everywhere else it is read (gate
+            // third pass, Finding 6).
+            let signed = match (hex::decode(a.manifest_hex.as_deref().unwrap_or("")), hex::decode(a.signature_hex.as_deref().unwrap_or(""))) {
+                (Ok(body), Ok(sig)) => verify_bip340(&ik, &body, &sig),
+                _ => false,
+            };
+            if signed && PINNED_V1.iter().any(|(_, k, _)| k.eq_ignore_ascii_case(&a.ik)) {
                 return Some(ik);
             }
         }
@@ -184,11 +190,13 @@ pub fn pinned_listing_offline(asset_id: &str) -> Option<[u8; 32]> {
 }
 
 /// The genesis output a manifest this wallet holds states for one asset, with the commitment
-/// and the block it states, read with no network: the chain copy of a passed audit under a
-/// pinned key, else a built-in seed, the signature checked either way (review 2026-10-09,
-/// gate second pass, Issues A and C). What the send planner needs beside the outpoint: the
-/// commitment binds a held lading's first proof to this genesis (W1 done offline, since the
-/// manifest is signed), and the block is the only hint a provider is given for the W1 fetch.
+/// and the block it states, read with no network: the chain copy of a passed audit (a pinned
+/// collection's, or any collection's found in the Zecboat Registry, under the key the audit
+/// verified), else a built-in seed; the signature is checked either way (review 2026-10-09,
+/// gate second pass, Issues A and C; third pass, Findings 1 and 2). What the send planner
+/// needs beside the outpoint: the commitment binds a held lading's first proof to this
+/// genesis (W1 done offline, since the manifest is signed), and the block is the only hint a
+/// provider is given for the W1 fetch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinnedGenesis {
     /// Display-order hex, lower case.
@@ -198,13 +206,16 @@ pub struct PinnedGenesis {
     pub height: u32,
     /// True when read from the chain copy rather than the built-in seed.
     pub via_chain_copy: bool,
+    /// True when the collection's key is pinned in this build; false for a registry
+    /// collection trusted through its passed audit.
+    pub pinned: bool,
 }
 
 pub fn pinned_genesis_offline(asset_id: &str) -> Option<PinnedGenesis> {
     let find = |v: &Value| -> Option<Value> {
         v["assets"].as_array()?.iter().find(|x| x["asset_id"].as_str().map(|s| s.eq_ignore_ascii_case(asset_id)).unwrap_or(false)).cloned()
     };
-    let read = |asset: &Value, via_chain_copy: bool| -> Option<PinnedGenesis> {
+    let read = |asset: &Value, via_chain_copy: bool, pinned: bool| -> Option<PinnedGenesis> {
         let iss = &asset["issuance"];
         let txid = iss["txid"].as_str()?.to_ascii_lowercase();
         if txid.len() != 64 || !txid.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -213,15 +224,18 @@ pub fn pinned_genesis_offline(asset_id: &str) -> Option<PinnedGenesis> {
         let action_index = u32::try_from(iss["action_index"].as_u64()?).ok()?;
         let cmx = hex32(iss["cmx"].as_str()?)?;
         let height = u32::try_from(iss["height"].as_u64()?).ok()?;
-        Some(PinnedGenesis { txid, action_index, cmx, height, via_chain_copy })
+        Some(PinnedGenesis { txid, action_index, cmx, height, via_chain_copy, pinned })
     };
-    if let Some(a) = crate::collection_audit::audited_collection_listing(asset_id) {
-        if let Some(pin) = pins().into_iter().find(|p| hex::encode(p.ik).eq_ignore_ascii_case(&a.ik)) {
+    // A passed audit's chain copy: the key is the one the audit verified (pinned, or the
+    // collection's registered key); its signature over the etched bytes is checked again here.
+    if let Some(a) = crate::collection_audit::audited_collection_listing(asset_id).filter(|a| a.passed) {
+        if let Some(ik) = hex32(&a.ik) {
+            let pinned = pins().into_iter().any(|p| p.ik == ik);
             if let (Ok(body), Ok(sig)) = (hex::decode(a.manifest_hex.as_deref().unwrap_or("")), hex::decode(a.signature_hex.as_deref().unwrap_or(""))) {
-                if verify_bip340(&pin.ik, &body, &sig) {
+                if verify_bip340(&ik, &body, &sig) {
                     if let Ok(v) = serde_json::from_slice::<Value>(&body) {
                         if v["schema"] == "zecboat-proof-of-issuance/2" {
-                            if let Some(g) = find(&v).and_then(|asset| read(&asset, true)) {
+                            if let Some(g) = find(&v).and_then(|asset| read(&asset, true, pinned)) {
                                 return Some(g);
                             }
                         }
@@ -237,7 +251,7 @@ pub fn pinned_genesis_offline(asset_id: &str) -> Option<PinnedGenesis> {
         if !verify_bip340(&ik, seed.manifest, seed.signature) {
             continue;
         }
-        return read(&asset, false);
+        return read(&asset, false, true);
     }
     None
 }
@@ -305,8 +319,8 @@ pub async fn verify(asset_id: &str) -> Option<BadgeState> {
     // trust root is the registry's key, pinned above; zecboat.com is not consulted.
     let Some(a) = crate::collection_audit::audited_collection_listing(asset_id) else {
         // Registered, but not (or not since phase 4) checked: say so in grey. Falling through
-        // would reach the pre-v1 badge, whose answer for an unknown asset is "not issued by",
-        // the forgery verdict, for a collection that is merely unchecked.
+        // would give "not listed", the forgery verdict, for a collection that is merely
+        // unchecked.
         let memo_ik = holder_memo(asset_id).and_then(|m| m["ik"].as_str().map(str::to_ascii_lowercase));
         let registered = memo_ik.and_then(|ik| {
             crate::collections::registry_view().ok()?.registrations.into_iter().find(|r| r.valid && r.ik.eq_ignore_ascii_case(&ik))
@@ -333,8 +347,7 @@ pub async fn verify(asset_id: &str) -> Option<BadgeState> {
     // is the impostor the open Registry cannot stop (review 2026-10-09, session 4, Issue A).
     if let BadgeState::Verified { caveat, .. } = &mut state {
         let mine = crate::collections::name_skeleton(&a.name);
-        // Against the ik-keyed pins only: the pre-v1 issuers are keyed by ed25519 keys, so a
-        // v1 registration by one of them under its own name would always read as a look-alike.
+        // Against the pinned collections' names.
         let known = PINNED_V1
             .iter()
             .map(|(l, k, _)| (*l, *k))
@@ -512,7 +525,7 @@ mod tests {
                 let g = pinned_genesis_offline(id).expect("the built-in manifest states the genesis");
                 assert_eq!(g.txid, a["issuance"]["txid"].as_str().unwrap().to_ascii_lowercase());
                 assert_eq!(hex::encode(g.cmx), a["issuance"]["cmx"].as_str().unwrap().to_ascii_lowercase());
-                assert!(g.height > 0 && !g.via_chain_copy, "{label}");
+                assert!(g.height > 0 && !g.via_chain_copy && g.pinned, "{label}");
             }
         }
         assert!(pinned_listing_offline(&"0".repeat(64)).is_none());

@@ -42,8 +42,7 @@ fn main() -> anyhow::Result<()> {
         }
         Some("verify") => {
             let asset_id = args.get(2).ok_or_else(|| anyhow::anyhow!("verify needs an asset id"))?;
-            let genesis = zecboat_core::wake::genesis_from_local_manifest(asset_id)
-                .map(|(t, i)| (t, i, zecboat_core::wake::GenesisSource::LocalManifest));
+            let genesis = zecboat_core::wake::genesis_ref_from_local_manifest(asset_id);
             let state = zecboat_core::wake::verify_holding(&db_path, asset_id, genesis.as_ref())?;
             println!("{}", serde_json::to_string_pretty(&state)?);
         }

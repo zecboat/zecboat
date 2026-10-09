@@ -28,7 +28,7 @@ fn main() -> Result<()> {
         &asset_id,
         plan.carrier.txid().as_ref(),
         u32::try_from(plan.carrier.output_index())?,
-        zecboat_core::wake::genesis_from_local_manifest(&asset_id).as_ref(),
+        zecboat_core::wake::genesis_ref_from_local_manifest(&asset_id).as_ref(),
         &chain,
     )?
     .ok_or_else(|| anyhow!("no lading can be made for this asset"))?;

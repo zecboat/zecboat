@@ -1206,7 +1206,24 @@ pub fn ensure_walk_failures_table(conn: &rusqlite::Connection) -> rusqlite::Resu
         )",
         [],
     )?;
+    // Every attempt that failed, transient or not: what orders the carriers of a pass, so a
+    // line that always fails "transiently" still goes last (gate third pass, Finding 3).
+    // Added 2026-10-09; the ALTER fails harmlessly where the column exists.
+    let _ = conn.execute("ALTER TABLE ext_zecboat_zmap_walk_failures ADD COLUMN tries INTEGER NOT NULL DEFAULT 0", []);
     Ok(())
+}
+
+/// How many walks of this carrier failed, transient ones included (0 when none is recorded).
+pub fn walk_tries(conn: &rusqlite::Connection, txid_hex: &str, output_index: i64) -> rusqlite::Result<i64> {
+    let exists: bool = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ext_zecboat_zmap_walk_failures'")?
+        .exists([])?;
+    if !exists {
+        return Ok(0);
+    }
+    Ok(conn
+        .query_row("SELECT tries FROM ext_zecboat_zmap_walk_failures WHERE txid = ?1 AND output_index = ?2", rusqlite::params![txid_hex, output_index], |r| r.get(0))
+        .unwrap_or(0))
 }
 
 fn now_secs() -> i64 {
@@ -1221,9 +1238,10 @@ pub fn record_walk_failure(conn: &rusqlite::Connection, txid_hex: &str, output_i
         .unwrap_or(0)
         + 1;
     let delay = (600i64 * (1i64 << (failures - 1).min(8))).min(86_400);
+    let tries = walk_tries(conn, txid_hex, output_index)? + 1;
     conn.execute(
-        "INSERT OR REPLACE INTO ext_zecboat_zmap_walk_failures (txid, output_index, failures, next_after, last_error) VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![txid_hex, output_index, failures, now_secs() + delay, error],
+        "INSERT OR REPLACE INTO ext_zecboat_zmap_walk_failures (txid, output_index, failures, next_after, last_error, tries) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![txid_hex, output_index, failures, now_secs() + delay, error, tries],
     )?;
     Ok(())
 }
@@ -1235,9 +1253,10 @@ pub fn record_walk_failure_transient(conn: &rusqlite::Connection, txid_hex: &str
     let failures: i64 = conn
         .query_row("SELECT failures FROM ext_zecboat_zmap_walk_failures WHERE txid = ?1 AND output_index = ?2", rusqlite::params![txid_hex, output_index], |r| r.get(0))
         .unwrap_or(0);
+    let tries = walk_tries(conn, txid_hex, output_index)? + 1;
     conn.execute(
-        "INSERT OR REPLACE INTO ext_zecboat_zmap_walk_failures (txid, output_index, failures, next_after, last_error) VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![txid_hex, output_index, failures, now_secs() + 60, error],
+        "INSERT OR REPLACE INTO ext_zecboat_zmap_walk_failures (txid, output_index, failures, next_after, last_error, tries) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![txid_hex, output_index, failures, now_secs() + 60, error, tries],
     )?;
     Ok(())
 }
@@ -1335,11 +1354,12 @@ pub fn consignment_for_carrier(
         }
     }
     if let Some(mut c) = adoptable {
-        // Adoption writes once. On a read-only connection (the send and the estimate open one)
-        // nothing is written and nothing is handed over: the row is adopted by the next pass
-        // that can write (the item's badge), never assumed adopted, since the write is also
-        // the check that no send made it (`sent_txid`; gate second pass, Issue I). A lading
-        // made for a send is never adopted, whatever its `source` says.
+        // Adoption writes once. On a read-only connection (the send's builder opens one)
+        // nothing is written and nothing is handed over: the row is adopted by a pass that can
+        // write (the item's badge, the estimate, and the send's own pre-collection pass),
+        // never assumed adopted, since the write is also the check that no send made it
+        // (`sent_txid`; gate second pass, Issue I; third pass, Finding 5). A lading made for a
+        // send is never adopted, whatever its `source` says.
         let raw = hex::decode(&c.sha256).unwrap_or_default();
         let n = conn
             .execute(

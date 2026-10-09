@@ -387,11 +387,15 @@ pub fn lading_from_knotline(conn: &rusqlite::Connection, carrier_txid_internal: 
                         }
                         (raw, h)
                     }
-                    // Told apart from "the key opens nothing" (audit 2026-10-08, Knotline L):
-                    // a transaction the source does not know is "could not be checked", a
-                    // source failure, not the line's (gate second pass, Issue D).
+                    // Told apart from "the key opens nothing" (audit 2026-10-08, Knotline L).
+                    // From a server it is "could not be checked", a source failure that waits
+                    // a minute; from this wallet's own node, which answered that no such
+                    // transaction exists, it is the line's failure and counts against it (gate
+                    // second pass, Issue D; third pass, Finding 3).
                     None => {
-                        return Err(anyhow!("{} transaction {}… is not known to {}", zmap_wake::oracle::TRANSIENT, hex::encode(&txid[..6]), c.described()))
+                        use zmap_wake::oracle::{ChainOracle, OracleTrust};
+                        let mark = if c.trust() == OracleTrust::FullNode { "" } else { zmap_wake::oracle::TRANSIENT };
+                        return Err(anyhow!("{mark} transaction {}… is not known to {}", hex::encode(&txid[..6]), c.described()));
                     }
                 }
             }

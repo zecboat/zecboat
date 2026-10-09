@@ -304,32 +304,29 @@ impl GenesisRef {
 }
 
 /// The asset's genesis output per a manifest this wallet trusts, or `None` if none names one.
-/// Tried in order, the first two with no network: the local manifest override (test builds), a
-/// manifest this wallet holds (a passed audit's chain copy or a built-in seed, signature
-/// checked), then the Zecboat Registry's audited collections. Until 2026-10-09 the pinned path
-/// went through the issuance badge, whose check 5' asks the chain, so a send with the chain
-/// source down had no genesis and offered a first-holder unit as unproven (gate second pass,
-/// Issue C).
+/// Read with no network, in order: the local manifest override (test builds), then a manifest
+/// this wallet holds (a passed audit's chain copy, pinned or registered, or a built-in seed;
+/// signature checked). Until 2026-10-09 the pinned path went through the issuance badge, whose
+/// check 5' asks the chain, so a send with the chain source down had no genesis and offered a
+/// first-holder unit as unproven (gate second pass, Issue C); a network fallback remained for
+/// the pre-v1 and registry collections until the third pass (Findings 1 and 2), and is gone:
+/// a genesis the wallet cannot read offline is one no manifest it holds states.
 pub async fn genesis_outpoint(asset_id: &str) -> Option<GenesisRef> {
     if let Some((t, i, cmx)) = genesis_from_local_manifest(asset_id) {
         return Some(GenesisRef { txid: t, action_index: i, cmx, height: None, source: GenesisSource::LocalManifest });
     }
-    if let Some(g) = crate::issuance_v1::pinned_genesis_offline(asset_id) {
-        return Some(GenesisRef {
-            txid: g.txid,
-            action_index: g.action_index,
-            cmx: Some(g.cmx),
-            height: Some(g.height),
-            source: if g.via_chain_copy { GenesisSource::Registry } else { GenesisSource::PinnedManifest },
-        });
-    }
-    crate::issuance::genesis_outpoint(asset_id).await.map(|(t, i, via_registry)| GenesisRef {
-        txid: t,
-        action_index: i,
-        cmx: None,
-        height: None,
-        source: if via_registry { GenesisSource::Registry } else { GenesisSource::PinnedManifest },
+    crate::issuance_v1::pinned_genesis_offline(asset_id).map(|g| GenesisRef {
+        txid: g.txid,
+        action_index: g.action_index,
+        cmx: Some(g.cmx),
+        height: Some(g.height),
+        source: if g.pinned { GenesisSource::PinnedManifest } else { GenesisSource::Registry },
     })
+}
+
+/// The local manifest override as a [`GenesisRef`], for headless callers (the examples).
+pub fn genesis_ref_from_local_manifest(asset_id: &str) -> Option<GenesisRef> {
+    genesis_from_local_manifest(asset_id).map(|(t, i, cmx)| GenesisRef { txid: t, action_index: i, cmx, height: None, source: GenesisSource::LocalManifest })
 }
 
 /// The local manifest override alone (`ZECBOAT_WAKE_MANIFEST`), for headless callers. Read only
@@ -827,13 +824,22 @@ pub fn fetch_missing_consignments_scoped(db_path: &str, scope: FetchScope) -> Re
         // Copies whose walks failed before go last, so a slow or dead line a stranger sent
         // cannot use up every pass before the genuine unit's turn (gate second pass, Issue E).
         let mut carriers: Vec<&crate::zmap::CarrierRef> = h.carriers.iter().collect();
-        carriers.sort_by_key(|c| crate::zmap::walk_failure(&conn, &c.txid, c.output_index).ok().flatten().map(|(_, n, _)| n).unwrap_or(0));
+        carriers.sort_by_key(|c| crate::zmap::walk_tries(&conn, &c.txid, c.output_index).unwrap_or(0));
         for c in carriers {
             if started.elapsed() > scope.pass_deadline {
                 // Out of time for the pass: nothing is recorded against carriers not reached.
                 break 'pass;
             }
-            let Some(hash) = c.consignment_hash.as_deref() else { continue };
+            let Some(hash) = c.consignment_hash.as_deref() else {
+                // A unit whose memo commits to nothing may still own a lading that arrived
+                // with its note and was stored before notes were recorded: adopted here, on
+                // this pass's writable connection, so a send that never ran an estimate or a
+                // badge view (a headless caller) ranks it as held (gate third pass, Finding 5).
+                if let Ok(note) = carrier_note(&conn, &c.txid_bytes, c.output_index as u32) {
+                    let _ = crate::zmap::consignment_for_carrier(&conn, &h.asset_id, None, &note.note.rho().to_bytes(), Some(c.note_id));
+                }
+                continue;
+            };
             // A lading this wallet made for a send to itself is re-read from its own line, so
             // the next transfer chains instead of starting over (review 2026-10-09, Knotline H).
             let held = crate::zmap::consignment_by_hash(&conn, hash)?;
@@ -1522,6 +1528,38 @@ fn verify_carrier(
         .and_then(|hh| hex::decode(hh).ok())
         .and_then(|v| <[u8; 32]>::try_from(v).ok());
     let lading = Lading::parse(&consignment.json).map_err(|e| anyhow!("stored lading unreadable: {e}"))?;
+    // A lading whose genesis is not the manifest's, by label or by the commitment its first
+    // proof opens from, is Broken whatever the chain says: decided here, after the checks that
+    // need no oracle, so that a stranger's copy never makes this wallet ask the chain source
+    // for a transaction the stranger chose (gate third pass, Finding 4).
+    if let Some(g) = genesis {
+        let label_ok = g.is_outpoint(&lading.genesis.txid, lading.genesis.action_index);
+        let (failure, detail) = match zmap_wake::verify_local(&consignment.json, expected, &note.note.rho()) {
+            Err(e) => (format!("{e:?}").split(|c: char| !c.is_alphanumeric()).next().unwrap_or("Failure").to_string(), e.to_string()),
+            Ok((_, proofs)) => {
+                let first = proofs.first().map(|p| p.instance_bytes()[zmap_wake::circuit::LINK]);
+                match (label_ok, g.cmx, first) {
+                    (false, _, _) => (
+                        "GenesisMismatch".to_string(),
+                        format!(
+                            "the lading descends from {}… output {}, but the issuer's manifest names a different genesis output for this asset",
+                            &lading.genesis.txid[..16],
+                            lading.genesis.action_index
+                        ),
+                    ),
+                    (true, Some(cmx), Some(link)) if link != cmx => (
+                        "GenesisMismatch".to_string(),
+                        "the lading names the manifest's genesis output but its first proof does not open from the commitment the manifest states there".to_string(),
+                    ),
+                    _ => (String::new(), String::new()),
+                }
+            }
+        };
+        if !failure.is_empty() {
+            let _ = crate::zmap::mark_consignment_verified(conn, &consignment.sha256, None);
+            return Ok(WakeState::Broken { failure, detail });
+        }
+    }
     // The W1 fetch of the genesis transaction is hinted from the block the signed manifest
     // states, so a provider sees the block and not the transaction; never from the lading's
     // own anchor height, which is its author's number. Until 2026-10-09 it was, and since a

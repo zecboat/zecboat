@@ -12,6 +12,12 @@ first public release of everything listed under 0.7.0, with that fixed.
 
 ### Changed
 
+- **The two collections minted before identity v1 are no longer recognised.** Happy Birthday
+  and Barcelona Post Card (the 2025 and early-2026 mints, before the signed proof-of-issuance
+  manifests) are no longer built into the wallet; no unit of either is held outside the
+  project. A unit of one now reads as a collection this wallet does not know. The three
+  current collections, Happy Birthday Zcash 10, Barcelona Post Card 2026 and Lagos Post Card,
+  are built in with their manifests.
 - **Lineage and issuance work without your own node.** Checking a lineage record, checking that
   an item's issuance output is on chain, and sending an item that has a lineage record all asked
   a zebrad on the same machine and nothing else. They now ask your own node when one answers

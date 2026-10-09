@@ -53,7 +53,7 @@ fn main() -> anyhow::Result<()> {
     // Wake (chapter 8): the genesis outpoint from ZECBOAT_WAKE_MANIFEST if set; the unit may
     // travel unproven only with WAKE_ALLOW_UNPROVEN=1. The lading goes to ZECBOAT_DROPBOX.
     let wake = zecboat_core::wake::SendOptions {
-        genesis: zecboat_core::wake::genesis_from_local_manifest(asset_id),
+        genesis: zecboat_core::wake::genesis_ref_from_local_manifest(asset_id),
         acknowledge_unproven: env::var("WAKE_ALLOW_UNPROVEN").map(|v| v == "1").unwrap_or(false),
         abandon_lineage: false,
     };
