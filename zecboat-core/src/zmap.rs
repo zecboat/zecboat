@@ -289,6 +289,11 @@ pub fn parse_memo(memo: &[u8]) -> Option<ZmapRecord> {
                 if v1 && from_desc.is_none() {
                     return None;
                 }
+                // Half a v1 memo (`ik` without `desc`, or the reverse) is neither dialect: it
+                // is not a unit of anything (gate seventh pass, Finding A).
+                if j.ik.is_some() != j.desc.is_some() {
+                    return None;
+                }
                 return Some(ZmapRecord {
                     name: if v1 {
                         from_desc.as_ref().map(|d| d.0.clone()).unwrap_or_default()

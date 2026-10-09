@@ -353,7 +353,13 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Optio
         }
     };
     if estimate.lineage == "none" {
-        estimate.record_stays = held_lading.is_some();
+        // A record will exist when one is held, or when this carrier is the manifest's genesis
+        // output and the send makes its first proof (gate seventh pass, Finding D).
+        let is_genesis = crate::wake::carrier_note(conn, plan.carrier.txid().as_ref(), plan.carrier.output_index() as u32)
+            .ok()
+            .and_then(|n| genesis.map(|g| g.is_outpoint(&hex::encode(n.txid_display), n.action_index)))
+            .unwrap_or(false);
+        estimate.record_stays = held_lading.is_some() || is_genesis;
     }
     Ok(estimate)
 }

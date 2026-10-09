@@ -67,8 +67,8 @@ answered in twenty signed hardening commits, and the last five sessions were reg
 over those fixes. The gate for this release was: no Critical or High anywhere, no Medium in
 the verifier or in the path by which a lineage record is stored, chosen and sent, and every
 claimed fix confirmed by a later pass. The gate was met at the fourth pass and held at the
-fifth; the sixth found one Medium in the order of the issuance badge's answers, fixed in
-hardening 21. The reports, the trust model and the open questions for a human auditor are in the
+fifth; the sixth and seventh each found one Medium in the issuance badge's decision for an
+asset no manifest lists, fixed in hardening 21 and 22. The reports, the trust model and the open questions for a human auditor are in the
 `zmap-wake` repository (`docs/REVIEW_PACKAGE.md`, `docs/TRUST_MODEL.md`).
 
 **This is not an external audit.** No cryptographer outside the project has read the WAKE

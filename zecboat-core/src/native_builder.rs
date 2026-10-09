@@ -1091,12 +1091,19 @@ pub fn send_zmap_asset(
     // hash differently: it is written as a sealed file for the recipient first, from memory,
     // before any database write that could fail (gate sixth pass, Finding 3). The finished
     // send names the file.
-    if let (Some(l), true, true) = (&wake_lading, record_memos.is_empty(), successor_action_index != usize::MAX) {
-        match crate::wake::save_sealed_for(recipient, &l.bytes, &l.hash_hex) {
-            Ok(path) => println!("[wake] the lineage record is not in the transfer; sealed to the recipient and saved as {path}"),
-            Err(e) => eprintln!("[wake] WARNING: the lineage record is not in the transfer and could not be saved as a file ({e}); it is kept in this wallet under sha256 {}", l.hash_hex),
-        }
-    }
+    let saved_as: Option<String> = match (&wake_lading, record_memos.is_empty(), successor_action_index != usize::MAX) {
+        (Some(l), true, true) => match crate::wake::save_sealed_for(recipient, &l.bytes, &l.hash_hex) {
+            Ok(path) => {
+                println!("[wake] the lineage record is not in the transfer; sealed to the recipient and saved as {path}");
+                Some(format!("saved as {path}; send that file to the recipient"))
+            }
+            Err(e) => {
+                eprintln!("[wake] WARNING: the lineage record is not in the transfer and could not be saved as a file ({e}); it is kept in this wallet under sha256 {}", l.hash_hex);
+                Some(format!("could not be saved as a file ({e}); use Save file"))
+            }
+        },
+        _ => None,
+    };
     let after_store = (|| -> Result<()> {
         let conn = rusqlite::Connection::open(wallet_db_path()?)
             .map_err(|e| anyhow!("could not open the wallet to record the lineage: {}", e))?;
@@ -1121,7 +1128,10 @@ pub fn send_zmap_asset(
                         let _ = crate::zmap::mark_consignment_carried(&conn, &l.hash_hex);
                         println!("[wake] lading carried in the transfer");
                     } else {
-                        let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Err("not in the transfer: saved as a file for the recipient"));
+                        // The outcome of the file write, so the finished send can show it
+                        // (gate seventh pass, Finding D).
+                        let note = saved_as.clone().unwrap_or_else(|| "not in the transfer: use Save file".into());
+                        let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Err(note.as_str()));
                     }
                 }
                 stored.map(|_| ()).map_err(|e| anyhow!("could not keep a copy of the lading: {}", e))

@@ -87,7 +87,7 @@
       {#if r.carried}
         <span class="mark ok">✓</span> Lineage carried in the transfer
       {:else}
-        <span class="mark wait">⚠</span> Lineage record not in the transfer: save it as a file for the recipient
+        <span class="mark wait">⚠</span> Lineage record not in the transfer{#if r.note}: {r.note}{:else}: save it as a file for the recipient{/if}
         <button class="mini" onclick={() => save(r.consignment_hash)} disabled={!!busy}>Save file</button>
       {/if}
     </div>

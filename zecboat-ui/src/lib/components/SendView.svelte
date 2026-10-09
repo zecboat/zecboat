@@ -412,7 +412,7 @@
           <p class="fee-note">✗ {estimateError}</p>
         {/if}
         {#if estimate && estimate.lineage === "none" && estimate.record_stays}
-          <p class="fee-note" style="color: #fbbf24;">⚠ Its lineage record does not travel in this transfer. It is saved as a file in your Downloads folder for you to send to the recipient.</p>
+          <p class="fee-note" style="color: #fbbf24;">⚠ Its lineage record does not travel in this transfer. It is saved as a file in your Downloads folder (or your home folder) for you to send to the recipient; the finished send names the file.</p>
         {/if}
         {#if estimate && estimate.lineage !== "none"}
           <!-- One line: what travels with the item, so the higher fee has its reason beside it. -->
