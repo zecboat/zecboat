@@ -95,6 +95,8 @@
       console.error("Could not restore the saved lineage route:", e);
     }
 
+    // The drop-box route is gone (hardening 20); a value a 0.7.0-draft build saved is dropped.
+    try { localStorage.removeItem("zecboat.dropbox"); } catch {}
     // 0.7.1: who answers chain questions (own node only, provider, or automatic) is saved too.
     try {
       const choice = localStorage.getItem("zecboat.chain");

@@ -911,6 +911,19 @@ pub fn export_sealed(db_path: &str, hash_hex: &str) -> Result<(String, Vec<u8>)>
     Ok((format!("lineage-{}.wake.json", &o.sha256[..16]), sealed))
 }
 
+/// Seal `bytes` to the recipient and write it where `lineage_export` writes (Downloads, else
+/// the home folder), named by the lading's hash; the path written. For a send whose record is
+/// not in the transfer, this runs from memory before any database write (gate sixth pass,
+/// Finding 3).
+pub fn save_sealed_for(recipient_ua: &str, bytes: &[u8], hash_hex: &str) -> Result<String> {
+    let sealed = seal_for(recipient_ua, bytes)?;
+    let home = PathBuf::from(std::env::var_os("HOME").ok_or_else(|| anyhow!("no home folder"))?);
+    let dir = Some(home.join("Downloads")).filter(|d| d.is_dir()).unwrap_or(home);
+    let path = dir.join(format!("lineage-{}.wake.json", &hash_hex[..16.min(hash_hex.len())]));
+    std::fs::write(&path, sealed)?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// What importing a lineage file did.
 #[derive(Clone, Debug, Serialize)]
 pub struct Imported {
@@ -1344,11 +1357,12 @@ fn verify_carrier(
     // still prove wrong, the question is asked once more without one.
     // No manifest names a genesis for this asset: the chain can only answer "unverified",
     // and asking it would hand a provider the transaction the lading's author named, with no
-    // cover (gate fifth pass, Finding 6). Said without asking.
+    // cover (gate fifth pass, Finding 6). Said without asking; the checks that need no oracle
+    // ran above (sixth pass, Finding 2).
     if genesis.is_none() {
         return Ok(WakeState::Unverified {
             detail: format!(
-                "the lading names {}… output {} as the genesis, but no trusted manifest names a genesis for this asset, so its chain checks were not run",
+                "the lading names {}… output {} as the genesis and passes every check that needs no chain, but no trusted manifest names a genesis for this asset, so its chain checks were not run",
                 &lading.genesis.txid[..16],
                 lading.genesis.action_index
             ),
@@ -1433,10 +1447,13 @@ fn verify_carrier(
 /// genesis is not the manifest's by label or by first commitment), `None` when only the chain
 /// can tell. Pure, so the copy cases are testable without a wallet (gate fourth pass, I-1).
 pub fn offline_verdict(lading_bytes: &[u8], expected_hash: Option<[u8; 32]>, rho: &orchard::note::Rho, genesis: Option<&GenesisRef>) -> Option<(String, String)> {
-    let g = genesis?;
+    // The checks that need no oracle run whatever the manifest says (gate sixth pass,
+    // Finding 2: with no genesis they were skipped, and a failing lading read "unverified").
     match zmap_wake::verify_local(lading_bytes, expected_hash, rho) {
         Err(e) => Some((format!("{e:?}").split(|c: char| !c.is_alphanumeric()).next().unwrap_or("Failure").to_string(), e.to_string())),
+        Ok(_) if genesis.is_none() => None,
         Ok((l, proofs)) => {
+            let g = genesis?;
             let label_ok = g.is_outpoint(&l.genesis.txid, l.genesis.action_index);
             let first = proofs.first().map(|p| p.instance_bytes()[zmap_wake::circuit::LINK]);
             match (label_ok, g.cmx, first) {
@@ -1476,8 +1493,10 @@ mod offline_verdict_tests {
         // Its own genesis, with and without the commitment: only the chain can say more.
         assert!(offline_verdict(vector, None, &rho, Some(&at(own, 2, Some(cmx)))).is_none());
         assert!(offline_verdict(vector, None, &rho, Some(&at(own, 2, None))).is_none());
-        // No manifest: nothing to compare with offline.
+        // No manifest: nothing to compare with offline, but the local checks still run.
         assert!(offline_verdict(vector, None, &rho, None).is_none());
+        let other_rho: orchard::note::Rho = Option::from(orchard::note::Rho::from_bytes(&[2u8; 32])).unwrap();
+        assert_eq!(offline_verdict(vector, None, &other_rho, None).unwrap().0, "RhoMismatch");
         // Another genesis by label; the right label over the wrong commitment.
         assert_eq!(offline_verdict(vector, None, &rho, Some(&at(&"ab".repeat(32), 0, Some(cmx)))).unwrap().0, "GenesisMismatch");
         assert_eq!(offline_verdict(vector, None, &rho, Some(&at(own, 2, Some([7u8; 32])))).unwrap().0, "GenesisMismatch");

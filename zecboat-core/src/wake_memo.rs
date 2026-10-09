@@ -263,13 +263,18 @@ pub struct SendEstimate {
     /// so the confirmation can name it when there is more than one (review 2026-10-09).
     pub carrier: String,
     pub copies: usize,
+    /// True when a lineage record exists for this unit and will NOT travel in the transfer
+    /// (route off, history too long to start a line, a stored record in a non-canonical form):
+    /// it is saved as a file for the recipient, and the confirmation says so beforehand
+    /// (gate sixth pass, suggestion 2).
+    pub record_stays: bool,
 }
 
 pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Option<&crate::wake::GenesisRef>) -> Result<SendEstimate> {
     // One packed hop: circuit byte, three instance fields, anchor height, proof length, proof.
     const HOP: usize = 1 + 96 + 4 + 2 + 4960;
     const CHUNK: usize = 512 - 9;
-    let plain = |carrier: &str, copies: usize| SendEstimate { lineage: "none", proofs: 0, extra_outputs: 0, outputs: 2, fee_zat: 10_000, carrier: carrier.to_string(), copies };
+    let plain = |carrier: &str, copies: usize| SendEstimate { lineage: "none", proofs: 0, extra_outputs: 0, outputs: 2, fee_zat: 10_000, carrier: carrier.to_string(), copies, record_stays: false };
     let with = |lineage: &'static str, proofs: usize, extras: usize, carrier: &str, copies: usize| SendEstimate {
         lineage,
         proofs,
@@ -278,6 +283,7 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Optio
         fee_zat: 5_000 * (extras as u64 + 2),
         carrier: carrier.to_string(),
         copies,
+        record_stays: false,
     };
     // The same carrier the send will spend, and the lading that carrier commits to (never the
     // newest for the asset): the estimate must mirror the sender's own choices, or the screen
@@ -327,7 +333,7 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Optio
     // With no lading held, a proof can still be made if this note is the issuance output; that
     // is not known here without the manifest, so it is estimated as a line of one proof.
     let after = held + 1;
-    Ok(match send_mode() {
+    let mut estimate = match send_mode() {
         SendMode::Off => plain(&carrier, copies),
         SendMode::FullRecord if after <= MAX_HOPS => {
             let packed = 1 + 32 + 4 + 2 + after * HOP;
@@ -345,7 +351,11 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Optio
                 plain(&carrier, copies)
             }
         }
-    })
+    };
+    if estimate.lineage == "none" {
+        estimate.record_stays = held_lading.is_some();
+    }
+    Ok(estimate)
 }
 
 /// Knotline, receiving: if the carrier's transaction hands this wallet a key, walk the log

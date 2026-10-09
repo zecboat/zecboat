@@ -144,24 +144,39 @@ fn holder_memo(asset_id: &str) -> Option<Value> {
 }
 
 /// The collection a memo's `ik` belongs to, when this wallet knows that key: a pinned
-/// collection's label, or the name of a registered collection whose audit passed and closed
-/// (so its manifest lists every unit there will ever be). `None` for a key the wallet has
-/// never seen. Pure, so it can be tested per pinned key.
+/// collection's label, or the name of a registered collection whose NEWEST audit passed and
+/// closed (so its manifest lists every unit there will ever be; an older pass never outranks
+/// a newer failure, as `pick_listing` rules). `None` for a key the wallet has never seen.
+/// Pure, so it can be tested per pinned key.
 pub fn known_issuer_for_ik(ik_hex: &str, audits: &[crate::collection_audit::AuditReport]) -> Option<String> {
     if let Some((label, _, _)) = PINNED_V1.iter().find(|(_, k, _)| k.eq_ignore_ascii_case(ik_hex)) {
         return Some(label.to_string());
     }
-    audits.iter().find(|a| a.passed && a.close_height.is_some() && a.ik.eq_ignore_ascii_case(ik_hex)).map(|a| a.name.clone())
+    let newest = audits.iter().filter(|a| a.ik.eq_ignore_ascii_case(ik_hex)).max_by_key(|a| (a.audited_to, a.passed));
+    newest.filter(|a| a.passed && a.close_height.is_some()).map(|a| a.name.clone())
 }
 
-/// The collection the holder's own memo for `asset_id` claims, when its `ik` is a key this
-/// wallet knows. An asset so claimed that no held manifest lists is the forgery answer, not
-/// "unknown" (gate fifth pass, Finding 1): the key's manifest is exhaustive once the collection
-/// is closed, and the pinned ones are.
-pub fn known_issuer_named_by_holder(asset_id: &str) -> Option<String> {
-    let ik = holder_memo(asset_id)?["ik"].as_str()?.to_ascii_lowercase();
-    let audits: Vec<crate::collection_audit::AuditReport> = crate::collection_audit::cached_audits().map(|v| v.into_iter().map(|(_, a)| a).collect()).unwrap_or_default();
-    known_issuer_for_ik(&ik, &audits)
+/// The badge for an asset no held manifest lists, from what the holder's memos claim: the
+/// forgery answer when any memo names a key this wallet knows, amber when the key is
+/// registered but not checked, `None` (the caller says "unknown") otherwise. Pure: the order
+/// of these answers is the finding (gate sixth pass, Finding 1), so it is tested as a whole.
+pub fn unlisted_verdict(memo_iks: &[String], audits: &[crate::collection_audit::AuditReport], registered: &[(String, String)]) -> Option<BadgeState> {
+    for ik in memo_iks {
+        if let Some(claimed) = known_issuer_for_ik(ik, audits) {
+            return Some(BadgeState::NotListed {
+                issuer: claimed.clone(),
+                detail: format!("this unit's memo names {claimed}'s key, but {claimed}'s manifest does not list this asset"),
+            });
+        }
+    }
+    for ik in memo_iks {
+        if let Some((_, name)) = registered.iter().find(|(k, _)| k.eq_ignore_ascii_case(ik)) {
+            return Some(BadgeState::CouldNotCheck {
+                detail: format!("{name} is in the Zecboat Registry but not checked yet: open Collections and press Check"),
+            });
+        }
+    }
+    None
 }
 
 /// The signed manifests of the pinned collections, built into the wallet: the seed of a fresh
@@ -339,16 +354,19 @@ pub async fn verify(asset_id: &str) -> Option<BadgeState> {
     // checked by exactly the same rules, with the registered key in place of a pinned one. The
     // trust root is the registry's key, pinned above; zecboat.com is not consulted.
     let Some(a) = crate::collection_audit::audited_collection_listing(asset_id) else {
-        // Registered, but not (or not since phase 4) checked: say so in amber. Falling through
-        // would give "not listed", the forgery verdict, for a collection that is merely
-        // unchecked.
-        let memo_ik = holder_memo(asset_id).and_then(|m| m["ik"].as_str().map(str::to_ascii_lowercase));
-        let registered = memo_ik.and_then(|ik| {
-            crate::collections::registry_view().ok()?.registrations.into_iter().find(|r| r.valid && r.ik.eq_ignore_ascii_case(&ik))
-        });
-        return registered.map(|r| BadgeState::CouldNotCheck {
-            detail: format!("{} is in the Zecboat Registry but not checked yet: open Collections and press Check", r.name),
-        });
+        // No held manifest lists the asset. What the holder's memos claim decides, in this
+        // order (gate sixth pass, Finding 1: the red answer used to sit behind the amber one
+        // and never fired once the Registry had been scanned): a memo naming a key this
+        // wallet knows (pinned, or whose newest audit passed and closed) is the forgery
+        // answer, named; a key registered but not yet checked is amber; anything else is
+        // the caller's "unknown".
+        let iks: Vec<String> = holder_memos(asset_id).iter().filter_map(|m| m["ik"].as_str().map(str::to_ascii_lowercase)).collect();
+        let audits: Vec<crate::collection_audit::AuditReport> =
+            crate::collection_audit::cached_audits().map(|v| v.into_iter().map(|(_, a)| a).collect()).unwrap_or_default();
+        let registered: Vec<(String, String)> = crate::collections::registry_view()
+            .map(|v| v.registrations.into_iter().filter(|r| r.valid).map(|r| (r.ik.to_ascii_lowercase(), r.name)).collect())
+            .unwrap_or_default();
+        return unlisted_verdict(&iks, &audits, &registered);
     };
     let (Some(ik), Ok(body), Ok(sig)) = (
         hex32(&a.ik),
@@ -556,8 +574,22 @@ mod tests {
         for (label, k, _) in PINNED_V1 {
             assert_eq!(known_issuer_for_ik(k, &[]).as_deref(), Some(*label));
             assert_eq!(known_issuer_for_ik(&k.to_ascii_uppercase(), &[]).as_deref(), Some(*label));
+            // The decision order itself (gate sixth pass, Finding 1): with the pinned collection
+            // also registered, the forgery answer comes first, not "not checked yet".
+            let registered = vec![(k.to_string(), label.to_string())];
+            match unlisted_verdict(&[k.to_string()], &[], &registered) {
+                Some(BadgeState::NotListed { issuer, .. }) => assert_eq!(issuer, *label),
+                other => panic!("{label}: expected the forgery answer, got {other:?}"),
+            }
         }
         assert!(known_issuer_for_ik(&"0".repeat(64), &[]).is_none());
+        // A registered key the wallet has not checked is amber; an unknown key is nobody's.
+        let other = "1".repeat(64);
+        match unlisted_verdict(&[other.clone()], &[], &[(other.clone(), "Somebody".into())]) {
+            Some(BadgeState::CouldNotCheck { detail }) => assert!(detail.contains("not checked yet")),
+            other => panic!("expected amber, got {other:?}"),
+        }
+        assert!(unlisted_verdict(&[other], &[], &[]).is_none());
     }
 
     #[test]

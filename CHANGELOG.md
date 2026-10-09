@@ -3,7 +3,7 @@
 Notable changes to the Zecboat desktop wallet. Entries describe the user-visible effect,
 not the diff.
 
-## 0.7.1-beta — unreleased
+## 0.7.1-beta — 2026-10-10
 
 0.7.0-beta was tagged and staged but never published: a test on a machine without its own node
 showed that lineage, and one step of the issuance check, only worked beside a zebrad, and that
@@ -56,6 +56,38 @@ first public release of everything listed under 0.7.0, with that fixed.
 - Wake v1 §8.1 says a server-asserted verdict is reported as unverified. The wallet now reports
   it as its own named state, never as verified by the holder's node. The spec wording is to be
   amended to match before release.
+
+### Reviewed before release, and what is still open
+
+Between 2026-10-08 and 2026-10-09 the lineage code (the WAKE circuits and verifier, the
+Knotline, ZMAP v0.5 and the wallet's send and badge paths) went through eleven automated
+review sessions by two independent models, each writing in the manner of a published audit
+report and each reading the previous reports only after writing its own. Every finding was
+answered in twenty signed hardening commits, and the last five sessions were regression passes
+over those fixes. The gate for this release was: no Critical or High anywhere, no Medium in
+the verifier or in the path by which a lineage record is stored, chosen and sent, and every
+claimed fix confirmed by a later pass. The gate was met at the fourth pass and held at the
+fifth; the sixth found one Medium in the order of the issuance badge's answers, fixed in
+hardening 21. The reports, the trust model and the open questions for a human auditor are in the
+`zmap-wake` repository (`docs/REVIEW_PACKAGE.md`, `docs/TRUST_MODEL.md`).
+
+**This is not an external audit.** No cryptographer outside the project has read the WAKE
+circuits. Every lineage result in the wallet still says "awaiting external review", and the
+green issuance badge is given only with a lineage verified against your own node.
+
+What is open, all rated Low or Informational by the last pass, and left for 0.7.2:
+
+- The order in which the wallet collects lineage records for several copies of one asset is
+  a cost to an attacker, not a guarantee: a stranger who sends you copies can delay the
+  collection of the genuine one, through a light server, by some minutes per copy. Sends
+  refuse safely meanwhile.
+- A light server, when you use one instead of your own node, sees which transactions your
+  wallet asks for while it collects a lineage record. The block-level cover the wallet uses
+  does not hide that from the server itself. A uniform transfer shape is planned.
+- An item's badge verifies the record's proofs twice when it is first opened. Cost only.
+- A registered collection's genesis outpoint is read from its signed manifest rather than
+  from the audit's own chain-derived list; this can harm only that issuer's own holders.
+- A transfer of a unit with its lineage has a recognisable shape on chain (14 outputs).
 
 ## 0.7.0-beta — 2026-10-02 *(tagged, never published — see 0.7.1-beta)*
 

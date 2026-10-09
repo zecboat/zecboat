@@ -60,7 +60,7 @@ fn main() -> anyhow::Result<()> {
     // Collect any lading the carrier's line or transaction holds for this copy first,
     // as the wallet does when it lists its assets.
     match zecboat_core::wake::fetch_missing_consignments(&db_path) {
-        Ok(r) => println!("ladings: fetched {}, already held {}, not found {}, failed {:?}", r.fetched, r.already_held, r.in_progress.len(), r.failed),
+        Ok(r) => println!("ladings: fetched {}, already held {}, in progress {}, failed {:?}", r.fetched, r.already_held, r.in_progress.len(), r.failed),
         Err(e) => println!("lading fetch skipped: {e}"),
     }
     let t = std::time::Instant::now();

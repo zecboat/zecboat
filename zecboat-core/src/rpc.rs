@@ -1680,7 +1680,12 @@ async fn try_broadcast_zebrad(raw_tx_hex: &str) -> std::result::Result<String, B
             BroadcastFailure::Unreachable(format!("could not reach zebrad at {}: {}", endpoint, e))
         })?;
 
-    let parsed: Value = response.json().await.map_err(|e| {
+    // Read under a bound, as every other client's reply is (gate sixth pass, Finding 6): a
+    // node named by ZECBOAT_ZEBRAD_RPC can be any host.
+    let text = read_bounded(response, 256 * 1024).await.map_err(|e| {
+        BroadcastFailure::Unreachable(format!("zebrad at {} sent an unreadable reply: {}", endpoint, e))
+    })?;
+    let parsed: Value = serde_json::from_str(&text).map_err(|e| {
         BroadcastFailure::Unreachable(format!("zebrad at {} sent an unreadable reply: {}", endpoint, e))
     })?;
 

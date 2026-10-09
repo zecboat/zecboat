@@ -127,7 +127,7 @@
   // What this particular item's send will carry and cost (0.7.1). The flat figure above is the
   // fee of a plain two-output transfer; a transfer that carries lineage has more outputs, and
   // the confirmation screen quoted 0.0002 while the wallet went on to pay 0.0007 or 0.0017.
-  type SendEstimate = { lineage: "none" | "knot" | "start" | "whole"; proofs: number; extra_outputs: number; outputs: number; fee_zat: number; carrier: string; copies: number };
+  type SendEstimate = { lineage: "none" | "knot" | "start" | "whole"; proofs: number; extra_outputs: number; outputs: number; fee_zat: number; carrier: string; copies: number; record_stays: boolean };
   let estimate = $state<SendEstimate | null>(null);
   // Why no estimate could be made (the send would refuse for the same reason), or null.
   let estimateError = $state<string | null>(null);
@@ -410,6 +410,9 @@
         </p>
         {#if estimateError}
           <p class="fee-note">✗ {estimateError}</p>
+        {/if}
+        {#if estimate && estimate.lineage === "none" && estimate.record_stays}
+          <p class="fee-note" style="color: #fbbf24;">⚠ Its lineage record does not travel in this transfer. It is saved as a file in your Downloads folder for you to send to the recipient.</p>
         {/if}
         {#if estimate && estimate.lineage !== "none"}
           <!-- One line: what travels with the item, so the higher fee has its reason beside it. -->

@@ -1087,6 +1087,16 @@ pub fn send_zmap_asset(
     // a "failed" after this point used to leave a transaction that went out later anyway, and
     // a retry in between double-spent the carrier (audit 2026-10-08, Zecboat F). A failure
     // here is reported and the send goes on; the lading itself travels in the transaction.
+    // A record that is not in the transfer exists nowhere but here, and a fresh proof would
+    // hash differently: it is written as a sealed file for the recipient first, from memory,
+    // before any database write that could fail (gate sixth pass, Finding 3). The finished
+    // send names the file.
+    if let (Some(l), true, true) = (&wake_lading, record_memos.is_empty(), successor_action_index != usize::MAX) {
+        match crate::wake::save_sealed_for(recipient, &l.bytes, &l.hash_hex) {
+            Ok(path) => println!("[wake] the lineage record is not in the transfer; sealed to the recipient and saved as {path}"),
+            Err(e) => eprintln!("[wake] WARNING: the lineage record is not in the transfer and could not be saved as a file ({e}); it is kept in this wallet under sha256 {}", l.hash_hex),
+        }
+    }
     let after_store = (|| -> Result<()> {
         let conn = rusqlite::Connection::open(wallet_db_path()?)
             .map_err(|e| anyhow!("could not open the wallet to record the lineage: {}", e))?;
@@ -1099,6 +1109,25 @@ pub fn send_zmap_asset(
         successor_txid.copy_from_slice(txid.as_ref());
         let spent_index = u32::try_from(plan.carrier.output_index())
             .map_err(|_| anyhow!("internal: carrier output index out of range"))?;
+        // The sender's copy of the lading first (gate sixth pass, Finding 3): with the
+        // Knotline the record is in the transaction itself; otherwise the file above and this
+        // row are its only copies.
+        let stored = match &wake_lading {
+            Some(l) => {
+                let stored = crate::zmap::store_consignment(&conn, asset_id, None, None, &l.bytes, Some(&successor_txid));
+                if let Ok(hh) = &stored {
+                    let _ = crate::zmap::mark_consignment_source(&conn, hh, "sent");
+                    if !record_memos.is_empty() {
+                        let _ = crate::zmap::mark_consignment_carried(&conn, &l.hash_hex);
+                        println!("[wake] lading carried in the transfer");
+                    } else {
+                        let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Err("not in the transfer: saved as a file for the recipient"));
+                    }
+                }
+                stored.map(|_| ()).map_err(|e| anyhow!("could not keep a copy of the lading: {}", e))
+            }
+            None => Ok(()),
+        };
         crate::zmap::record_lineage_out(
             &conn,
             &crate::zmap::LineageOut {
@@ -1113,29 +1142,7 @@ pub fn send_zmap_asset(
             },
         )
         .map_err(|e| anyhow!("could not record the lineage of the sent asset: {}", e))?;
-
-        // ── 9a. Keep the lading and deliver it (chapter 8) ─────────────────────────────────
-        // The sender's copy makes a lost delivery re-issuable. Delivery failure is reported,
-        // not fatal: the transfer is built and the recipient can ask for the lading again.
-        if let Some(l) = &wake_lading {
-            // The sender's copy: with the Knotline the record is in the transaction itself;
-            // otherwise it stays here, to be saved as a file for the recipient (the drop-box
-            // route left in hardening 20). The store is the only write that matters for the
-            // hand-over, so its failure is reported last, after the record is marked.
-            let stored = crate::zmap::store_consignment(&conn, asset_id, None, None, &l.bytes, Some(&successor_txid));
-            if let Ok(hh) = &stored {
-                let _ = crate::zmap::mark_consignment_source(&conn, hh, "sent");
-                if !record_memos.is_empty() {
-                    let _ = crate::zmap::mark_consignment_carried(&conn, &l.hash_hex);
-                    println!("[wake] lading carried in the transfer");
-                } else {
-                    let _ = crate::zmap::mark_consignment_delivery(&conn, &l.hash_hex, Err("not in the transfer: save it as a file for the recipient"));
-                    println!("[wake] lading kept in this wallet under sha256 {}; save it as a file for the recipient", l.hash_hex);
-                }
-            }
-            stored.map_err(|e| anyhow!("could not keep a copy of the lading: {}", e))?;
-        }
-        Ok(())
+        stored
     })();
     if let Err(e) = after_store {
         eprintln!("[wake] WARNING: the transfer is signed and will be sent, but its lineage record could not be written: {e}");
