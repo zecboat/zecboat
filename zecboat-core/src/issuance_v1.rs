@@ -115,17 +115,8 @@ async fn fetch(source: &str, suffix: &str) -> std::result::Result<Vec<u8>, Strin
         let p = if suffix == ".sig" { path.replace(".json", ".sig") } else { path.to_string() };
         return std::fs::read(&p).map_err(|e| format!("{p}: {e}"));
     }
-    // `name.json` and `name.sig` side by side, as the site publishes them.
-    let path = if suffix == ".sig" && source.ends_with(".json") {
-        source.trim_start_matches('/').trim_end_matches(".json").to_string() + ".sig"
-    } else {
-        format!("{}{}", source.trim_start_matches('/'), suffix)
-    };
-    let url = format!("{}/{}", crate::rpc::registry_base(), path);
-    crate::rpc::registry_fetch(&url, crate::issuance::MAX_MANIFEST_BYTES)
-        .await
-        .map(|(_, b)| b)
-        .map_err(|e| e.to_string())
+    // No other source: a manifest comes from the chain or from the build, never from the website.
+    Err(format!("{source}: manifests are not fetched over the network"))
 }
 
 /// Every carrier memo this wallet holds for `asset_id`, as JSON. All of them, not the first:
@@ -152,24 +143,100 @@ fn holder_memo(asset_id: &str) -> Option<Value> {
     holder_memos(asset_id).into_iter().next()
 }
 
+/// The signed manifests of the pinned collections, built into the wallet: the seed of a fresh
+/// install's knowledge, before its first registry scan. The chain copy (a passed audit's
+/// etched manifest) is preferred whenever the wallet holds one. **Nothing here is fetched from
+/// zecboat.com**: from 2026-10-09 (hardening 13) to the same evening (hardening 16) the pinned
+/// path asked the website first and failed when it failed, which is the drop-box mistake the
+/// owner had ruled out; the website is not part of verifying a unit.
+pub struct Seed {
+    pub label: &'static str,
+    pub ik: &'static str,
+    pub manifest: &'static [u8],
+    pub signature: &'static [u8],
+}
+
+pub const SEEDS: &[Seed] = &[
+    Seed { label: "Lagos Post Card", ik: "e9be4cf91390aba0740ce108a0c2f390d1610ef5c77ede09b445e888fd79b590", manifest: include_bytes!("../pinned/lpc_issuance_manifest.json"), signature: include_bytes!("../pinned/lpc_issuance_manifest.sig") },
+    Seed { label: "Happy Birthday Zcash 10", ik: "1ba0bd2f1a1891d616ce912b5e02c38069a9ec87d6b33769bdd8a00741ce1fa0", manifest: include_bytes!("../pinned/hbd10_issuance_manifest.json"), signature: include_bytes!("../pinned/hbd10_issuance_manifest.sig") },
+    Seed { label: "Barcelona Post Card 2026", ik: "d289030848144bc321be1030051f90dbf170f0c6752ab8dbf6ed029658d1a820", manifest: include_bytes!("../pinned/bcn26_issuance_manifest.json"), signature: include_bytes!("../pinned/bcn26_issuance_manifest.sig") },
+];
+
+/// The ik of the pinned collection whose manifest (chain copy, or built-in seed) lists
+/// `asset_id`, with no network. This is what "an asset this wallet knows" means for the
+/// automatic Knotline walk (review 2026-10-09, regression over 12-15, Issue A: a memo naming a
+/// pinned key is not a reason; being listed under it is).
+pub fn pinned_listing_offline(asset_id: &str) -> Option<[u8; 32]> {
+    if let Some(a) = crate::collection_audit::audited_collection_listing(asset_id) {
+        if let Some(ik) = hex32(&a.ik) {
+            if PINNED_V1.iter().any(|(_, k, _)| k.eq_ignore_ascii_case(&a.ik)) {
+                return Some(ik);
+            }
+        }
+    }
+    for seed in SEEDS {
+        let v: Value = serde_json::from_slice(seed.manifest).ok()?;
+        if v["assets"].as_array().map(|a| a.iter().any(|x| x["asset_id"].as_str().map(|s| s.eq_ignore_ascii_case(asset_id)).unwrap_or(false))).unwrap_or(false) {
+            return hex32(seed.ik);
+        }
+    }
+    None
+}
+
+/// The issuance viewing keys of the pinned collections, from the built-in manifests: an
+/// account that must never send units (TRUST_MODEL row 13), checked with no network.
+pub fn pinned_issuance_ufvks() -> Vec<String> {
+    SEEDS
+        .iter()
+        .filter_map(|s| serde_json::from_slice::<Value>(s.manifest).ok())
+        .filter_map(|v| v["identity"]["issuance_ufvk"].as_str().map(|u| u.trim().to_string()))
+        .collect()
+}
+
 /// The v1 badge, if any v1 pin lists `asset_id`. `None` when no v1 pin knows the asset (the
 /// caller then falls back to the pre-Wake badge).
+///
+/// Sources, in order, none of them the website: the chain copy of a pinned collection's
+/// manifest (a passed audit, verified under the registered key, which must be the pinned one);
+/// the built-in seed; a test pin's local file (test builds only). A source that is missing is
+/// skipped, never a verdict.
 pub async fn verify(asset_id: &str) -> Option<BadgeState> {
-    for pin in pins() {
-        let body = match fetch(&pin.source, "").await {
-            Ok(b) => b,
-            Err(e) => return Some(BadgeState::CouldNotCheck { detail: format!("{}: {e}", pin.label) }),
-        };
-        let v: Value = match serde_json::from_slice(&body) {
-            Ok(v) => v,
-            Err(e) => return Some(BadgeState::CouldNotCheck { detail: format!("{}: manifest is not JSON: {e}", pin.label) }),
-        };
+    // 1. The chain copy, when the wallet has audited the collection and its key is pinned.
+    if let Some(a) = crate::collection_audit::audited_collection_listing(asset_id) {
+        if let Some(pin) = pins().into_iter().find(|p| hex::encode(p.ik).eq_ignore_ascii_case(&a.ik)) {
+            if let (Ok(body), Ok(sig)) = (hex::decode(a.manifest_hex.as_deref().unwrap_or("")), hex::decode(a.signature_hex.as_deref().unwrap_or(""))) {
+                if let Ok(v) = serde_json::from_slice::<Value>(&body) {
+                    if let Some(asset) = v["assets"].as_array().and_then(|x| x.iter().find(|x| x["asset_id"].as_str().map(|s| s.eq_ignore_ascii_case(asset_id)).unwrap_or(false))).cloned() {
+                        let mut state = check(&pin, &body, &v, &sig, &asset, asset_id, None).await;
+                        if let BadgeState::Verified { checks, .. } = &mut state {
+                            checks.push(format!("manifest read from the chain (the collection's close, audited to block {})", a.audited_to));
+                        }
+                        return Some(state);
+                    }
+                }
+            }
+        }
+    }
+    // 2. The built-in seed of a pinned collection.
+    for seed in SEEDS {
+        let Some(ik) = hex32(seed.ik) else { continue };
+        let Ok(v) = serde_json::from_slice::<Value>(seed.manifest) else { continue };
         let Some(asset) = v["assets"].as_array().and_then(|a| a.iter().find(|x| x["asset_id"].as_str().map(|s| s.eq_ignore_ascii_case(asset_id)).unwrap_or(false))).cloned() else {
-            continue; // not this collection; try the next pin
+            continue;
         };
-        let sig = match fetch(&pin.source, ".sig").await {
-            Ok(s) => s,
-            Err(e) => return Some(BadgeState::CouldNotCheck { detail: format!("{}: signature: {e}", pin.label) }),
+        let pin = Pin { label: seed.label.to_string(), ik, source: "built-in".into(), test_only: false };
+        let mut state = check(&pin, seed.manifest, &v, seed.signature, &asset, asset_id, None).await;
+        if let BadgeState::Verified { checks, .. } = &mut state {
+            checks.push("manifest from the copy built into this wallet; a registry Check replaces it with the chain's".into());
+        }
+        return Some(state);
+    }
+    // 3. Test pins with local files (test builds only).
+    for pin in pins().into_iter().filter(|p| p.test_only && p.source.starts_with("file://")) {
+        let (Ok(body), Ok(sig)) = (fetch(&pin.source, "").await, fetch(&pin.source, ".sig").await) else { continue };
+        let Ok(v) = serde_json::from_slice::<Value>(&body) else { continue };
+        let Some(asset) = v["assets"].as_array().and_then(|a| a.iter().find(|x| x["asset_id"].as_str().map(|s| s.eq_ignore_ascii_case(asset_id)).unwrap_or(false))).cloned() else {
+            continue;
         };
         return Some(check(&pin, &body, &v, &sig, &asset, asset_id, None).await);
     }
@@ -365,6 +432,28 @@ mod tests {
         let ik = hex32("7e0a1a7333d80469be1273ff78953fede09f3d136526cb90e06408e9e698e7f7").unwrap();
         let desc = "zmap-desc-v1|Wake Test 2|1|Wake Test 2 #001|WK2|b1240d820bb725b9fdc17862f604eda1a0c6a0da1644fd51daed208bd134d789";
         assert_eq!(derive_asset_id(&ik, desc), "ca54948c3ff3eac68191b4a411dedf451f1bd61204f2db11fd4b17b687e8ff2f");
+    }
+
+    #[test]
+    fn the_built_in_manifests_verify_under_their_pinned_keys_and_list_their_units() {
+        for seed in SEEDS {
+            let (label, k, _) = PINNED_V1.iter().find(|(_, k, _)| k.eq_ignore_ascii_case(seed.ik)).expect("every seed has a pin");
+            assert_eq!(*label, seed.label);
+            let ik = hex32(k).unwrap();
+            assert!(verify_bip340(&ik, seed.manifest, seed.signature), "{label}: built-in manifest does not verify under its pinned key");
+            let v: Value = serde_json::from_slice(seed.manifest).unwrap();
+            assert_eq!(v["schema"], "zecboat-proof-of-issuance/2");
+            assert_eq!(v["identity"]["ik"].as_str().map(str::to_ascii_lowercase).as_deref(), Some(k.to_ascii_lowercase().as_str()));
+            let assets = v["assets"].as_array().unwrap();
+            assert_eq!(assets.len(), 10, "{label}");
+            for a in assets {
+                let id = a["asset_id"].as_str().unwrap();
+                assert_eq!(derive_asset_id(&ik, a["asset_desc"].as_str().unwrap()), id.to_ascii_lowercase());
+                assert_eq!(pinned_listing_offline(id), Some(ik), "{label}: {id} is listed offline");
+            }
+        }
+        assert!(pinned_listing_offline(&"0".repeat(64)).is_none());
+        assert_eq!(pinned_issuance_ufvks().len(), SEEDS.len());
     }
 
     #[test]

@@ -120,6 +120,9 @@
     .then((c) => { chainSource = c.choice === "node" ? "your own node" : c.choice === "provider" ? "your provider" : "your node when it answers, else your provider"; })
     .catch(() => { chainSource = null; });
   let acceptedFeeZat = $state<number | null>(null);
+  // A send refused because the unit's memo commits to a lading not collected yet.
+  let uncollectedNotice = $state<{ hash: string; text: string } | null>(null);
+  let abandonLineage = $state(false);
   invoke<Fee>("fee_readiness").then((f) => { fee = f; }).catch(() => { fee = null; });
   // What this particular item's send will carry and cost (0.7.1). The flat figure above is the
   // fee of a plain two-output transfer; a transfer that carries lineage has more outputs, and
@@ -235,7 +238,8 @@
           assetId: assetId || undefined,
           acknowledgeUnproven: assetId ? acknowledgeUnproven : undefined,
           // The fee this screen showed; a higher real fee comes back as a question, below.
-          maxFeeZat: assetId ? (acceptedFeeZat ?? estimate?.fee_zat ?? undefined) : undefined
+          maxFeeZat: assetId ? (acceptedFeeZat ?? estimate?.fee_zat ?? undefined) : undefined,
+          abandonLineage: assetId ? abandonLineage : undefined
         });
         
         txResult = {
@@ -253,6 +257,8 @@
       acknowledgeUnproven = false;
       feeNotice = null;
       acceptedFeeZat = null;
+      uncollectedNotice = null;
+      abandonLineage = false;
     } catch (err: any) {
       const raw = String(err);
       // Wake: not a failure, a question. Keep the confirmation open with the acknowledgement
@@ -264,6 +270,14 @@
       }
       // The real fee is above the one shown: not a failure, a question. Show the real figure
       // on the same confirmation and send again with it accepted (review 2026-10-09).
+      // The memo commits to a lineage this wallet never collected. Not "no lineage": it exists.
+      // The default is to collect it; abandoning is a separate choice under its own warning.
+      if (raw.includes("WAKE_UNCOLLECTED:")) {
+        const h = raw.split("WAKE_UNCOLLECTED:")[1]?.slice(0, 64) ?? "";
+        uncollectedNotice = { hash: h, text: raw.split(`${h}:`)[1]?.trim() || raw };
+        isSending = false;
+        return;
+      }
       const feeChanged = raw.match(/FEE_CHANGED:(\d+):/);
       if (feeChanged) {
         feeNotice = { fee_zat: Number(feeChanged[1]), text: raw.split(feeChanged[0])[1]?.trim() || raw };
@@ -479,6 +493,16 @@
             </label>
           </div>
         {/if}
+        {#if uncollectedNotice}
+          <div class="fee-warning" style="margin-top: 0.75rem;">
+            <strong>This unit's lineage has not been collected.</strong>
+            <span>Its memo commits to lineage record {uncollectedNotice.hash.slice(0, 16)}…, which exists and can usually be collected: open the item and press "Collect its lineage now", then send again.</span>
+            <label style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem; cursor: pointer;">
+              <input type="checkbox" bind:checked={abandonLineage} />
+              Abandon this unit's lineage for good. The record cannot be attached later; every future owner receives it unproven.
+            </label>
+          </div>
+        {/if}
         {#if feeNotice}
           <!-- The real fee came out above the estimate shown (the estimate counts outputs, the
                fee counts the notes that pay it too). Not a failure: the real figure, and the
@@ -489,7 +513,7 @@
           </div>
         {/if}
         <button class="btn secondary" onclick={cancelSend} disabled={isSending}>Cancel</button>
-        <button class="btn primary" onclick={() => { if (feeNotice) { acceptedFeeZat = feeNotice.fee_zat; feeNotice = null; } confirmAndSend(); }} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven) || (yubikeyWallet && !yubikeyPresent) || (assetType === "ZSA" && !estimate)}>
+        <button class="btn primary" onclick={() => { if (feeNotice) { acceptedFeeZat = feeNotice.fee_zat; feeNotice = null; } confirmAndSend(); }} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven) || (!!uncollectedNotice && !abandonLineage) || (yubikeyWallet && !yubikeyPresent) || (assetType === "ZSA" && !estimate)}>
           {#if isSending && yubiMsg}
             <span>👉 {yubiMsg}</span>
           {:else if isSending}

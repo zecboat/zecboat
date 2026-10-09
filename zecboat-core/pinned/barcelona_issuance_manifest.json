@@ -1,0 +1,122 @@
+{
+  "assets": [
+    {
+      "asset_id": "8f990ee3658cc9f6477b991d2a589ca50b1c0b145ac9777aad24921d922c9a8f",
+      "image": "/collection/8f990ee3658cc9f6477b991d2a589ca50b1c0b145ac9777aad24921d922c9a8f.jpg",
+      "issuance": {
+        "action_index": 2,
+        "height": 3480081,
+        "ock": "839ec68aac0d1e3ab6d83f3bfcbd891da78d4c3b958536a3e97386fd7fe258d5",
+        "txid": "72f397788c07929e01e920e3b8e75becd35461dd06d6ac3f2eb7469a776902bf"
+      },
+      "name": "Barcelona Post Card #001"
+    },
+    {
+      "asset_id": "ab8df616d2067b38595a0672f088da1e3b00fdd5f1ca62daabea306bc6802e21",
+      "image": "/collection/ab8df616d2067b38595a0672f088da1e3b00fdd5f1ca62daabea306bc6802e21.jpg",
+      "issuance": {
+        "action_index": 7,
+        "height": 3480081,
+        "ock": "f05bc2c623db78e28d7d8e33489e29a2b444bf5838aa9b90f3958ad0c4dc44f2",
+        "txid": "72f397788c07929e01e920e3b8e75becd35461dd06d6ac3f2eb7469a776902bf"
+      },
+      "name": "Barcelona Post Card #002"
+    },
+    {
+      "asset_id": "744984c5c5bc3cadd8de79ab59e703f4a12f2027971db8696b5db0fbbde4a2fb",
+      "image": "/collection/744984c5c5bc3cadd8de79ab59e703f4a12f2027971db8696b5db0fbbde4a2fb.jpg",
+      "issuance": {
+        "action_index": 0,
+        "height": 3480081,
+        "ock": "18790987cc1aac65fb4c3d8dde527e52bc635bbec9c83a59a9b51304d29da043",
+        "txid": "72f397788c07929e01e920e3b8e75becd35461dd06d6ac3f2eb7469a776902bf"
+      },
+      "name": "Barcelona Post Card #003"
+    },
+    {
+      "asset_id": "23ed175351ceae27fb45a0076b81835e41a4f924718c5b32565d39871b911db8",
+      "image": "/collection/23ed175351ceae27fb45a0076b81835e41a4f924718c5b32565d39871b911db8.jpg",
+      "issuance": {
+        "action_index": 6,
+        "height": 3480081,
+        "ock": "c908236fa0b36f73dd304fb764215db9b5695fc836d8a5dac6ad29ce329e4cc7",
+        "txid": "72f397788c07929e01e920e3b8e75becd35461dd06d6ac3f2eb7469a776902bf"
+      },
+      "name": "Barcelona Post Card #004"
+    },
+    {
+      "asset_id": "972b63aff8b989220e157490cf93b819b103fe46cc88854ddd03d63b6a2f70fa",
+      "image": "/collection/972b63aff8b989220e157490cf93b819b103fe46cc88854ddd03d63b6a2f70fa.jpg",
+      "issuance": {
+        "action_index": 10,
+        "height": 3480081,
+        "ock": "56a0a75fe069b0c1e5abc7f2b4016691f619e84d04635168ba07f893830a4895",
+        "txid": "72f397788c07929e01e920e3b8e75becd35461dd06d6ac3f2eb7469a776902bf"
+      },
+      "name": "Barcelona Post Card #005"
+    },
+    {
+      "asset_id": "34062fbecc99d8b2b9ebdbc9159c1c94bc36a7207c6aa9c59f63fe7120706371",
+      "image": "/collection/34062fbecc99d8b2b9ebdbc9159c1c94bc36a7207c6aa9c59f63fe7120706371.jpg",
+      "issuance": {
+        "action_index": 3,
+        "height": 3480081,
+        "ock": "b04406f0ddcba747a19caa424900ad1e4e35710bb7081a658c176668a1374f09",
+        "txid": "72f397788c07929e01e920e3b8e75becd35461dd06d6ac3f2eb7469a776902bf"
+      },
+      "name": "Barcelona Post Card #006"
+    },
+    {
+      "asset_id": "a9213b050d22fd89f98b7d911e55f000be7ffea59db794e6d419f75a6181b8a7",
+      "image": "/collection/a9213b050d22fd89f98b7d911e55f000be7ffea59db794e6d419f75a6181b8a7.jpg",
+      "issuance": {
+        "action_index": 8,
+        "height": 3480081,
+        "ock": "d78063e72d3141515a1e2aa8d5930941446d5bdf58553e4e74c8eaf62f159b78",
+        "txid": "72f397788c07929e01e920e3b8e75becd35461dd06d6ac3f2eb7469a776902bf"
+      },
+      "name": "Barcelona Post Card #007"
+    },
+    {
+      "asset_id": "c7fec3337c8a520820f7ae647a5bfda921e073dc0cdc1ebbb8b98eadf8d58060",
+      "image": "/collection/c7fec3337c8a520820f7ae647a5bfda921e073dc0cdc1ebbb8b98eadf8d58060.jpg",
+      "issuance": {
+        "action_index": 9,
+        "height": 3480081,
+        "ock": "d1a9cf945acc900370326b16306f8e297fb6a74d93491a3a2fbbd9e6fb76982b",
+        "txid": "72f397788c07929e01e920e3b8e75becd35461dd06d6ac3f2eb7469a776902bf"
+      },
+      "name": "Barcelona Post Card #008"
+    },
+    {
+      "asset_id": "df668f56ef3388eef494f8161617711ab7e4beef8908e865619962e4d10caa72",
+      "image": "/collection/df668f56ef3388eef494f8161617711ab7e4beef8908e865619962e4d10caa72.jpg",
+      "issuance": {
+        "action_index": 1,
+        "height": 3480081,
+        "ock": "fb1d675644b1ab7871038f05799d2fac348ec6e3bdf269e24e7b2b6d09ab71c0",
+        "txid": "72f397788c07929e01e920e3b8e75becd35461dd06d6ac3f2eb7469a776902bf"
+      },
+      "name": "Barcelona Post Card #009"
+    },
+    {
+      "asset_id": "689cc74ad3ffdb154a8b230f3bf70c72f30c35cf3341a4f00df1bf7de90f4c26",
+      "image": "/collection/689cc74ad3ffdb154a8b230f3bf70c72f30c35cf3341a4f00df1bf7de90f4c26.jpg",
+      "issuance": {
+        "action_index": 5,
+        "height": 3480081,
+        "ock": "74de1d08778d4bd8831419328d369920945bd5fc7eb7cad028bf83f6e32065d9",
+        "txid": "72f397788c07929e01e920e3b8e75becd35461dd06d6ac3f2eb7469a776902bf"
+      },
+      "name": "Barcelona Post Card #010"
+    }
+  ],
+  "generation": 2,
+  "issued_at": 1789477177,
+  "issuer": {
+    "collection": "Barcelona Post Card",
+    "name": "Zecboat"
+  },
+  "network": "main",
+  "schema": "zecboat-proof-of-issuance/1"
+}

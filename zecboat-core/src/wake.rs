@@ -340,7 +340,15 @@ pub struct SendOptions {
     pub genesis: Option<(String, u32)>,
     /// The user acknowledged that the unit arrives unproven if no lading can be made.
     pub acknowledge_unproven: bool,
+    /// The user chose, under its own warning, to send a unit whose memo commits to a lading
+    /// this wallet never collected, abandoning that lineage for good (review 2026-10-09,
+    /// regression over 12-15, Issue B). Never implied by `acknowledge_unproven`.
+    pub abandon_lineage: bool,
 }
+
+/// The refusal a send returns when the chosen copy's memo commits to a lading the wallet does
+/// not hold: not a failure, a question with the committed hash after the colon.
+pub const UNCOLLECTED_PREFIX: &str = "WAKE_UNCOLLECTED:";
 
 /// A lading produced for a transfer, ready to hash into the memo and deliver.
 #[derive(Clone, Debug)]
@@ -586,9 +594,9 @@ pub fn deliver(recipient_ua: &str, lading: &SendLading) -> Result<()> {
 // ── receiving ────────────────────────────────────────────────────────────────────────────────
 
 /// What a fetch pass did.
-/// Lines being walked right now, by the memo's consignment hash: the item list, the estimate
-/// and the send each start a fetch pass, and a slow but valid line used to be walked several
-/// times at once (review 2026-10-09, regression Finding 9).
+/// Lines being walked right now, by the carrier's outpoint (`walk_key`): the item list, the
+/// estimate and the send each start a fetch pass, and a slow but valid line used to be walked
+/// several times at once (review 2026-10-09, regression Finding 9).
 static WALKS_IN_PROGRESS: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
 
 struct WalkGuard(String);
@@ -645,6 +653,8 @@ pub struct FetchReport {
     pub in_progress: Vec<String>,
     /// Carriers whose asset nobody vouches for, left for the user to ask about.
     pub not_known: Vec<String>,
+    /// Carriers whose walk is in back-off (the other routes were still tried).
+    pub backing_off: Vec<String>,
 }
 
 /// The user asked for one asset's lineage: walk it whatever its collection, with a larger budget.
@@ -671,8 +681,12 @@ pub struct FetchScope {
     pub include_unknown: bool,
     /// How long to wait for a walk another pass is running before reporting it in progress.
     pub wait: std::time::Duration,
-    /// Time and bytes the pass may spend on walks through the chain source.
-    pub budget: crate::wake_memo::WalkBudget,
+    /// Time and bytes ONE carrier's walk may spend through the chain source. Each carrier gets
+    /// its own budget; one budget per pass let a stranger's line spend it and the next carrier
+    /// be recorded as failed (review 2026-10-09, regression over 12-15, Issue A).
+    pub per_walk: (std::time::Duration, usize),
+    /// When the whole pass stops, recording nothing against the carriers it did not reach.
+    pub pass_deadline: std::time::Duration,
 }
 
 impl FetchScope {
@@ -682,7 +696,8 @@ impl FetchScope {
             asset: None,
             include_unknown: false,
             wait: std::time::Duration::ZERO,
-            budget: crate::wake_memo::WalkBudget::new(std::time::Duration::from_secs(120), 32 * 1024 * 1024),
+            per_walk: (std::time::Duration::from_secs(120), 32 * 1024 * 1024),
+            pass_deadline: std::time::Duration::from_secs(600),
         }
     }
     /// Before a send or an estimate: this asset only, waiting for a running walk.
@@ -691,7 +706,8 @@ impl FetchScope {
             asset: Some(asset_id.to_string()),
             include_unknown: true,
             wait: std::time::Duration::from_secs(90),
-            budget: crate::wake_memo::WalkBudget::new(std::time::Duration::from_secs(120), 32 * 1024 * 1024),
+            per_walk: (std::time::Duration::from_secs(120), 32 * 1024 * 1024),
+            pass_deadline: std::time::Duration::from_secs(300),
         }
     }
     /// The user asked for this asset's lineage: unknown assets too, a larger budget.
@@ -700,7 +716,8 @@ impl FetchScope {
             asset: Some(asset_id.to_string()),
             include_unknown: true,
             wait: std::time::Duration::from_secs(300),
-            budget: crate::wake_memo::WalkBudget::new(std::time::Duration::from_secs(600), 64 * 1024 * 1024),
+            per_walk: (std::time::Duration::from_secs(600), 64 * 1024 * 1024),
+            pass_deadline: std::time::Duration::from_secs(900),
         }
     }
 }
@@ -709,18 +726,13 @@ impl FetchScope {
 /// a pinned v1 key named in its memo, a passed cached registry audit listing the asset, or the
 /// local test manifest (test builds). A stranger's note naming an asset nobody vouches for is
 /// not walked unless the user asks (review 2026-10-09, Knotline A).
-fn asset_is_known(asset_id: &str, c: &crate::zmap::CarrierRef) -> bool {
-    if genesis_from_local_manifest(asset_id).is_some() {
-        return true;
-    }
-    if let Some(rec) = crate::zmap::parse_memo(&c.memo) {
-        if let Some(ik) = rec.ik.as_deref() {
-            if crate::issuance_v1::PINNED_V1.iter().any(|(_, k, _)| k.eq_ignore_ascii_case(ik)) {
-                return true;
-            }
-        }
-    }
-    crate::collection_audit::audited_collection_listing(asset_id).map(|a| a.passed).unwrap_or(false)
+fn asset_is_known(asset_id: &str, _c: &crate::zmap::CarrierRef) -> bool {
+    // Listed in a manifest this wallet holds (a passed audit's chain copy, a built-in seed, or
+    // the local test manifest). A memo naming a pinned key was accepted until 2026-10-09; a
+    // stranger can write that for any description (review, regression over 12-15, Issue A).
+    genesis_from_local_manifest(asset_id).is_some()
+        || crate::issuance_v1::pinned_listing_offline(asset_id).is_some()
+        || crate::collection_audit::audited_collection_listing(asset_id).map(|a| a.passed).unwrap_or(false)
 }
 
 /// The unattended pass, in a thread nobody waits for, at most once a minute.
@@ -749,13 +761,19 @@ pub fn fetch_missing_consignments_scoped(db_path: &str, scope: FetchScope) -> Re
     let started = std::time::Instant::now();
     let wait = scope.wait;
     let conn = Connection::open(db_path)?;
-    let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?);
+    let mut holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?);
+    // Known assets first, so a stranger's line never comes before a genuine unit's.
+    holdings.sort_by_key(|h| !h.carriers.first().map(|c| asset_is_known(&h.asset_id, c)).unwrap_or(false));
     let mut report = FetchReport::default();
-    for h in &holdings {
+    'pass: for h in &holdings {
         if scope.asset.as_deref().map(|a| !a.eq_ignore_ascii_case(&h.asset_id)).unwrap_or(false) {
             continue;
         }
         for c in &h.carriers {
+            if started.elapsed() > scope.pass_deadline {
+                // Out of time for the pass: nothing is recorded against carriers not reached.
+                break 'pass;
+            }
             let Some(hash) = c.consignment_hash.as_deref() else { continue };
             // A lading this wallet made for a send to itself is re-read from its own line, so
             // the next transfer chains instead of starting over (review 2026-10-09, Knotline H).
@@ -769,13 +787,14 @@ pub fn fetch_missing_consignments_scoped(db_path: &str, scope: FetchScope) -> Re
                 report.not_known.push(format!("{}: {}", h.name, walk_key(c)));
                 continue;
             }
-            // A line that failed to rebuild is not tried again at once; the delay doubles and
+            // A line that failed to rebuild is not walked again at once; the delay doubles and
             // survives a restart (audit 2026-10-08, Knotline B; review 2026-10-09, Knotline A).
+            // The back-off holds the walk only: the transfer's own memos and a named drop-box
+            // are still tried (review 2026-10-09, regression over 12-15, Issue D).
             let key = walk_key(c);
-            if let Some((_, _, left)) = crate::zmap::walk_failure(&conn, &c.txid, c.output_index)? {
-                if left > 0 {
-                    continue;
-                }
+            let in_backoff = crate::zmap::walk_failure(&conn, &c.txid, c.output_index)?.map(|(_, _, left)| left > 0).unwrap_or(false);
+            if in_backoff {
+                report.backing_off.push(key.clone());
             }
             let mut guard = WalkGuard::start(&key);
             while guard.is_none() && started.elapsed() < wait {
@@ -795,11 +814,23 @@ pub fn fetch_missing_consignments_scoped(db_path: &str, scope: FetchScope) -> Re
             };
             // Knotline: a key memo to the carrier's receiver opens the newest knot, and each
             // knot leads to the one before it. A failed walk does not stop the other routes
-            // (review 2026-10-09, Knotline E).
-            match crate::wake_memo::lading_from_knotline(&conn, &c.txid_bytes, Some(c.note_id), hash, Some(&scope.budget)) {
+            // (review 2026-10-09, Knotline E). Each carrier walks under its own budget.
+            let budget = crate::wake_memo::WalkBudget::new(scope.per_walk.0, scope.per_walk.1);
+            let walk = if in_backoff {
+                Ok(None)
+            } else {
+                crate::wake_memo::lading_from_knotline(&conn, &c.txid_bytes, Some(c.note_id), hash, Some(&budget))
+            };
+            match walk {
                 Ok(Some((bytes, walked, start_key))) => {
+                    // A lading this wallet sent to itself is re-read from its line under the same
+                    // checks as any other (review 2026-10-09, regression over 12-15, Issue E).
                     let stored = if self_sent {
-                        Ok(hash.to_string())
+                        carrier_note(&conn, &c.txid_bytes, c.output_index as u32)
+                            .and_then(|note| {
+                                let expected = hex::decode(hash).ok().and_then(|v| <[u8; 32]>::try_from(v).ok());
+                                zmap_wake::verify_local(&bytes, expected, &note.note.rho()).map(|_| hash.to_string()).map_err(|f| anyhow!("{f:?}"))
+                            })
                     } else {
                         accept_lading(&conn, &h.asset_id, c, &bytes, "knotline")
                     };
@@ -821,7 +852,14 @@ pub fn fetch_missing_consignments_scoped(db_path: &str, scope: FetchScope) -> Re
                 Err(e) => {
                     eprintln!("[wake] Knotline for {}: {e}", h.name);
                     report.failed.push(format!("{}: Knotline: {e}", h.name));
-                    let _ = crate::zmap::record_walk_failure(&conn, &c.txid, c.output_index, &e.to_string());
+                    // A server that did not answer is not a wrong line: a short, flat delay
+                    // (review 2026-10-09, regression over 12-15, Issue F).
+                    let text = e.to_string();
+                    if text.contains("transient:") {
+                        let _ = crate::zmap::record_walk_failure_transient(&conn, &c.txid, c.output_index, &text);
+                    } else {
+                        let _ = crate::zmap::record_walk_failure(&conn, &c.txid, c.output_index, &text);
+                    }
                 }
             }
             if self_sent {
@@ -1285,6 +1323,37 @@ mod send_rank_tests {
         let other_rho: orchard::note::Rho = Option::from(orchard::note::Rho::from_bytes(&[1u8; 32])).unwrap();
         assert_eq!(send_rank(false, Some(vector), &other_rho, Some(&genesis), false), 1);
         assert_eq!(send_rank(false, None, &rho, Some(&genesis), true), 1);
+    }
+}
+
+/// Whether a send may go ahead when the wallet holds several copies: only when the best copy's
+/// lineage checks out (rank 5 or 6) and no other copy ties with it, or, with no manifest genesis
+/// in hand at all, never (review 2026-10-09, regression over 12-15, Issues B and C). `Err` says why.
+pub fn send_decision(top_rank: u8, at_top: usize, genesis_known: bool) -> std::result::Result<(), &'static str> {
+    if !genesis_known {
+        return Err("no trusted manifest names this collection's genesis, so copies cannot be told apart; check the collection in Collections first");
+    }
+    if top_rank < 5 {
+        return Err("no copy's lineage checks out against the manifest; collect the lineage of the genuine one first");
+    }
+    if at_top > 1 {
+        return Err("more than one copy checks out equally; this should not happen, and the wallet will not guess");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod send_decision_tests {
+    use super::send_decision;
+
+    #[test]
+    fn several_copies_are_sent_only_when_one_checks_out_alone() {
+        assert!(send_decision(6, 1, true).is_ok(), "the genesis unit beside a copy");
+        assert!(send_decision(5, 1, true).is_ok(), "a verified lading beside a copy");
+        assert!(send_decision(5, 2, true).is_err(), "two equal verified copies");
+        assert!(send_decision(3, 1, true).is_err(), "nothing checks out against the manifest");
+        assert!(send_decision(2, 2, true).is_err(), "two bare copies: never a txid tie-break");
+        assert!(send_decision(6, 1, false).is_err(), "no manifest genesis in hand");
     }
 }
 

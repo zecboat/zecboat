@@ -226,7 +226,9 @@ fn knotline_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32
             log::Knot { prev: None, genesis: Some((l.genesis.txid.clone(), l.genesis.action_index)), hops: l.hops.clone() },
             format!("Knotline: this item starts its line, publishing its {n} hop(s) once"),
         ),
-        _ => return Ok((Vec::new(), String::new())),
+        // More hops than a start of line carries, and no line to chain to: the lading travels
+        // another way (a file, or a named drop-box), and the memo still commits to its hash.
+        _ => return Ok((Vec::new(), format!("no knot: {n} hops is more than a line is started with ({MAX_JOIN_HOPS}); the lading travels as a file"))),
     };
     let mut key = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);

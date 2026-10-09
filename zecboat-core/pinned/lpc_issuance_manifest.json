@@ -1,0 +1,148 @@
+{
+  "assets": [
+    {
+      "asset_desc": "zmap-desc-v1|Lagos Post Card|1|Lagos Post Card #001|LPC|51ce989efd940ffbe10388b15101785efc986550626179f9140c7a1b95f790f0",
+      "asset_id": "0b79d2da6fa83218a76b295b6916f9092196898301096251da7c72934162315d",
+      "image": "/collection/0b79d2da6fa83218a76b295b6916f9092196898301096251da7c72934162315d.jpg",
+      "image_sha256": "51ce989efd940ffbe10388b15101785efc986550626179f9140c7a1b95f790f0",
+      "issuance": {
+        "action_index": 1,
+        "cmx": "9f0cf85def9486d39996b74cfaae49e73906d989e1360390de9bdd49fc139b20",
+        "height": 3498971,
+        "txid": "a85079fda16994ef5ba5fdc66e520d6014669b9c63f0878890dce28ce6eeb1a4"
+      },
+      "name": "Lagos Post Card #001"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Lagos Post Card|2|Lagos Post Card #002|LPC|3d9f17dd1ff23a875ebdbadcdb21ca0e680b21b3a64762aa286ca85b9f737386",
+      "asset_id": "bb37744c9a51d93beb9eb03771727a6d424f09b486517cd426a8051bb7815e8f",
+      "image": "/collection/bb37744c9a51d93beb9eb03771727a6d424f09b486517cd426a8051bb7815e8f.jpg",
+      "image_sha256": "3d9f17dd1ff23a875ebdbadcdb21ca0e680b21b3a64762aa286ca85b9f737386",
+      "issuance": {
+        "action_index": 5,
+        "cmx": "ca1d59595574cd6e75ec13d532429610551bfdd77ed63525078d8c39a20a2818",
+        "height": 3498971,
+        "txid": "a85079fda16994ef5ba5fdc66e520d6014669b9c63f0878890dce28ce6eeb1a4"
+      },
+      "name": "Lagos Post Card #002"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Lagos Post Card|3|Lagos Post Card #003|LPC|23f161fa92cfa990301099cf93df4a3307d3670789673aad82fed343c9aeb9c1",
+      "asset_id": "2d98b57e42faf06601b45fdc9f05d0737c7ec504b690e202ae40730ef2e44969",
+      "image": "/collection/2d98b57e42faf06601b45fdc9f05d0737c7ec504b690e202ae40730ef2e44969.jpg",
+      "image_sha256": "23f161fa92cfa990301099cf93df4a3307d3670789673aad82fed343c9aeb9c1",
+      "issuance": {
+        "action_index": 10,
+        "cmx": "0d6737bf6a92d7467d60de205778ff5e70f96ece452e564bb9e3551775e2e724",
+        "height": 3498971,
+        "txid": "a85079fda16994ef5ba5fdc66e520d6014669b9c63f0878890dce28ce6eeb1a4"
+      },
+      "name": "Lagos Post Card #003"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Lagos Post Card|4|Lagos Post Card #004|LPC|27d842fb2c514e69d775f28b0e4ece6eb79e9484c970cc3b64c8cf5371e0665c",
+      "asset_id": "02f7594fa23280a017fe6f40972b48dedfc65b38a0d783026287153e1ac3f295",
+      "image": "/collection/02f7594fa23280a017fe6f40972b48dedfc65b38a0d783026287153e1ac3f295.jpg",
+      "image_sha256": "27d842fb2c514e69d775f28b0e4ece6eb79e9484c970cc3b64c8cf5371e0665c",
+      "issuance": {
+        "action_index": 9,
+        "cmx": "c592420bb14e6350afd566c7c02495799c255f15351ae12023e4fa3e1744a236",
+        "height": 3498971,
+        "txid": "a85079fda16994ef5ba5fdc66e520d6014669b9c63f0878890dce28ce6eeb1a4"
+      },
+      "name": "Lagos Post Card #004"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Lagos Post Card|5|Lagos Post Card #005|LPC|698b30b7e81dc9628e3cc68c7e2ffe3bf4fd1fe17009c35998547b7e74ec726d",
+      "asset_id": "0121b2b0a12e19351ee9c50b6df6ecad04a6a5aca61ea905656a15801f31302f",
+      "image": "/collection/0121b2b0a12e19351ee9c50b6df6ecad04a6a5aca61ea905656a15801f31302f.jpg",
+      "image_sha256": "698b30b7e81dc9628e3cc68c7e2ffe3bf4fd1fe17009c35998547b7e74ec726d",
+      "issuance": {
+        "action_index": 7,
+        "cmx": "2689a84c11a124aeb362460b322d7d017ed12ded84987ace80dd360e7a6c5807",
+        "height": 3498971,
+        "txid": "a85079fda16994ef5ba5fdc66e520d6014669b9c63f0878890dce28ce6eeb1a4"
+      },
+      "name": "Lagos Post Card #005"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Lagos Post Card|6|Lagos Post Card #006|LPC|70abd8e181362b568d64c078ccc6c6b7ecad86a8a72946588e8c80710ea49001",
+      "asset_id": "3750d1b71d6615d1e435179db03ee74cc5f57a2252ced1066b9eb3b1f9aa30ca",
+      "image": "/collection/3750d1b71d6615d1e435179db03ee74cc5f57a2252ced1066b9eb3b1f9aa30ca.jpg",
+      "image_sha256": "70abd8e181362b568d64c078ccc6c6b7ecad86a8a72946588e8c80710ea49001",
+      "issuance": {
+        "action_index": 3,
+        "cmx": "07d2af01c3325f7b61286328d9db6901c94ed952cbcff935a4fe06e0ba604828",
+        "height": 3498971,
+        "txid": "a85079fda16994ef5ba5fdc66e520d6014669b9c63f0878890dce28ce6eeb1a4"
+      },
+      "name": "Lagos Post Card #006"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Lagos Post Card|7|Lagos Post Card #007|LPC|b887afd4d78c937a99cb6ae35389fca090e1006ef2c5a494d4c1e2c6585ddc5d",
+      "asset_id": "5b742dc823016ec407895d3faec793991bc98c0254cdb9aac9cb6c2f9591bee6",
+      "image": "/collection/5b742dc823016ec407895d3faec793991bc98c0254cdb9aac9cb6c2f9591bee6.jpg",
+      "image_sha256": "b887afd4d78c937a99cb6ae35389fca090e1006ef2c5a494d4c1e2c6585ddc5d",
+      "issuance": {
+        "action_index": 6,
+        "cmx": "3df0ea05867327932d4fe8a2f1c0ba07962073e845ded38a7fe13c1277e34218",
+        "height": 3498971,
+        "txid": "a85079fda16994ef5ba5fdc66e520d6014669b9c63f0878890dce28ce6eeb1a4"
+      },
+      "name": "Lagos Post Card #007"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Lagos Post Card|8|Lagos Post Card #008|LPC|e4713dc408b10afc0bd6a37233016d14d50f87967b16c6f59a9e2a6abe9295a6",
+      "asset_id": "06f415f779582844c63da6348173c08fd043406227f3fbbfcb4b0c852043999a",
+      "image": "/collection/06f415f779582844c63da6348173c08fd043406227f3fbbfcb4b0c852043999a.jpg",
+      "image_sha256": "e4713dc408b10afc0bd6a37233016d14d50f87967b16c6f59a9e2a6abe9295a6",
+      "issuance": {
+        "action_index": 0,
+        "cmx": "d81fc7f1c327108545be399d2e54cdfd534f5a886885f74502f4ed6dadd7fa2c",
+        "height": 3498971,
+        "txid": "a85079fda16994ef5ba5fdc66e520d6014669b9c63f0878890dce28ce6eeb1a4"
+      },
+      "name": "Lagos Post Card #008"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Lagos Post Card|9|Lagos Post Card #009|LPC|e1056ce6e8b8a3fc48de241e6b8b61f6130869b01c00d99d5da092818cfc5100",
+      "asset_id": "2585f3d686a165ea4c306fe81eb9075b6ccabade68d8869e27f5fa8354c14763",
+      "image": "/collection/2585f3d686a165ea4c306fe81eb9075b6ccabade68d8869e27f5fa8354c14763.jpg",
+      "image_sha256": "e1056ce6e8b8a3fc48de241e6b8b61f6130869b01c00d99d5da092818cfc5100",
+      "issuance": {
+        "action_index": 8,
+        "cmx": "19364a9f82d0a1bee29d0dac0e6bccaa59413422bc5f0f8a864a870e2c9cdd01",
+        "height": 3498971,
+        "txid": "a85079fda16994ef5ba5fdc66e520d6014669b9c63f0878890dce28ce6eeb1a4"
+      },
+      "name": "Lagos Post Card #009"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Lagos Post Card|10|Lagos Post Card #010|LPC|73801910be7eeb98e5e3a0b5e2adc5ddb519af45bb76cd1ac24350d9e70495f3",
+      "asset_id": "983427394e7b2e7653470164c4551a1372817a9e4f830460cdb71fa0811b29fc",
+      "image": "/collection/983427394e7b2e7653470164c4551a1372817a9e4f830460cdb71fa0811b29fc.jpg",
+      "image_sha256": "73801910be7eeb98e5e3a0b5e2adc5ddb519af45bb76cd1ac24350d9e70495f3",
+      "issuance": {
+        "action_index": 2,
+        "cmx": "46d6a25f49e3d32d2cef79867979af1cc4c6a5941822edfda44e6c572a96f231",
+        "height": 3498971,
+        "txid": "a85079fda16994ef5ba5fdc66e520d6014669b9c63f0878890dce28ce6eeb1a4"
+      },
+      "name": "Lagos Post Card #010"
+    }
+  ],
+  "generation": 1,
+  "identity": {
+    "ik": "e9be4cf91390aba0740ce108a0c2f390d1610ef5c77ede09b445e888fd79b590",
+    "issuance_ufvk": "uview1qkkk08rjwrku3xma3vlv8n6w75tcqgrya724t5lkcaq9nwwg8g2u3edzzw8n05mpv9dywcucw0vdeyq7h82nr4nq6f8dkv5lpdrg6p9s0cjzwwmcylnsepeggttqs9t0renk5d9z66lm74ecyejfapxkreey2r4lt7rwlvdjutzcfe943nxpw3mrc2z7vnlkv4ehcgqfgc28gvlc5y7qh5lke6gzwvhwl2qsy2taqj52j0tsth2zxa253ec50e5swdv5cuwh78glj9qx8drgvazuwkz2f9evk55l3eyy9wdjvffvlk69ztfsxd0a7wzpj5rde3lqvrsj9feg4u7f59vqe4jv9k38ntju6c7e9wlh79hy2wc8l4wd3zc9nt9zqlx896qmw8pkg",
+    "scheme": "zmap-asset-id-v1",
+    "signature": "bip340"
+  },
+  "issued_at": 1790584664,
+  "issuer": {
+    "collection": "Lagos Post Card",
+    "name": "Zecboat"
+  },
+  "network": "main",
+  "schema": "zecboat-proof-of-issuance/2"
+}

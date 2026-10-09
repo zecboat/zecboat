@@ -2579,12 +2579,12 @@ fn zec_to_zatoshis(amount: f64) -> Result<u64> {
 }
 
 pub async fn send_transaction(address: &str, amount: f64, memo: &str, asset_id: Option<&str>) -> Result<String> {
-    send_transaction_with_wake(address, amount, memo, asset_id, false, None).await
+    send_transaction_with_wake(address, amount, memo, asset_id, false, None, false).await
 }
 
 /// [`send_transaction`] with the Wake acknowledgement (chapter 8): when `acknowledge_unproven`
 /// is false and the unit has no lading, the send is refused with [`crate::wake::UNPROVEN_PREFIX`].
-pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, asset_id: Option<&str>, acknowledge_unproven: bool, max_fee_zat: Option<u64>) -> Result<String> {
+pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, asset_id: Option<&str>, acknowledge_unproven: bool, max_fee_zat: Option<u64>, abandon_lineage: bool) -> Result<String> {
     // 1. Validate and convert to zatoshis — on the value path only.
     //
     // A ZSA transfer moves a carrier note whose value is fixed at CARRIER_ZAT and
@@ -2624,8 +2624,8 @@ pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, 
     // send then reports what is actually missing.
     if asset_id.is_some() {
         if let Ok(db_path) = crate::paths::as_string::wallet_db_path() {
-            // Waits for a line another pass is walking (the item list starts one and stops
-            // waiting after 20 s): "being collected" must not read as "absent" here (review
+            // Waits for a line another pass is walking (the item list starts a background pass
+            // it does not wait for): "being collected" must not read as "absent" here (review
             // 2026-10-09, regression over 12-13, Issue B).
             let aid = asset_id.map(|s| s.to_string()).unwrap_or_default();
             // This asset's carriers only (review 2026-10-09, Knotline A): the send used to walk
@@ -2693,6 +2693,7 @@ pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, 
             None => None,
         },
         acknowledge_unproven,
+        abandon_lineage,
     };
     let (raw_tx_hex, proposed_inputs) = {
         let address = address.to_string();

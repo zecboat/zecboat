@@ -1228,6 +1228,20 @@ pub fn record_walk_failure(conn: &rusqlite::Connection, txid_hex: &str, output_i
     Ok(())
 }
 
+/// A failure that is the source's, not the line's (a server that did not answer): one short,
+/// flat delay, and the failure count is not advanced (review 2026-10-09, Issue F).
+pub fn record_walk_failure_transient(conn: &rusqlite::Connection, txid_hex: &str, output_index: i64, error: &str) -> rusqlite::Result<()> {
+    ensure_walk_failures_table(conn)?;
+    let failures: i64 = conn
+        .query_row("SELECT failures FROM ext_zecboat_zmap_walk_failures WHERE txid = ?1 AND output_index = ?2", rusqlite::params![txid_hex, output_index], |r| r.get(0))
+        .unwrap_or(0);
+    conn.execute(
+        "INSERT OR REPLACE INTO ext_zecboat_zmap_walk_failures (txid, output_index, failures, next_after, last_error) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![txid_hex, output_index, failures, now_secs() + 60, error],
+    )?;
+    Ok(())
+}
+
 /// `(last_error, failures, seconds until the next try)` when a carrier's walk is in back-off.
 pub fn walk_failure(conn: &rusqlite::Connection, txid_hex: &str, output_index: i64) -> rusqlite::Result<Option<(String, i64, i64)>> {
     let exists: bool = conn

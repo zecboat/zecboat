@@ -535,13 +535,29 @@ pub fn send_zmap_asset(
         // A lading this unit's memo commits to that another pass is still collecting is not
         // "absent": the send is refused for now rather than offered unproven, which would strip
         // the hash for good (review 2026-10-09, regression over 12-13, Issue B).
-        let chosen = holdings
+        let carriers: Vec<&crate::zmap::CarrierRef> = holdings.iter().filter(|h| h.asset_id == asset_id).flat_map(|h| h.carriers.iter()).collect();
+        let chosen = carriers
             .iter()
-            .flat_map(|h| h.carriers.iter())
+            .copied()
             .find(|c| c.txid_bytes[..] == plan.carrier.txid().as_ref()[..] && c.output_index as u32 == plan.carrier.output_index());
         if let Some(c) = chosen {
             if c.consignment_hash.is_some() && crate::wake::walk_in_progress(c) {
                 return Err(anyhow!("the lineage this unit's memo commits to is still being collected; try again in a moment"));
+            }
+            // Several copies: the choice must rest on something. Below "lading checks out",
+            // or with no manifest genesis in hand, a tie by txid is a guess, and a guess can
+            // spend a stranger's copy (review 2026-10-09, regression over 12-15, Issues B, C).
+            if carriers.len() > 1 {
+                let ranks: Vec<(u8, String)> = carriers.iter().map(|x| (rank(x), format!("{}#{}", &x.txid[..12.min(x.txid.len())], x.output_index))).collect();
+                let top = ranks.iter().map(|r| r.0).max().unwrap_or(0);
+                let decision = crate::wake::send_decision(top, ranks.iter().filter(|r| r.0 == top).count(), wake.genesis.is_some());
+                if let Err(why) = decision {
+                    return Err(anyhow!(
+                        "this wallet holds {} copies of {asset_id} and cannot tell which to send: {why} (copies: {})",
+                        carriers.len(),
+                        ranks.iter().map(|r| format!("{} rank {}", r.1, r.0)).collect::<Vec<_>>().join(", ")
+                    ));
+                }
             }
         }
         (plan, chosen.map(|c| c.note_id))
@@ -552,13 +568,18 @@ pub fn send_zmap_asset(
     // against the registry's listed accounts (review 2026-10-09, Knotline G).
     {
         let mine = usk.to_unified_full_viewing_key().encode(&zcash_protocol::consensus::MainNetwork);
+        // Fail closed for the pinned collections (their keys are built in); the registry's
+        // listing adds the rest when it can be read (review 2026-10-09, regression over 12-15,
+        // Issue G: the check used to be skipped when the registry could not be read).
+        let mut published = crate::issuance_v1::pinned_issuance_ufvks();
         if let Ok(view) = crate::collections::registry_view() {
-            if view.registrations.iter().any(|r| r.ufvk.as_deref().map(|u| u.trim() == mine.trim()).unwrap_or(false)) {
-                return Err(anyhow!(
-                    "this wallet is a published issuance account (its viewing key is in the Zecboat Registry); \
-                     units are not sent from it, since anyone could read where they went. Send from the treasury wallet."
-                ));
-            }
+            published.extend(view.registrations.iter().filter_map(|r| r.ufvk.as_deref().map(|u| u.trim().to_string())));
+        }
+        if published.iter().any(|u| u == mine.trim()) {
+            return Err(anyhow!(
+                "this wallet is a published issuance account (its viewing key is published); \
+                 units are not sent from it, since anyone could read where they went. Send from the treasury wallet."
+            ));
         }
     }
 
@@ -600,6 +621,23 @@ pub fn send_zmap_asset(
         }
         None => Vec::new(),
     };
+    // A memo that commits to a lading this wallet does not hold is not "no lineage": the
+    // lading exists and can be collected; sending without it strips the hash for good. Only an
+    // explicit abandon, under its own warning, goes on (review 2026-10-09, regression over
+    // 12-15, Issue B; the hash follows the prefix so the screen can show it).
+    if wake_lading.is_none() {
+        let committed = crate::zmap::parse_memo(&plan.memo).and_then(|r| r.consignment_hash);
+        if let Some(h) = committed {
+            if !wake.abandon_lineage {
+                return Err(anyhow!(
+                    "{}{h}: this unit's memo commits to a lineage record this wallet has not collected; collect it (the item's \
+                     'Collect its lineage now'), or abandon that lineage for good",
+                    crate::wake::UNCOLLECTED_PREFIX
+                ));
+            }
+            println!("[wake] ABANDONING the lineage {}… of this unit as the user chose", &h[..16]);
+        }
+    }
     match &wake_lading {
         Some(l) => println!("[wake] lading of {} proof(s) ready, sha256 {}…", l.hops, &l.hash_hex[..16]),
         None if wake.acknowledge_unproven => println!("[wake] no lading for this unit; sending it UNPROVEN as acknowledged"),

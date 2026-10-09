@@ -382,12 +382,18 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
         return Ok(state);
     }
 
-    let base = crate::rpc::registry_base();
-
-    // Manifests and signatures through the one bounded registry client (review 2026-10-09,
-    // regression Finding 10).
-    let fetch = |url: String| async move {
-        crate::rpc::registry_fetch(&url, MAX_MANIFEST_BYTES).await.map(|(_, b)| b).map_err(|e| e.to_string())
+    // The pre-v1 manifests are built into the wallet (there is no on-chain copy of them; they
+    // predate the registry). Nothing is fetched from the website: verifying a unit must not
+    // depend on zecboat.com (owner's rule, restated 2026-10-09).
+    let embedded = |path: &str, suffix: &str| -> std::result::Result<Vec<u8>, String> {
+        let name = path.trim_start_matches("issuance/");
+        match (name, suffix) {
+            ("issuance_manifest", ".json") => Ok(include_bytes!("../pinned/hbd_issuance_manifest.json").to_vec()),
+            ("issuance_manifest", ".sig") => Ok(include_bytes!("../pinned/hbd_issuance_manifest.sig").to_vec()),
+            ("barcelona_issuance_manifest", ".json") => Ok(include_bytes!("../pinned/barcelona_issuance_manifest.json").to_vec()),
+            ("barcelona_issuance_manifest", ".sig") => Ok(include_bytes!("../pinned/barcelona_issuance_manifest.sig").to_vec()),
+            _ => Err(format!("{path}{suffix}: no built-in copy")),
+        }
     };
 
     // Every pinned collection, at its own path, against its own key. The first manifest
@@ -400,11 +406,11 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
     let mut tampered: Vec<String> = Vec::new();
 
     for (label, key_hex, path) in PINNED_ISSUERS {
-        let body = match fetch(format!("{base}/{path}.json")).await {
+        let body = match embedded(path, ".json") {
             Ok(b) => b,
             Err(e) => { unreachable.push(format!("{label} ({e})")); continue; }
         };
-        let sig = match fetch(format!("{base}/{path}.sig")).await {
+        let sig = match embedded(path, ".sig") {
             Ok(b) => b,
             Err(e) => { unreachable.push(format!("{label} ({e})")); continue; }
         };

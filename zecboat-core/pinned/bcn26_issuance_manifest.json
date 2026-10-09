@@ -1,0 +1,148 @@
+{
+  "assets": [
+    {
+      "asset_desc": "zmap-desc-v1|Barcelona Post Card 2026|1|Barcelona Post Card 2026 #001|BCN26|896fb2d3cddae73ed01a7f0769c1ce9c6c9d1e25ebe2d4afd69ab20ba51b71d5",
+      "asset_id": "155073d6235af1758093173708023e107bdef61e2a6c18da70d9fdc719d9e03d",
+      "image": "/collection/155073d6235af1758093173708023e107bdef61e2a6c18da70d9fdc719d9e03d.jpg",
+      "image_sha256": "896fb2d3cddae73ed01a7f0769c1ce9c6c9d1e25ebe2d4afd69ab20ba51b71d5",
+      "issuance": {
+        "action_index": 6,
+        "cmx": "fe9ae29facf0e9a1f920308231b2ac7e9124926ab48309727a6cdbc6794d9b30",
+        "height": 3500624,
+        "txid": "5af4f14e73f679c416a7ed0ed780d123a49b77af95cfb713815c103a7f71b1bb"
+      },
+      "name": "Barcelona Post Card 2026 #001"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Barcelona Post Card 2026|2|Barcelona Post Card 2026 #002|BCN26|cb37a9b4d89c4e1bbd08b0d39995a4b25e89e9e044d2cc598d748613d5c296f3",
+      "asset_id": "c4d67d6c9f1f530fc3bddacf22698456129f8727f9bc18f88d46fc6caedd1f1c",
+      "image": "/collection/c4d67d6c9f1f530fc3bddacf22698456129f8727f9bc18f88d46fc6caedd1f1c.jpg",
+      "image_sha256": "cb37a9b4d89c4e1bbd08b0d39995a4b25e89e9e044d2cc598d748613d5c296f3",
+      "issuance": {
+        "action_index": 4,
+        "cmx": "055cb70bc7f3d473acb16e7633c903e8887709345d64c233a0b78539f25b5223",
+        "height": 3500624,
+        "txid": "5af4f14e73f679c416a7ed0ed780d123a49b77af95cfb713815c103a7f71b1bb"
+      },
+      "name": "Barcelona Post Card 2026 #002"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Barcelona Post Card 2026|3|Barcelona Post Card 2026 #003|BCN26|55d21b8504c1913986989bc7f484252c723188c5f29aedf572c62f4c0c6c44ec",
+      "asset_id": "048fd46fa64a75b413d349ae603555f08fa76d97aa191ef68bf0641952cfaf4f",
+      "image": "/collection/048fd46fa64a75b413d349ae603555f08fa76d97aa191ef68bf0641952cfaf4f.jpg",
+      "image_sha256": "55d21b8504c1913986989bc7f484252c723188c5f29aedf572c62f4c0c6c44ec",
+      "issuance": {
+        "action_index": 10,
+        "cmx": "18e5430be424ecb7472f87e7dd34b17274344074ee4eff2652f9de55e4e7580c",
+        "height": 3500624,
+        "txid": "5af4f14e73f679c416a7ed0ed780d123a49b77af95cfb713815c103a7f71b1bb"
+      },
+      "name": "Barcelona Post Card 2026 #003"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Barcelona Post Card 2026|4|Barcelona Post Card 2026 #004|BCN26|be4ac1b29c1f20db7710ba89221f77ab3436b1b3b13f5be4fe53c665e839df9b",
+      "asset_id": "d2e28651dd2a2f5de9659adc327e42f6248f3b7059b62210647b07279531da0a",
+      "image": "/collection/d2e28651dd2a2f5de9659adc327e42f6248f3b7059b62210647b07279531da0a.jpg",
+      "image_sha256": "be4ac1b29c1f20db7710ba89221f77ab3436b1b3b13f5be4fe53c665e839df9b",
+      "issuance": {
+        "action_index": 7,
+        "cmx": "c9b623dfd3347582141ff240d6bb243f4c94fdeab050efcdce17d359a8a39b2d",
+        "height": 3500624,
+        "txid": "5af4f14e73f679c416a7ed0ed780d123a49b77af95cfb713815c103a7f71b1bb"
+      },
+      "name": "Barcelona Post Card 2026 #004"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Barcelona Post Card 2026|5|Barcelona Post Card 2026 #005|BCN26|d3148507bc9e11a7f2dc8be720fb15939636075c97913ec2229775f9cf63e95f",
+      "asset_id": "814d03d126ef3db3fa3375899e154b1ae8aac4de349c4cf83c5dab0823fd08da",
+      "image": "/collection/814d03d126ef3db3fa3375899e154b1ae8aac4de349c4cf83c5dab0823fd08da.jpg",
+      "image_sha256": "d3148507bc9e11a7f2dc8be720fb15939636075c97913ec2229775f9cf63e95f",
+      "issuance": {
+        "action_index": 5,
+        "cmx": "9a53c6836e1b913ccddfbcaa8b1c02ceadb73dbbe32976f5beda9d6f58e70e20",
+        "height": 3500624,
+        "txid": "5af4f14e73f679c416a7ed0ed780d123a49b77af95cfb713815c103a7f71b1bb"
+      },
+      "name": "Barcelona Post Card 2026 #005"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Barcelona Post Card 2026|6|Barcelona Post Card 2026 #006|BCN26|be48cf4839368ccc08c27f60f9fd988b6f4482c5a1c812295754ed32c17518c3",
+      "asset_id": "7d9859ba181ea05eda8dcd495f80b96e363f0db8b0f6f0ca35b4f1200963247b",
+      "image": "/collection/7d9859ba181ea05eda8dcd495f80b96e363f0db8b0f6f0ca35b4f1200963247b.jpg",
+      "image_sha256": "be48cf4839368ccc08c27f60f9fd988b6f4482c5a1c812295754ed32c17518c3",
+      "issuance": {
+        "action_index": 3,
+        "cmx": "92147530a1aeb3b01c4a52c2c8e2699cef09a4c2e865e8bace919a2494a4be28",
+        "height": 3500624,
+        "txid": "5af4f14e73f679c416a7ed0ed780d123a49b77af95cfb713815c103a7f71b1bb"
+      },
+      "name": "Barcelona Post Card 2026 #006"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Barcelona Post Card 2026|7|Barcelona Post Card 2026 #007|BCN26|36a739d02ea246d39488f8d1281d96682035f17b820873c9a892d599df565178",
+      "asset_id": "7b409091c0781e3c141deafa2fd67c0244933a1a980a782cae8b0c1af3396126",
+      "image": "/collection/7b409091c0781e3c141deafa2fd67c0244933a1a980a782cae8b0c1af3396126.jpg",
+      "image_sha256": "36a739d02ea246d39488f8d1281d96682035f17b820873c9a892d599df565178",
+      "issuance": {
+        "action_index": 8,
+        "cmx": "ab985de58f290d6c224b1b25ba387bc489ed5f8bd43cd384dc39387064d4a102",
+        "height": 3500624,
+        "txid": "5af4f14e73f679c416a7ed0ed780d123a49b77af95cfb713815c103a7f71b1bb"
+      },
+      "name": "Barcelona Post Card 2026 #007"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Barcelona Post Card 2026|8|Barcelona Post Card 2026 #008|BCN26|5b0bbc6e0a75032a529ef756c95a9c8836d05b0149ff25bc6247132365413180",
+      "asset_id": "be83089bfc5ca96e5298279c848fc454a921719eff548c7935705b502630a8dc",
+      "image": "/collection/be83089bfc5ca96e5298279c848fc454a921719eff548c7935705b502630a8dc.jpg",
+      "image_sha256": "5b0bbc6e0a75032a529ef756c95a9c8836d05b0149ff25bc6247132365413180",
+      "issuance": {
+        "action_index": 2,
+        "cmx": "9718d5dcd0016ac6ab3fb06d257a10757edfe5cf4d9ba0bf06f026d08f673b0b",
+        "height": 3500624,
+        "txid": "5af4f14e73f679c416a7ed0ed780d123a49b77af95cfb713815c103a7f71b1bb"
+      },
+      "name": "Barcelona Post Card 2026 #008"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Barcelona Post Card 2026|9|Barcelona Post Card 2026 #009|BCN26|96d73d2d12f13a457825a70e7d04426ecfe0b6694699a1cbacc6613008e82296",
+      "asset_id": "ab05a24e89732c3a05055d0ccc1e65f14ecfdda4314dfb5a7ef7d87a084128da",
+      "image": "/collection/ab05a24e89732c3a05055d0ccc1e65f14ecfdda4314dfb5a7ef7d87a084128da.jpg",
+      "image_sha256": "96d73d2d12f13a457825a70e7d04426ecfe0b6694699a1cbacc6613008e82296",
+      "issuance": {
+        "action_index": 0,
+        "cmx": "29375346d09e24a172b6a422c440e078ed9a1254689a5e68fc6659324325fc36",
+        "height": 3500624,
+        "txid": "5af4f14e73f679c416a7ed0ed780d123a49b77af95cfb713815c103a7f71b1bb"
+      },
+      "name": "Barcelona Post Card 2026 #009"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Barcelona Post Card 2026|10|Barcelona Post Card 2026 #010|BCN26|a86fd58e2f0800fe897dd0d1da1aa378ed53f096108a6eea6e1af4381d603b2e",
+      "asset_id": "4b52e4b2abea2e94f7c6d34e70e638c9f8ec2abb051f50e2ec11248b228dc929",
+      "image": "/collection/4b52e4b2abea2e94f7c6d34e70e638c9f8ec2abb051f50e2ec11248b228dc929.jpg",
+      "image_sha256": "a86fd58e2f0800fe897dd0d1da1aa378ed53f096108a6eea6e1af4381d603b2e",
+      "issuance": {
+        "action_index": 9,
+        "cmx": "6f6675154e1e4f5dc04257a46e382dacdbccd507c07196e0beb30b23d1675f16",
+        "height": 3500624,
+        "txid": "5af4f14e73f679c416a7ed0ed780d123a49b77af95cfb713815c103a7f71b1bb"
+      },
+      "name": "Barcelona Post Card 2026 #010"
+    }
+  ],
+  "generation": 1,
+  "identity": {
+    "ik": "d289030848144bc321be1030051f90dbf170f0c6752ab8dbf6ed029658d1a820",
+    "issuance_ufvk": "uview1l8pl6cn0x48z6d9j33gnn4jqcmg7z8v0safjf8wuukh8da9jx7gu6rjzac0memjrve4lkhuaqy7fzus7udaamprzsdg9zlmjy3ljcmzjta0jecauc7plmcu6nveqfhvzu60qmaqpermappg8plqnkym7ttcxu8ghg0aankc45swg5fl95yl8f48fc3v0njyv8mgc652c8kl6c82l0e82uzf8fym6kce2u9s8kd69cwpr054z0j5js49fazfywruzrywx4xnk6e6z85yajc6htcau7zwwqx0v0fms5akc4jnsdk44d3ceax9rqff9eg2nn083vtmj22legtf6n4znqzvkv75jr4ut8x3fq3qu6pmtsstve9p05whzwnuy6deevxstxhqsk957f",
+    "scheme": "zmap-asset-id-v1",
+    "signature": "bip340"
+  },
+  "issued_at": 1790709017,
+  "issuer": {
+    "collection": "Barcelona Post Card 2026",
+    "name": "Zecboat"
+  },
+  "network": "main",
+  "schema": "zecboat-proof-of-issuance/2"
+}
