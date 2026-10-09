@@ -204,27 +204,35 @@ pub struct SendEstimate {
     pub extra_outputs: usize,
     pub outputs: usize,
     pub fee_zat: u64,
+    /// The copy the send will spend (`txid prefix#index`), and how many copies the wallet holds,
+    /// so the confirmation can name it when there is more than one (review 2026-10-09).
+    pub carrier: String,
+    pub copies: usize,
 }
 
-pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str) -> Result<SendEstimate> {
+pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Option<&(String, u32)>) -> Result<SendEstimate> {
     // One packed hop: circuit byte, three instance fields, anchor height, proof length, proof.
     const HOP: usize = 1 + 96 + 4 + 2 + 4960;
     const CHUNK: usize = 512 - 9;
-    let plain = SendEstimate { lineage: "none", proofs: 0, extra_outputs: 0, outputs: 2, fee_zat: 10_000 };
-    let with = |lineage: &'static str, proofs: usize, extras: usize| SendEstimate {
+    let plain = |carrier: &str, copies: usize| SendEstimate { lineage: "none", proofs: 0, extra_outputs: 0, outputs: 2, fee_zat: 10_000, carrier: carrier.to_string(), copies };
+    let with = |lineage: &'static str, proofs: usize, extras: usize, carrier: &str, copies: usize| SendEstimate {
         lineage,
         proofs,
         extra_outputs: extras,
         outputs: extras + 2,
         fee_zat: 5_000 * (extras as u64 + 2),
+        carrier: carrier.to_string(),
+        copies,
     };
     // The same carrier the send will spend, and the lading that carrier commits to (never the
     // newest for the asset): the estimate must mirror the sender's own choices, or the screen
     // announces a knot and its fee that the send then does not make (audit 2026-10-08, M).
     let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(conn)?);
     let conn_ref = conn;
-    let rank = |c: &crate::zmap::CarrierRef| -> u8 { crate::wake::carrier_send_rank(conn_ref, asset_id, c) };
+    let rank = |c: &crate::zmap::CarrierRef| -> u8 { crate::wake::carrier_send_rank(conn_ref, asset_id, c, genesis) };
     let plan = crate::zmap::plan_asset_send_preferring(&holdings, asset_id, &rank)?;
+    let copies = holdings.iter().find(|h| h.asset_id == asset_id).map(|h| h.carriers.len()).unwrap_or(0);
+    let carrier = format!("{}#{}", hex::encode(plan.carrier.txid().as_ref()).chars().take(12).collect::<String>(), plan.carrier.output_index());
     let chosen = holdings
         .iter()
         .flat_map(|h| h.carriers.iter())
@@ -245,22 +253,22 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str) -> Result<Send
     // is not known here without the manifest, so it is estimated as a line of one proof.
     let after = held + 1;
     Ok(match send_mode() {
-        SendMode::Off => plain,
+        SendMode::Off => plain(&carrier, copies),
         SendMode::FullRecord if after <= MAX_HOPS => {
             let packed = 1 + 32 + 4 + 2 + after * HOP;
-            with("whole", after, packed.div_ceil(512 - HEAD))
+            with("whole", after, packed.div_ceil(512 - HEAD), &carrier, copies)
         }
-        SendMode::FullRecord => plain,
-        SendMode::Knotline if !canonical => plain,
+        SendMode::FullRecord => plain(&carrier, copies),
+        SendMode::Knotline if !canonical => plain(&carrier, copies),
         SendMode::Knotline => {
             let memos = memos_in_transaction(conn, plan.carrier.txid().as_ref())?;
             let linked = zmap_wake::knotline::key_from_memos(memos.iter().map(|m| m.as_slice())).is_some() && after >= 2 && rebuilt_from_line;
             if linked {
-                with("knot", after, (2 + 64 + 2 + HOP).div_ceil(CHUNK) + 1)
+                with("knot", after, (2 + 64 + 2 + HOP).div_ceil(CHUNK) + 1, &carrier, copies)
             } else if after <= MAX_JOIN_HOPS {
-                with("start", after, (2 + 36 + 2 + after * HOP).div_ceil(CHUNK) + 1)
+                with("start", after, (2 + 36 + 2 + after * HOP).div_ceil(CHUNK) + 1, &carrier, copies)
             } else {
-                plain
+                plain(&carrier, copies)
             }
         }
     })

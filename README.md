@@ -15,8 +15,10 @@ Built on the Ironwood (NU6.3) `librustzcash` stack. Rust core, Tauri 2 shell, Sv
 ## ⚠️ Beta software
 
 **Zecboat has not had an independent security review.** Releases are signed (an Ed25519 signature
-over the download's hashes, checked by the installer against the published key); there are no
-automatic updates, and it handles real value on Zcash mainnet.
+over the download's hashes). The installer checks that signature against the key shipped in the
+same archive and prints the key: that check means something only once you have compared the key
+with the one published on zecboat.com/download, which a substituted archive cannot forge. There
+are no automatic updates, and it handles real value on Zcash mainnet.
 
 **Use amounts you can afford to lose**, and read [Backups](#backups) before putting funds in it.
 

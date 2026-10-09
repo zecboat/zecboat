@@ -375,12 +375,26 @@ pub struct Held {
 /// skeletons match but whose keys differ are shown as look-alikes (review 2026-10-09,
 /// session 4, Issue A). A short table, not UTS #39: it catches the cheap cases.
 pub fn name_skeleton(name: &str) -> String {
-    name.chars()
+    // Unicode lower case first (capital Cyrillic and Greek fold to the lower-case rows below;
+    // Latin I folds to i and then to l), and fullwidth forms onto ASCII (review 2026-10-09,
+    // regression over 12-13, Issue F).
+    let lowered: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| match c as u32 {
+            0xFF01..=0xFF5E => char::from_u32(c as u32 - 0xFF01 + 0x21).unwrap_or(c),
+            _ => c,
+        })
+        .collect();
+    lowered
+        .chars()
         .filter_map(|c| {
             let c = match c {
                 'а' | 'α' => 'a', 'е' | 'ε' => 'e', 'о' | 'ο' => 'o', 'р' | 'ρ' => 'p', 'с' | 'ϲ' => 'c', 'х' | 'χ' => 'x',
-                'у' | 'υ' => 'y', 'і' | 'ι' => 'i', 'ј' => 'j', 'ѕ' => 's', 'ԁ' => 'd', 'ν' => 'v', 'к' | 'κ' => 'k', 'т' | 'τ' => 't',
-                'н' => 'h', 'в' => 'b', 'м' => 'm', 'ⅼ' | 'ӏ' | '1' | 'l' => 'l', '0' => 'o',
+                'у' | 'υ' => 'y', 'ј' => 'j', 'ѕ' => 's', 'ԁ' => 'd', 'ν' => 'v', 'к' | 'κ' => 'k', 'т' | 'τ' => 't',
+                'н' => 'h', 'в' => 'b', 'м' => 'm', '0' => 'o',
+                // i, l, 1 and their look-alikes are one letter for this purpose ("BarceIona").
+                'i' | 'і' | 'ι' | 'ⅼ' | 'ӏ' | '1' | 'l' => 'l',
                 other => other,
             };
             let c = c.to_ascii_lowercase();
@@ -550,6 +564,10 @@ mod tests {
         // (a forged id, an upper-case id, duplicate keys) is flagged, none is counted as held.
         assert_eq!((h.count, h.bad_ids), (1, 3));
         assert_eq!(name_skeleton("Lagоs Post Card"), name_skeleton("Lagos Post Card"), "Cyrillic о folds onto o");
+        for look_alike in ["Lagos Роst Card", "LАGOS POST CARD", "Lagos Ρost Card", "Ｌａｇｏｓ Post Card", "BarceIona Post Card"] {
+            let target = if look_alike.starts_with("Barce") { "Barcelona Post Card" } else { "Lagos Post Card" };
+            assert_eq!(name_skeleton(look_alike), name_skeleton(target), "{look_alike}");
+        }
         assert_ne!(name_skeleton("Lagos Post Card"), name_skeleton("Lagos Post Card 2"));
     }
 

@@ -300,15 +300,19 @@ pub fn run_checks(reg: &Registration, ufvk: &str, outs: &[Out], flows: &[Flow]) 
     add(9, "no output issued by this account after the close", after_any == 0,
         (after_any > 0).then(|| format!("{after_any} output(s) after the close")));
     // Uniqueness (review 2026-10-09, session 4, Issue E): one unit number and one id each.
-    let mut units_seen = std::collections::HashSet::new();
+    // Unit numbers as numbers in canonical decimal (no sign, no leading zeros), and the set
+    // must be exactly 1..=N for the N carriers before the close; "1", "01" and "+1" used to
+    // count as three (review 2026-10-09, regression over 12-13, Issue H).
+    let mut units_seen = std::collections::BTreeSet::new();
     let mut ids_seen = std::collections::HashSet::new();
     let unique = before.iter().all(|c| {
-        let unit = c.2.split('|').nth(2).unwrap_or("");
-        units_seen.insert(unit.to_string()) && ids_seen.insert(c.1.clone())
-    });
-    add(10, "every carrier's id derives from ik and its own description, and unit numbers and ids are each used once",
+        let text = c.2.split('|').nth(2).unwrap_or("");
+        let canonical = text.parse::<u32>().ok().filter(|n| n.to_string() == text);
+        canonical.map(|n| units_seen.insert(n)).unwrap_or(false) && ids_seen.insert(c.1.clone())
+    }) && units_seen.iter().copied().eq(1..=before.len() as u32);
+    add(10, "every carrier's id derives from ik and its own description; unit numbers are 1..N each once; ids are distinct",
         !carriers.is_empty() && carriers.iter().all(|c| derive_asset_id(&close.ik, &c.2) == c.1) && unique,
-        (!unique).then(|| "a unit number or an asset id appears twice".to_string()));
+        (!unique).then(|| "unit numbers are not 1..N each exactly once, or an asset id appears twice".to_string()));
     add(11, "every carrier is exactly 10,000 zat", before.iter().all(|c| c.0.value == CARRIER_ZAT), None);
 
     // Genesis, in unit order (the unit number is the description's third field).

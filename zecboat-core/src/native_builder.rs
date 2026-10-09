@@ -530,8 +530,21 @@ pub fn send_zmap_asset(
         // must not be the note picked while the genuine unit sits beside it. "Has a lading"
         // was the rule until 2026-10-09; a copy with a garbage lading had one (audit 2026-10-08,
         // Zecboat C; review 2026-10-09, regression Finding 2).
-        let rank = |c: &crate::zmap::CarrierRef| -> u8 { crate::wake::carrier_send_rank(&conn, asset_id, c) };
-        crate::zmap::plan_asset_send_preferring(&holdings, asset_id, &rank)?
+        let rank = |c: &crate::zmap::CarrierRef| -> u8 { crate::wake::carrier_send_rank(&conn, asset_id, c, wake.genesis.as_ref()) };
+        let plan = crate::zmap::plan_asset_send_preferring(&holdings, asset_id, &rank)?;
+        // A lading this unit's memo commits to that another pass is still collecting is not
+        // "absent": the send is refused for now rather than offered unproven, which would strip
+        // the hash for good (review 2026-10-09, regression over 12-13, Issue B).
+        if let Some(c) = holdings
+            .iter()
+            .flat_map(|h| h.carriers.iter())
+            .find(|c| c.txid_bytes[..] == plan.carrier.txid().as_ref()[..] && c.output_index as u32 == plan.carrier.output_index())
+        {
+            if c.consignment_hash.is_some() && crate::wake::walk_in_progress(c) {
+                return Err(anyhow!("the lineage this unit's memo commits to is still being collected; try again in a moment"));
+            }
+        }
+        plan
     };
 
     // ── 1a. Wake (chapter 8): prove THIS carrier before anything is built ───────────────────
@@ -829,7 +842,7 @@ pub fn send_zmap_asset(
             Some(m) => m,
             None => {
                 let conn = rusqlite::Connection::open_with_flags(wallet_db_path()?, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-                crate::wake_memo::send_estimate(&conn, asset_id)
+                crate::wake_memo::send_estimate(&conn, asset_id, wake.genesis.as_ref())
                     .map(|e| e.fee_zat)
                     .map_err(|e| anyhow!("the fee could not be estimated, so no bound could be checked: {e}"))?
             }

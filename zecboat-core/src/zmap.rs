@@ -281,7 +281,14 @@ pub fn parse_memo(memo: &[u8]) -> Option<ZmapRecord> {
                 // v1 memo are the sender's to write and used to win (review 2026-10-09,
                 // session 4, Issue F). A pre-v1 memo has no description and keeps its fields.
                 let from_desc = j.desc.as_deref().and_then(desc_fields);
-                let v1 = j.ik.is_some() && from_desc.is_some();
+                // Any memo carrying `ik` and `desc` is a v1 memo. One whose description is not
+                // in the six-field form is not a unit of anything: it used to keep its free
+                // fields and borrow a pinned issuer's name (review 2026-10-09, regression over
+                // 12-13, Issue G).
+                let v1 = j.ik.is_some() && j.desc.is_some();
+                if v1 && from_desc.is_none() {
+                    return None;
+                }
                 return Some(ZmapRecord {
                     name: if v1 {
                         from_desc.as_ref().map(|d| d.0.clone()).unwrap_or_default()
@@ -1206,11 +1213,19 @@ pub fn consignment_for_carrier(
         }
     }
     if let Some(mut c) = adoptable {
+        // Adoption writes once; on a read-only connection (the send and the estimate open one)
+        // nothing is written and the row is handed over unadopted for this call. A lading made
+        // for a send (`sent_txid` set) is never adopted, whatever its `source` says.
         let raw = hex::decode(&c.sha256).unwrap_or_default();
-        conn.execute(
-            "UPDATE ext_zecboat_zmap_consignments SET received_note_id = ?2 WHERE sha256 = ?1 AND received_note_id IS NULL",
-            rusqlite::params![raw, me],
-        )?;
+        let n = conn
+            .execute(
+                "UPDATE ext_zecboat_zmap_consignments SET received_note_id = ?2 WHERE sha256 = ?1 AND received_note_id IS NULL AND sent_txid IS NULL",
+                rusqlite::params![raw, me],
+            )
+            .unwrap_or(1);
+        if n == 0 {
+            return Ok(None);
+        }
         c.received_note_id = Some(me);
         return Ok(Some(c));
     }
@@ -1233,13 +1248,19 @@ pub fn ensure_rejected_table(conn: &rusqlite::Connection) -> rusqlite::Result<()
         )",
         [],
     )?;
+    // One row per (copy, lading): a rejection used to be re-inserted on every pass (review
+    // 2026-10-09, regression over 12-13, Issue I).
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ext_zecboat_zmap_rejected_once ON ext_zecboat_zmap_rejected_ladings (received_note_id, sha256)",
+        [],
+    )?;
     Ok(())
 }
 
 pub fn record_rejected_lading(conn: &rusqlite::Connection, note_id: i64, sha256: &[u8; 32], source: &str, reason: &str) -> rusqlite::Result<()> {
     ensure_rejected_table(conn)?;
     conn.execute(
-        "INSERT INTO ext_zecboat_zmap_rejected_ladings (received_note_id, sha256, source, reason) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT OR IGNORE INTO ext_zecboat_zmap_rejected_ladings (received_note_id, sha256, source, reason) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![note_id, sha256.as_slice(), source, reason],
     )?;
     Ok(())
@@ -1470,7 +1491,9 @@ mod tests {
         assert!(consignment_for_carrier(&conn, "asset-a", None, &[0x44u8; 32], Some(6)).unwrap().is_none(), "adopted once");
         // A rejected lading is remembered for its note, and for no other.
         record_rejected_lading(&conn, 9, &[7u8; 32], "knotline", "BadProof(0)").unwrap();
+        record_rejected_lading(&conn, 9, &[7u8; 32], "memo", "BadProof(0)").unwrap();
         assert_eq!(rejected_lading_for_note(&conn, 9).unwrap().map(|r| r.0), Some("BadProof(0)".into()));
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM ext_zecboat_zmap_rejected_ladings", [], |r| r.get::<_, i64>(0)).unwrap(), 1, "recorded once per copy and lading");
         assert!(rejected_lading_for_note(&conn, 1).unwrap().is_none());
     }
 

@@ -69,7 +69,7 @@
   // binary. Deliberately separate from the artwork check: §12.1 forbids presenting checks
   // 1-4 and 6 as "genuine" without 5, so the two results are never merged into one tick.
   type Badge =
-    | { state: 'verified'; issuer: string; issuer_key?: string | null; issuance_txid: string; issuance_height: number; checks: string[]; caveat: string; found_in_registry_at?: number | null }
+    | { state: 'verified'; issuer: string; pinned: boolean; issuer_key?: string | null; issuance_txid: string; issuance_height: number; checks: string[]; caveat: string; found_in_registry_at?: number | null }
     | { state: 'not_listed'; issuer: string; detail: string }
     | { state: 'signature_failed'; detail: string }
     | { state: 'could_not_check'; detail: string };
@@ -267,7 +267,7 @@
                  WAKE-v1 §8.1(c) says that state must never look like Verified in wording,
                  colour or mark (review 2026-10-09, Issue A: it did, here). -->
             {@const lineageHolds = wake?.state === 'verified'}
-            {@const pinnedIssuer = !badge.found_in_registry_at}
+            {@const pinnedIssuer = badge.pinned === true}
             <!-- Green needs a key pinned in this wallet as well: the Registry is open, and a
                  name plus a short key fragment is forgeable (review 2026-10-09, session 4,
                  Issue A). A registry-only collection is "registered", never green. The
@@ -332,7 +332,7 @@
             <!-- Its own colour and its own mark, reviewed or not: a buyer must never take a
                  provider's word for an own-node verdict (WAKE-v1 §8.1(c); audit 2026-10-08). -->
             <div class="verify-badge provider">
-              ◐ Lineage checks out · via your provider {wake.asked}{WAKE_REVIEWED ? '' : ' · awaiting external review'}
+              ◐ Lineage checks out · {wake.asked}{WAKE_REVIEWED ? '' : ' · awaiting external review'}
               <details class="verify-details">
                 <summary>what was checked</summary>
                 <span class="check-line">✓ every proof verifies under the pinned Wake keys, on this machine</span>

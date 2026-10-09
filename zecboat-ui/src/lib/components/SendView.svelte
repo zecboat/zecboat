@@ -124,7 +124,7 @@
   // What this particular item's send will carry and cost (0.7.1). The flat figure above is the
   // fee of a plain two-output transfer; a transfer that carries lineage has more outputs, and
   // the confirmation screen quoted 0.0002 while the wallet went on to pay 0.0007 or 0.0017.
-  type SendEstimate = { lineage: "none" | "knot" | "start" | "whole"; proofs: number; extra_outputs: number; outputs: number; fee_zat: number };
+  type SendEstimate = { lineage: "none" | "knot" | "start" | "whole"; proofs: number; extra_outputs: number; outputs: number; fee_zat: number; carrier: string; copies: number };
   let estimate = $state<SendEstimate | null>(null);
   const zec = (z: number) => (z / 100_000_000).toFixed(8);
   let useHardwareWallet = $state(false);
@@ -424,7 +424,7 @@
                amount and message fields do not apply and are not sent (review 2026-10-09). -->
           <div class="detail-row amount-row">
             <span class="label">Sends:</span>
-            <span class="value amount-value">1 unit (its 0.00010000 ZEC carrier note and its memo)</span>
+            <span class="value amount-value">1 unit (its 0.00010000 ZEC carrier note and its memo){#if estimate && estimate.copies > 1}: copy {estimate.carrier} of the {estimate.copies} this wallet holds, the one whose lineage checks out best{/if}</span>
           </div>
           {#if chainSource}
             <div class="detail-row">

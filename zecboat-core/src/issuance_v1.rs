@@ -207,10 +207,11 @@ pub async fn verify(asset_id: &str) -> Option<BadgeState> {
     // is the impostor the open Registry cannot stop (review 2026-10-09, session 4, Issue A).
     if let BadgeState::Verified { caveat, .. } = &mut state {
         let mine = crate::collections::name_skeleton(&a.name);
+        // Against the ik-keyed pins only: the pre-v1 issuers are keyed by ed25519 keys, so a
+        // v1 registration by one of them under its own name would always read as a look-alike.
         let known = PINNED_V1
             .iter()
             .map(|(l, k, _)| (*l, *k))
-            .chain(crate::issuance::pinned_issuer_names().into_iter())
             .find(|(l, k)| crate::collections::name_skeleton(l) == mine && !k.eq_ignore_ascii_case(&a.ik));
         if let Some((l, _)) = known {
             *caveat = format!(
@@ -333,6 +334,7 @@ async fn check(pin: &Pin, body: &[u8], v: &Value, sig: &[u8], asset: &Value, ass
     }
     BadgeState::Verified {
         issuer: pin.label.clone(),
+        pinned: registry_at.is_none(),
         issuer_key: Some(hex::encode(pin.ik)),
         issuance_txid: txid.to_string(),
         issuance_height: height,

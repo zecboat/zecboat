@@ -467,6 +467,9 @@
     {#if showExportInput}
       <div class="import-section slide-in">
         <label for="export-secret">{exportUsesYubikey ? "YubiKey PIN" : "Wallet password"}, to show the {exportWhat === 'viewkey' ? 'full viewing key' : 'recovery phrase'}</label>
+        {#if exportUsesYubikey}
+          <p class="hint">The key checks the PIN under the policy its identity was made with. An identity made with a PIN policy of "never" asks for a touch only; then the touch is the only gate here.</p>
+        {/if}
         <input id="export-secret" type="password" autocomplete="current-password" bind:value={exportSecret}
                disabled={isExporting} onkeydown={(e) => { if (e.key === 'Enter') confirmExport(); }} />
         <div class="import-actions">

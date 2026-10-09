@@ -2624,7 +2624,13 @@ pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, 
     // send then reports what is actually missing.
     if asset_id.is_some() {
         if let Ok(db_path) = crate::paths::as_string::wallet_db_path() {
-            match tokio::task::spawn_blocking(move || crate::wake::fetch_missing_consignments(&db_path)).await {
+            // Waits for a line another pass is walking (the item list starts one and stops
+            // waiting after 20 s): "being collected" must not read as "absent" here (review
+            // 2026-10-09, regression over 12-13, Issue B).
+            match tokio::task::spawn_blocking(move || crate::wake::fetch_missing_consignments_waiting(&db_path, std::time::Duration::from_secs(90))).await {
+                Ok(Ok(r)) if !r.in_progress.is_empty() => {
+                    anyhow::bail!("the lineage of {} is still being collected ({}); try again in a moment", r.in_progress.join(", "), "another pass is walking its Knotline")
+                }
                 Ok(Ok(r)) if r.fetched > 0 => println!("[wake] collected {} waiting lading(s) before the send", r.fetched),
                 Ok(Err(e)) => eprintln!("[wake] could not collect waiting ladings before the send: {e}"),
                 _ => {}
@@ -3579,35 +3585,17 @@ pub async fn view_asset(asset_id: String) -> Result<String> {
     // address and the moment the item was opened (audit 2026-10-08, ZMAP D / Zecboat A). No
     // redirects, https only, and a bounded body.
     let url = format!("{}/collection/{}.json", registry_base(), asset_id);
-    if !url.starts_with("https://") {
-        return Err(anyhow::anyhow!("The asset registry must be reached over https ({})", url));
-    }
     const MAX_METADATA_BYTES: usize = 256 * 1024;
-    let res = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?
-        .get(&url)
-        .send()
+    // Through the one registry client (https only, no redirects, no proxy, bounded): this fetch
+    // still built its own client and followed a proxy from the environment (review 2026-10-09,
+    // regression over 12-13, Issue D).
+    let (_, body) = registry_fetch(&url, MAX_METADATA_BYTES)
         .await
-        .map_err(|e| anyhow::anyhow!("Could not reach the asset registry at {}: {}", url, e))?;
-
-    let status = res.status();
-    if !status.is_success() {
-        return Err(anyhow::anyhow!(
-            "No metadata published for {} ({} returned HTTP {})",
-            asset_id,
-            url,
-            status
-        ));
-    }
+        .map_err(|e| anyhow::anyhow!("No metadata published for {} ({})", asset_id, e))?;
 
     // A missing record is served as the site's HTML page rather than a 404, so the status code alone
     // is not proof. Require it to parse as JSON.
-    let body = read_bounded(res, MAX_METADATA_BYTES)
-        .await
-        .map_err(|e| anyhow::anyhow!("Unreadable response from {}: {}", url, e))?;
-    let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|_| {
+    let parsed: serde_json::Value = serde_json::from_slice(&body).map_err(|_| {
         anyhow::anyhow!(
             "No metadata published for {} — {} returned a page, not JSON",
             asset_id,

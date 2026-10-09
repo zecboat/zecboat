@@ -70,11 +70,6 @@ use serde::{Deserialize, Serialize};
 /// probed only that path — which is how "Barcelona has no manifest" got written into
 /// CLAUDE.md while a generation-2 manifest had been live for ten days. Read what is served
 /// before designing where it should be.
-/// The pre-v1 pinned issuers' names and keys, for look-alike checks against registrations.
-pub fn pinned_issuer_names() -> Vec<(&'static str, &'static str)> {
-    PINNED_ISSUERS.iter().map(|(l, k, _)| (*l, *k)).collect()
-}
-
 const PINNED_ISSUERS: &[(&str, &str, &str)] = &[
     (
         "Happy Birthday Zcash",
@@ -111,6 +106,10 @@ pub enum BadgeState {
     /// Checks 1, 3, 4 and 5 passed against a pinned key. **Not check 2.**
     Verified {
         issuer: String,
+        /// True when the key the checks were made against is pinned in this build (or a test
+        /// pin); false for a key taken from the Registry after a passed audit. Said explicitly,
+        /// so the screen does not infer it from a number (review 2026-10-09, Issue L.5).
+        pinned: bool,
         /// The issuance key (`ik`, hex) the checks were made against, so the badge can show
         /// its fingerprint beside the name: a look-alike name under another key must not read
         /// as the same issuer (audit 2026-10-08, ZMAP C).
@@ -445,6 +444,7 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
 
     Ok(BadgeState::Verified {
         issuer,
+        pinned: true,
         // The legacy (v0.3 disclosure) path checks a pinned ed25519 key, not an `ik`.
         issuer_key: None,
         issuance_txid: issuance.txid,
