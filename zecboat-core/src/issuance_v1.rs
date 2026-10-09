@@ -266,8 +266,8 @@ pub fn pinned_issuance_ufvks() -> Vec<String> {
         .collect()
 }
 
-/// The v1 badge, if any v1 pin lists `asset_id`. `None` when no v1 pin knows the asset (the
-/// caller then falls back to the pre-Wake badge).
+/// The v1 badge, if any held manifest or audited collection lists `asset_id`. `None` when
+/// none knows the asset (the caller then says "unknown", which is not a verdict).
 ///
 /// Sources, in order, none of them the website: the chain copy of a pinned collection's
 /// manifest (a passed audit, verified under the registered key, which must be the pinned one);

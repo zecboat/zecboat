@@ -83,6 +83,7 @@
   type Badge =
     | { state: 'verified'; issuer: string; pinned: boolean; issuer_key?: string | null; issuance_txid: string; issuance_height: number; checks: string[]; caveat: string; found_in_registry_at?: number | null }
     | { state: 'not_listed'; issuer: string; detail: string }
+    | { state: 'unknown'; detail: string }
     | { state: 'signature_failed'; detail: string }
     | { state: 'could_not_check'; detail: string };
   let badge = $state<Badge | null>(null);
@@ -304,6 +305,12 @@
           {:else if badge?.state === 'signature_failed'}
             <div class="verify-badge bad">
               ✕ Issuance check failed
+              <span class="verify-detail">{badge.detail}</span>
+            </div>
+          {:else if badge?.state === 'unknown'}
+            <!-- Not a verdict either: no manifest this wallet holds says anything about it. -->
+            <div class="verify-badge unknown">
+              Collection not known to this wallet
               <span class="verify-detail">{badge.detail}</span>
             </div>
           {:else if badge?.state === 'could_not_check'}

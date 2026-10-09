@@ -271,7 +271,8 @@ impl ChainOracle for Chain {
 pub enum GenesisSource {
     /// `ZECBOAT_WAKE_MANIFEST`: a local v0.5 manifest file (a throwaway collection under test).
     LocalManifest,
-    /// A pinned issuer's manifest, signature verified (`issuance.rs`).
+    /// A pinned collection's manifest, signature verified (`issuance_v1.rs`): the built-in
+    /// seed or the chain copy of a passed audit.
     PinnedManifest,
     /// A3b phase 4: the manifest etched on chain, from a collection found in the pinned Zecboat
     /// Registry whose audit passed; signature verified the same way.
@@ -287,9 +288,9 @@ pub struct GenesisRef {
     pub action_index: u32,
     /// The commitment the manifest states at that output (v1 manifests; the manifest is
     /// signed). A held lading descends from this genesis only when its first proof opens from
-    /// this commitment: the offline form of W1. `None` when the manifest states none (the
-    /// test override, a registry-only collection): such a lading cannot then be ranked as
-    /// checking out, and several copies are not sent.
+    /// this commitment: the offline form of W1. `None` only for a test-override manifest
+    /// that states none: such a lading cannot then be ranked as checking out, and several
+    /// copies are not sent.
     pub cmx: Option<[u8; 32]>,
     /// The block the manifest states for the genesis transaction: the only hint a provider is
     /// given for the W1 fetch, never a number taken from the lading itself (Issue B).
@@ -612,8 +613,12 @@ pub fn dropbox_get(hash_hex: &str) -> Result<Option<Vec<u8>>> {
         };
     }
     let url = format!("{base}/{hash_hex}");
-    let res = reqwest::blocking::Client::builder()
+    // The same rules as every other client: no redirects (a drop-box must not send the
+    // request, which carries the lading's hash, to another host or to plain http), and a
+    // body read in bounded pieces, never whole (gate fourth pass, L-4).
+    let mut res = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .build()?
         .get(&url)
@@ -628,9 +633,17 @@ pub fn dropbox_get(hash_hex: &str) -> Result<Option<Vec<u8>>> {
     if res.content_length().map(|n| n as usize > MAX_SEALED_BYTES).unwrap_or(false) {
         return Err(anyhow!("{url}: the drop-box answered with more than {MAX_SEALED_BYTES} bytes; refused"));
     }
-    let bytes = res.bytes()?.to_vec();
-    if bytes.len() > MAX_SEALED_BYTES {
-        return Err(anyhow!("{url}: the drop-box answered with more than {MAX_SEALED_BYTES} bytes; refused"));
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        let n = std::io::Read::read(&mut res, &mut chunk).map_err(|e| anyhow!("{url}: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..n]);
+        if bytes.len() > MAX_SEALED_BYTES {
+            return Err(anyhow!("{url}: the drop-box answered with more than {MAX_SEALED_BYTES} bytes; refused"));
+        }
     }
     Ok(Some(bytes))
 }
@@ -823,8 +836,12 @@ pub fn fetch_missing_consignments_scoped(db_path: &str, scope: FetchScope) -> Re
         }
         // Copies whose walks failed before go last, so a slow or dead line a stranger sent
         // cannot use up every pass before the genuine unit's turn (gate second pass, Issue E).
+        // The source's own failures weigh a tenth of the line's: a provider outage must not
+        // push a genuine unit behind every copy that arrived since, while a line that only
+        // ever fails "transiently" still drifts back (gate fourth pass, L-2). Equal weight:
+        // the older note first, since a copy sent after a purchase cannot overtake it.
         let mut carriers: Vec<&crate::zmap::CarrierRef> = h.carriers.iter().collect();
-        carriers.sort_by_key(|c| crate::zmap::walk_tries(&conn, &c.txid, c.output_index).unwrap_or(0));
+        carriers.sort_by_key(|c| (crate::zmap::walk_order_key(&conn, &c.txid, c.output_index), c.note_id));
         for c in carriers {
             if started.elapsed() > scope.pass_deadline {
                 // Out of time for the pass: nothing is recorded against carriers not reached.
@@ -1530,35 +1547,12 @@ fn verify_carrier(
     let lading = Lading::parse(&consignment.json).map_err(|e| anyhow!("stored lading unreadable: {e}"))?;
     // A lading whose genesis is not the manifest's, by label or by the commitment its first
     // proof opens from, is Broken whatever the chain says: decided here, after the checks that
-    // need no oracle, so that a stranger's copy never makes this wallet ask the chain source
-    // for a transaction the stranger chose (gate third pass, Finding 4).
-    if let Some(g) = genesis {
-        let label_ok = g.is_outpoint(&lading.genesis.txid, lading.genesis.action_index);
-        let (failure, detail) = match zmap_wake::verify_local(&consignment.json, expected, &note.note.rho()) {
-            Err(e) => (format!("{e:?}").split(|c: char| !c.is_alphanumeric()).next().unwrap_or("Failure").to_string(), e.to_string()),
-            Ok((_, proofs)) => {
-                let first = proofs.first().map(|p| p.instance_bytes()[zmap_wake::circuit::LINK]);
-                match (label_ok, g.cmx, first) {
-                    (false, _, _) => (
-                        "GenesisMismatch".to_string(),
-                        format!(
-                            "the lading descends from {}… output {}, but the issuer's manifest names a different genesis output for this asset",
-                            &lading.genesis.txid[..16],
-                            lading.genesis.action_index
-                        ),
-                    ),
-                    (true, Some(cmx), Some(link)) if link != cmx => (
-                        "GenesisMismatch".to_string(),
-                        "the lading names the manifest's genesis output but its first proof does not open from the commitment the manifest states there".to_string(),
-                    ),
-                    _ => (String::new(), String::new()),
-                }
-            }
-        };
-        if !failure.is_empty() {
-            let _ = crate::zmap::mark_consignment_verified(conn, &consignment.sha256, None);
-            return Ok(WakeState::Broken { failure, detail });
-        }
+    // need no oracle, so the verifier never asks the chain source about a transaction a
+    // stranger chose (gate third pass, Finding 4). The Knotline walk that collected the lading
+    // ran before this and did ask (TRUST_MODEL row 12; gate fourth pass, L-1).
+    if let Some((failure, detail)) = offline_verdict(&consignment.json, expected, &note.note.rho(), genesis) {
+        let _ = crate::zmap::mark_consignment_verified(conn, &consignment.sha256, None);
+        return Ok(WakeState::Broken { failure, detail });
     }
     // The W1 fetch of the genesis transaction is hinted from the block the signed manifest
     // states, so a provider sees the block and not the transaction; never from the lading's
@@ -1637,6 +1631,67 @@ fn verify_carrier(
             Ok(WakeState::Broken { failure: format!("{e:?}").split(|c: char| !c.is_alphanumeric()).next().unwrap_or("Failure").to_string(), detail: e.to_string() })
         }
         Err(e) => Ok(WakeState::Unverified { detail: e.to_string(), consignment_hash: Some(consignment.sha256.clone()) }),
+    }
+}
+
+/// What can be said about a stored lading before any chain request, against the manifest's
+/// genesis: `Some((failure, detail))` when it is Broken already (a local check fails, or its
+/// genesis is not the manifest's by label or by first commitment), `None` when only the chain
+/// can tell. Pure, so the copy cases are testable without a wallet (gate fourth pass, I-1).
+pub fn offline_verdict(lading_bytes: &[u8], expected_hash: Option<[u8; 32]>, rho: &orchard::note::Rho, genesis: Option<&GenesisRef>) -> Option<(String, String)> {
+    let g = genesis?;
+    match zmap_wake::verify_local(lading_bytes, expected_hash, rho) {
+        Err(e) => Some((format!("{e:?}").split(|c: char| !c.is_alphanumeric()).next().unwrap_or("Failure").to_string(), e.to_string())),
+        Ok((l, proofs)) => {
+            let label_ok = g.is_outpoint(&l.genesis.txid, l.genesis.action_index);
+            let first = proofs.first().map(|p| p.instance_bytes()[zmap_wake::circuit::LINK]);
+            match (label_ok, g.cmx, first) {
+                (false, _, _) => Some((
+                    "GenesisMismatch".to_string(),
+                    format!(
+                        "the lading descends from {}… output {}, but the issuer's manifest names a different genesis output for this asset",
+                        &l.genesis.txid[..16],
+                        l.genesis.action_index
+                    ),
+                )),
+                (true, Some(cmx), Some(link)) if link != cmx => Some((
+                    "GenesisMismatch".to_string(),
+                    "the lading names the manifest's genesis output but its first proof does not open from the commitment the manifest states there".to_string(),
+                )),
+                _ => None,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod offline_verdict_tests {
+    use super::{offline_verdict, GenesisRef, GenesisSource};
+
+    /// The copy cases the fourth gate pass asked to see tested (I-1): the published Wake Test
+    /// #001 lading against its own genesis, a relabelled manifest, and a wrong commitment.
+    #[test]
+    fn a_copy_is_broken_offline_when_its_genesis_is_not_the_manifests() {
+        let vector: &[u8] = include_bytes!("../../zmap-wake/docs/test_vector/wake_test_001_lading.json");
+        let rho_bytes = zmap_wake::oracle::decode_hex_32("c208b5304d072f05e40142cce0026e6faa4961b83b7ae81ac255013aad404a39").unwrap();
+        let rho: orchard::note::Rho = Option::from(orchard::note::Rho::from_bytes(&rho_bytes)).unwrap();
+        let (_, proofs) = zmap_wake::verify_local(vector, None, &rho).unwrap();
+        let cmx = proofs[0].instance_bytes()[zmap_wake::circuit::LINK];
+        let at = |txid: &str, i: u32, cmx: Option<[u8; 32]>| GenesisRef { txid: txid.into(), action_index: i, cmx, height: None, source: GenesisSource::PinnedManifest };
+        let own = "14b8a35a93fec522b597115e18e5100885c30964f222a998cd8325df9118f362";
+        // Its own genesis, with and without the commitment: only the chain can say more.
+        assert!(offline_verdict(vector, None, &rho, Some(&at(own, 2, Some(cmx)))).is_none());
+        assert!(offline_verdict(vector, None, &rho, Some(&at(own, 2, None))).is_none());
+        // No manifest: nothing to compare with offline.
+        assert!(offline_verdict(vector, None, &rho, None).is_none());
+        // Another genesis by label; the right label over the wrong commitment.
+        assert_eq!(offline_verdict(vector, None, &rho, Some(&at(&"ab".repeat(32), 0, Some(cmx)))).unwrap().0, "GenesisMismatch");
+        assert_eq!(offline_verdict(vector, None, &rho, Some(&at(own, 2, Some([7u8; 32])))).unwrap().0, "GenesisMismatch");
+        // A lading for another note fails its own checks first.
+        let other: orchard::note::Rho = Option::from(orchard::note::Rho::from_bytes(&[1u8; 32])).unwrap();
+        assert_eq!(offline_verdict(vector, None, &other, Some(&at(own, 2, Some(cmx)))).unwrap().0, "RhoMismatch");
+        // The memo's hash, when it does not match, fails before anything else.
+        assert_eq!(offline_verdict(vector, Some([9u8; 32]), &rho, Some(&at(own, 2, Some(cmx)))).unwrap().0, "LadingHashMismatch");
     }
 }
 

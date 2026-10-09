@@ -62,6 +62,9 @@ pub enum BadgeState {
     },
     /// The manifest verified, but this `asset_id` is not in it. This is the forgery answer.
     NotListed { issuer: String, detail: String },
+    /// No manifest this wallet holds says anything about this asset: not a verdict. Said in
+    /// grey, apart from `NotListed`, which is evidence (gate fourth pass, L-3).
+    Unknown { detail: String },
     /// The manifest was fetched and its signature did not verify under any pinned key.
     SignatureFailed { detail: String },
     /// We could not complete the check. **This is not a verdict about the asset.**
@@ -69,7 +72,9 @@ pub enum BadgeState {
 }
 
 /// The badge for one asset: identity v1 against the pinned collections and the audited
-/// registry collections. An asset none of them lists is the forgery answer, said as such.
+/// registry collections. An asset none of them lists is unknown, which is not a verdict; the
+/// forgery answer (`NotListed`) is for an asset whose own collection's verified manifest does
+/// not list it.
 pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
     if asset_id.len() != 64 || !asset_id.chars().all(|c| c.is_ascii_hexdigit()) {
         return Ok(BadgeState::CouldNotCheck {
@@ -80,8 +85,7 @@ pub async fn verify_issuance(asset_id: String) -> Result<BadgeState> {
         return Ok(state);
     }
     let known = crate::issuance_v1::PINNED_V1.iter().map(|(l, _, _)| *l).collect::<Vec<_>>().join(", ");
-    Ok(BadgeState::NotListed {
-        issuer: "no collection this wallet knows".into(),
-        detail: format!("not listed in any manifest this wallet holds ({known}) nor in a collection audited from the Zecboat Registry"),
+    Ok(BadgeState::Unknown {
+        detail: format!("a collection this wallet does not know: not listed in any manifest it holds ({known}) nor in a collection audited from the Zecboat Registry"),
     })
 }

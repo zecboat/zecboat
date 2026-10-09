@@ -1118,9 +1118,14 @@ pub fn send_zmap_asset(
         // The sender's copy makes a lost delivery re-issuable. Delivery failure is reported,
         // not fatal: the transfer is built and the recipient can ask for the lading again.
         if let Some(l) = &wake_lading {
-            let hh = crate::zmap::store_consignment(&conn, asset_id, None, None, &l.bytes, Some(&successor_txid))
-                .map_err(|e| anyhow!("could not keep a copy of the lading: {}", e))?;
-            let _ = crate::zmap::mark_consignment_source(&conn, &hh, "sent");
+            // A failed store (database busy, disk full) must not also skip the delivery on a
+            // route where the record is not in the transaction (gate fourth pass, L-5): the
+            // delivery runs from the lading in memory either way, and the store's failure is
+            // reported after it.
+            let stored = crate::zmap::store_consignment(&conn, asset_id, None, None, &l.bytes, Some(&successor_txid));
+            if let Ok(hh) = &stored {
+                let _ = crate::zmap::mark_consignment_source(&conn, hh, "sent");
+            }
             // 0.7.1: the outcome is recorded, so the wallet can show it, retry it, and hand the
             // lading over as a file. Before, a failure was this console line and nothing else.
             if !record_memos.is_empty() {
@@ -1139,6 +1144,7 @@ pub fn send_zmap_asset(
                 }
             }
             }
+            stored.map_err(|e| anyhow!("could not keep a copy of the lading: {}", e))?;
         }
         Ok(())
     })();

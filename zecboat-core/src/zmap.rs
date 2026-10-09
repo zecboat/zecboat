@@ -1213,6 +1213,16 @@ pub fn ensure_walk_failures_table(conn: &rusqlite::Connection) -> rusqlite::Resu
     Ok(())
 }
 
+/// Where this carrier's walk comes in a pass: the line's own failures in full, the source's
+/// (transient) failures at a tenth, so a provider outage does not push a genuine unit behind
+/// every copy that arrived since, and a line that only ever fails "transiently" still drifts
+/// back (gate fourth pass, L-2). 0 when nothing is recorded.
+pub fn walk_order_key(conn: &rusqlite::Connection, txid_hex: &str, output_index: i64) -> i64 {
+    let tries = walk_tries(conn, txid_hex, output_index).unwrap_or(0);
+    let failures = walk_failure(conn, txid_hex, output_index).ok().flatten().map(|(_, f, _)| f).unwrap_or(0);
+    failures + (tries - failures).max(0) / 10
+}
+
 /// How many walks of this carrier failed, transient ones included (0 when none is recorded).
 pub fn walk_tries(conn: &rusqlite::Connection, txid_hex: &str, output_index: i64) -> rusqlite::Result<i64> {
     let exists: bool = conn
@@ -1582,6 +1592,30 @@ mod tests {
         assert!(walk_failure(&conn, "aa", 1).unwrap().is_none(), "keyed on the outpoint");
         clear_walk_failure(&conn, "aa", 0).unwrap();
         assert!(walk_failure(&conn, "aa", 0).unwrap().is_none());
+        assert_eq!(walk_tries(&conn, "aa", 0).unwrap(), 0, "a success clears the count");
+    }
+
+    /// Every attempt counts, transient ones too, but the source's failures weigh a tenth for
+    /// the ordering and the delay stays flat (gate third pass, Finding 3; fourth pass, L-2).
+    #[test]
+    fn transient_failures_count_lightly_for_the_order_and_keep_a_flat_delay() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for _ in 0..9 {
+            record_walk_failure_transient(&conn, "bb", 0, "transient: no answer").unwrap();
+        }
+        let (_, f, wait) = walk_failure(&conn, "bb", 0).unwrap().unwrap();
+        assert!(f == 0 && wait > 0 && wait <= 60, "{f} {wait}");
+        assert_eq!(walk_tries(&conn, "bb", 0).unwrap(), 9);
+        assert_eq!(walk_order_key(&conn, "bb", 0), 0, "nine outages weigh nothing yet");
+        record_walk_failure_transient(&conn, "bb", 0, "transient: no answer").unwrap();
+        assert_eq!(walk_order_key(&conn, "bb", 0), 1, "the tenth weighs as one");
+        record_walk_failure(&conn, "bb", 0, "no knot").unwrap();
+        assert_eq!(walk_order_key(&conn, "bb", 0), 2, "the line's own failure weighs in full");
+        assert_eq!(walk_tries(&conn, "bb", 0).unwrap(), 11);
+        clear_walk_delay(&conn, "bb", 0).unwrap();
+        assert_eq!(walk_order_key(&conn, "bb", 0), 2, "lifting the delay keeps the order");
+        assert!(walk_failure(&conn, "bb", 0).unwrap().unwrap().2 <= 0, "but the delay is gone");
+        assert_eq!(walk_order_key(&conn, "cc", 0), 0, "nothing recorded");
     }
 
     #[test]
