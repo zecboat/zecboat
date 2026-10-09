@@ -945,11 +945,21 @@ fn verify_carrier(
         });
     };
 
-    let expected = carrier
-        .consignment_hash
-        .as_deref()
-        .and_then(|hh| hex::decode(hh).ok())
-        .and_then(|v| <[u8; 32]>::try_from(v).ok());
+    // A memo that commits to a hash it cannot spell is a mismatch, not a memo without a hash:
+    // skipping the comparison let a malformed commitment pass unchecked (review 2026-10-09,
+    // after the first review's F-12).
+    let expected = match carrier.consignment_hash.as_deref() {
+        None => None,
+        Some(hh) => match hex::decode(hh).ok().and_then(|v| <[u8; 32]>::try_from(v).ok()) {
+            Some(h) => Some(h),
+            None => {
+                return Ok(WakeState::Broken {
+                    failure: "HashUnreadable".into(),
+                    detail: "the memo's consignment_hash is not 64 hex characters, so the lading it commits to cannot be checked".into(),
+                })
+            }
+        },
+    };
     let oracle = chain();
     let lading = Lading::parse(&consignment.json).map_err(|e| anyhow!("stored lading unreadable: {e}"))?;
     // The genesis proof is anchored at the block the genesis output was mined in, so the genesis

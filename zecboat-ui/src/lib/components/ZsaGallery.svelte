@@ -237,8 +237,12 @@
                    genesis output to the chain. Anyone can copy a memo, so on its own it says
                    "this design is registered by…", not "this unit is genuine". The green tick
                    and the word Verified belong to it only when the unit's lineage holds too
-                   (ZMAP §9: never "genuine" on checks 1-6 alone; audit 2026-10-08, ZMAP A). -->
-              {@const lineageHolds = wake?.state === 'verified' || wake?.state === 'provider_checked'}
+                   (ZMAP §9: never "genuine" on checks 1-6 alone; audit 2026-10-08, ZMAP A).
+                   Green and the word Verified only when the lineage is Verified against this
+                   machine's own node: a provider-checked lineage is the provider's word, and
+                   WAKE-v1 §8.1(c) says that state must never look like Verified in wording,
+                   colour or mark (review 2026-10-09, Issue A: it did, here). -->
+              {@const lineageHolds = wake?.state === 'verified'}
               <div class="verify-badge {lineageHolds ? 'ok' : 'neutral'}">
                 {lineageHolds ? '✓ Verified — issued by' : '▫ Design registered by'} {badge.issuer}{#if badge.issuer_key}<code class="ik" title={`issuance key ${badge.issuer_key}`}> · key {badge.issuer_key.slice(0, 8)}</code>{/if}{#if badge.found_in_registry_at}<span class="via-registry" title={`Found in the Zecboat Registry and audited to block ${badge.found_in_registry_at}, from the chain. zecboat.com was not needed.`}> · via Zecboat Registry</span>{/if}
                 <!-- One line is the verdict. The checks, the anchor and the caveat are one click
