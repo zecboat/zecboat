@@ -1656,6 +1656,7 @@ async fn try_broadcast_zebrad(raw_tx_hex: &str) -> std::result::Result<String, B
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
+        .no_proxy()
         .build()
         .map_err(|e| BroadcastFailure::Unreachable(format!("could not build an HTTP client: {}", e)))?;
 
@@ -3743,8 +3744,12 @@ pub(crate) async fn registry_fetch(url: &str, max_bytes: usize) -> Result<(Strin
     if !url.starts_with("https://") {
         return Err(anyhow::anyhow!("the registry is reached over https only ({url})"));
     }
+    // `no_proxy`: reqwest's default client follows HTTP(S)_PROXY/ALL_PROXY from the
+    // environment, which is one more way to redirect a registry request (review 2026-10-09,
+    // session 4, Issue M).
     let res = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .timeout(std::time::Duration::from_secs(30))
         .build()?
         .get(url)
@@ -4472,6 +4477,17 @@ fn extract_mnemonic_internal() -> Result<zeroize::Zeroizing<String>> {
 /// PIN, which the device proved at unlock; it is compared with the one that opened the wallet,
 /// so export needs no second touch. The phrase alone is returned, so a copy holds no prose.
 pub async fn export_keys(passphrase: String) -> Result<String> {
+    confirm_wallet_secret(&passphrase)?;
+    let mnemonic = extract_mnemonic_internal()?;
+    // The String handed to the UI is the one copy that cannot be wiped: it is displayed.
+    Ok(mnemonic.as_str().to_string())
+}
+
+/// The passphrase (or, on a YubiKey wallet, the PIN proved on the device) asked again before
+/// a secret is shown: an unlocked wallet left open is not consent to show its seed or its
+/// viewing key (audit 2026-10-08, Zecboat L; review 2026-10-09, session 4, Issue J for the
+/// viewing key).
+fn confirm_wallet_secret(passphrase: &str) -> Result<()> {
     if WALLET_PASSWORD.lock().unwrap().is_none() {
         anyhow::bail!("the wallet is locked");
     }
@@ -4486,21 +4502,22 @@ pub async fn export_keys(passphrase: String) -> Result<String> {
             .map(str::trim)
             .find(|l| l.starts_with("AGE-PLUGIN-YUBIKEY-"))
             .ok_or_else(|| anyhow::anyhow!("the YubiKey stub contains no identity line"))?;
-        let identity = crate::yubi::decrypt_with_yubikey(&std::fs::read(crate::paths::identity_path()?)?, line, &passphrase)
+        let identity = crate::yubi::decrypt_with_yubikey(&std::fs::read(crate::paths::identity_path()?)?, line, passphrase)
             .map_err(|_| anyhow::anyhow!("Incorrect PIN."))?;
         let ok = String::from_utf8(identity).map(|t| t.lines().any(|l| l.starts_with("AGE-SECRET-KEY-"))).unwrap_or(false);
         if !ok {
             anyhow::bail!("Incorrect PIN.");
         }
     } else {
-        verify_wallet_passphrase(&passphrase)?;
+        verify_wallet_passphrase(passphrase)?;
     }
-    let mnemonic = extract_mnemonic_internal()?;
-    // The String handed to the UI is the one copy that cannot be wiped: it is displayed.
-    Ok(mnemonic.as_str().to_string())
+    Ok(())
 }
 
-pub async fn get_viewkey() -> Result<String> {
+pub async fn get_viewkey(passphrase: String) -> Result<String> {
+    // The viewing key opens the wallet's whole past and future history; it is gated like the
+    // seed (review 2026-10-09, session 4, Issue J).
+    confirm_wallet_secret(&passphrase)?;
     let phrase = extract_mnemonic_internal()?;
     use zcash_protocol::consensus::MainNetwork;
     // Same derivation a send uses — one function, wallet.rs — so what this shows is

@@ -61,17 +61,34 @@ APPIMAGE="${_apps[0]-}"
 say "Verifying"
 TARGET="$([[ "$APPIMAGE_ONLY" -eq 1 ]] && echo "$APPIMAGE" || echo "$DEB")"
 [[ -f "$TARGET" ]] || die "$TARGET is not in $(pwd)"
-if [[ -f SHA256SUMS ]]; then
-  # Only the file being installed — the other may not have been copied across.
-  if grep " $TARGET\$" SHA256SUMS | sha256sum -c - >/dev/null 2>&1; then
-    info "$TARGET checksum OK"
-  else
-    die "checksum MISMATCH on $TARGET.
-    The copy is damaged. Recopy it. Installing a wallet binary you have not
-    verified is not worth the minute it saves."
-  fi
+# The sums are trusted only once their signature verifies under the release key. The key
+# ships beside them so this check needs no network; its hex is printed so you can compare it
+# with the one on zecboat.com/download, which is the comparison that makes it mean something.
+# Nothing is installed without it (review 2026-10-09, session 4, Issue K).
+[[ -f SHA256SUMS && -f SHA256SUMS.sig && -f release_public_key.hex ]] \
+  || die "SHA256SUMS, SHA256SUMS.sig and release_public_key.hex must all be beside this script; refusing to install an unverified package"
+command -v openssl >/dev/null || die "openssl is needed to verify the signature (apt install openssl)"
+command -v python3 >/dev/null || die "python3 is needed to verify the signature"
+PUBHEX="$(tr -d ' \n' < release_public_key.hex)"
+[[ "$PUBHEX" =~ ^[0-9a-f]{64}$ ]] || die "release_public_key.hex is not a 64-hex Ed25519 key"
+PDER="$(mktemp)"; PPEM="$(mktemp)"
+python3 -c "import binascii,sys;open(sys.argv[1],'wb').write(binascii.unhexlify('302a300506032b6570032100'+sys.argv[2]))" "$PDER" "$PUBHEX"
+openssl pkey -pubin -inform DER -in "$PDER" -out "$PPEM" 2>/dev/null || die "could not read the release public key"
+if openssl pkeyutl -verify -pubin -inkey "$PPEM" -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig >/dev/null 2>&1; then
+  info "SHA256SUMS signature OK under release key $PUBHEX"
+  info "compare that key with the one published at https://zecboat.com/download"
 else
-  warn "no SHA256SUMS here — cannot verify the copy"
+  rm -f "$PDER" "$PPEM"
+  die "SHA256SUMS.sig does NOT verify under the release key. Do not install this copy."
+fi
+rm -f "$PDER" "$PPEM"
+# Only the file being installed; the other may not have been copied across.
+if grep " $TARGET\$" SHA256SUMS | sha256sum -c - >/dev/null 2>&1; then
+  info "$TARGET checksum OK"
+else
+  die "checksum MISMATCH on $TARGET.
+  The copy is damaged. Recopy it. Installing a wallet binary you have not
+  verified is not worth the minute it saves."
 fi
 
 # --- dependencies -----------------------------------------------------------

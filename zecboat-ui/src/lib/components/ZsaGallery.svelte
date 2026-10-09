@@ -237,53 +237,6 @@
               ✓ Artwork matches the memo&rsquo;s commitment
               <span class="verify-detail">sha256 {verification.expected_hash.slice(0, 16)}… · {(verification.bytes / 1024).toFixed(0)} KB</span>
             </div>
-            <!-- The artwork check above says only that the bytes match the memo's identifier. A
-                 forger can copy a memo and point it at the same artwork and pass it too. The
-                 issuance badge below is the one that says who made this, and it is kept separate
-                 so the two can never merge into a single tick -- §12.1 forbids exactly that. -->
-            {#if isCheckingIssuance}
-              <div class="verify-badge checking">Checking issuance against a pinned issuer key…</div>
-            {:else if badge?.state === 'verified'}
-              <!-- The issuance check relates the memo's text to a manifest and the manifest's
-                   genesis output to the chain. Anyone can copy a memo, so on its own it says
-                   "this design is registered by…", not "this unit is genuine". The green tick
-                   and the word Verified belong to it only when the unit's lineage holds too
-                   (ZMAP §9: never "genuine" on checks 1-6 alone; audit 2026-10-08, ZMAP A).
-                   Green and the word Verified only when the lineage is Verified against this
-                   machine's own node: a provider-checked lineage is the provider's word, and
-                   WAKE-v1 §8.1(c) says that state must never look like Verified in wording,
-                   colour or mark (review 2026-10-09, Issue A: it did, here). -->
-              {@const lineageHolds = wake?.state === 'verified'}
-              <div class="verify-badge {lineageHolds ? 'ok' : 'neutral'}">
-                {lineageHolds ? '✓ Verified — issued by' : '▫ Design registered by'} {badge.issuer}{#if badge.issuer_key}<code class="ik" title={`issuance key ${badge.issuer_key}`}> · key {badge.issuer_key.slice(0, 8)}</code>{/if}{#if badge.found_in_registry_at}<span class="via-registry" title={`Found in the Zecboat Registry and audited to block ${badge.found_in_registry_at}, from the chain. zecboat.com was not needed.`}> · via Zecboat Registry</span>{/if}
-                <!-- One line is the verdict. The checks, the anchor and the caveat are one click
-                     away, not gone: the caveat still travels with the tick, so the badge states
-                     its own limits to anyone who asks what "verified" covered. -->
-                <details class="verify-details">
-                  <summary>what was checked</summary>
-                  {#each badge.checks as c}<span class="check-line">✓ {c}</span>{/each}
-                  <span class="check-line mono">issuance {badge.issuance_txid.slice(0, 16)}… · height {badge.issuance_height.toLocaleString()}</span>
-                  <span class="check-line caveat">{badge.caveat}</span>
-                </details>
-              </div>
-            {:else if badge?.state === 'not_listed'}
-              <div class="verify-badge bad">
-                ✕ Not issued by {badge.issuer}
-                <span class="verify-detail">{badge.detail}</span>
-              </div>
-            {:else if badge?.state === 'signature_failed'}
-              <div class="verify-badge bad">
-                ✕ Issuance check failed
-                <span class="verify-detail">{badge.detail}</span>
-              </div>
-            {:else if badge?.state === 'could_not_check'}
-              <!-- NOT a verdict about the asset. Rendering this as a failure would defame a
-                   holder whose network is simply down. -->
-              <div class="verify-badge unknown">
-                Issuance could not be checked
-                <span class="verify-detail">{badge.detail}</span>
-              </div>
-            {/if}
           {:else if verification && !verification.verified}
             <div class="verify-badge bad">
               ✕ Artwork does NOT match the memo
@@ -293,6 +246,60 @@
             <div class="verify-badge unknown">
               Artwork could not be verified
               <span class="verify-detail">{verifyError}</span>
+            </div>
+          {/if}
+          <!-- Issuance, rendered on its own: until 2026-10-09 it sat inside the artwork-verified branch,
+               so with the artwork host down the issuer verdict was not shown at all (review, session 4,
+               Issue N). The artwork check says only that the bytes match the memo's identifier. A
+               forger can copy a memo and point it at the same artwork and pass it too. The
+               issuance badge below is the one that says who made this, and it is kept separate
+               so the two can never merge into a single tick -- §12.1 forbids exactly that. -->
+          {#if isCheckingIssuance}
+            <div class="verify-badge checking">Checking issuance against a pinned issuer key…</div>
+          {:else if badge?.state === 'verified'}
+            <!-- The issuance check relates the memo's text to a manifest and the manifest's
+                 genesis output to the chain. Anyone can copy a memo, so on its own it says
+                 "this design is registered by…", not "this unit is genuine". The green tick
+                 and the word Verified belong to it only when the unit's lineage holds too
+                 (ZMAP §9: never "genuine" on checks 1-6 alone; audit 2026-10-08, ZMAP A).
+                 Green and the word Verified only when the lineage is Verified against this
+                 machine's own node: a provider-checked lineage is the provider's word, and
+                 WAKE-v1 §8.1(c) says that state must never look like Verified in wording,
+                 colour or mark (review 2026-10-09, Issue A: it did, here). -->
+            {@const lineageHolds = wake?.state === 'verified'}
+            {@const pinnedIssuer = !badge.found_in_registry_at}
+            <!-- Green needs a key pinned in this wallet as well: the Registry is open, and a
+                 name plus a short key fragment is forgeable (review 2026-10-09, session 4,
+                 Issue A). A registry-only collection is "registered", never green. The
+                 fingerprint is long for the same reason. -->
+            <div class="verify-badge {lineageHolds && pinnedIssuer ? 'ok' : 'neutral'}">
+              {lineageHolds && pinnedIssuer ? '✓ Verified — issued by' : (pinnedIssuer ? '▫ Design registered by' : '▫ In the Zecboat Registry as')} {badge.issuer}{#if badge.issuer_key}<code class="ik" title={`issuance key ${badge.issuer_key}`}> · key {badge.issuer_key.slice(0, 12)}…{badge.issuer_key.slice(-12)}</code>{/if}{#if !pinnedIssuer} · not a collection this wallet knows: compare the full key with one the issuer published{/if}{#if badge.found_in_registry_at}<span class="via-registry" title={`Found in the Zecboat Registry and audited to block ${badge.found_in_registry_at}, from the chain. zecboat.com was not needed.`}> · via Zecboat Registry</span>{/if}
+              <!-- One line is the verdict. The checks, the anchor and the caveat are one click
+                   away, not gone: the caveat still travels with the tick, so the badge states
+                   its own limits to anyone who asks what "verified" covered. -->
+              <details class="verify-details">
+                <summary>what was checked</summary>
+                {#each badge.checks as c}<span class="check-line">✓ {c}</span>{/each}
+                <span class="check-line mono">issuance {badge.issuance_txid.slice(0, 16)}… · height {badge.issuance_height.toLocaleString()}</span>
+                <span class="check-line caveat">{badge.caveat}</span>
+              </details>
+            </div>
+          {:else if badge?.state === 'not_listed'}
+            <div class="verify-badge bad">
+              ✕ Not issued by {badge.issuer}
+              <span class="verify-detail">{badge.detail}</span>
+            </div>
+          {:else if badge?.state === 'signature_failed'}
+            <div class="verify-badge bad">
+              ✕ Issuance check failed
+              <span class="verify-detail">{badge.detail}</span>
+            </div>
+          {:else if badge?.state === 'could_not_check'}
+            <!-- NOT a verdict about the asset. Rendering this as a failure would defame a
+                 holder whose network is simply down. -->
+            <div class="verify-badge unknown">
+              Issuance could not be checked
+              <span class="verify-detail">{badge.detail}</span>
             </div>
           {/if}
           <!-- Lineage (Wake). Rendered on its own, outside the artwork branch: a unit with no

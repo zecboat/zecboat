@@ -100,6 +100,11 @@ pub struct ZmapRecord {
     /// SHA-256 of the artwork, when the memo commits to one. Enables zero-trust verification.
     pub image_hash: Option<String>,
     pub dialect: Dialect,
+    /// Identity v1: the issuance key and the description the asset id derives from, when the
+    /// memo carries them. The one strict reading of a carrier memo, so the item list, the
+    /// collection audit and Collections agree (review 2026-10-09, session 4, Issue E).
+    pub ik: Option<String>,
+    pub desc: Option<String>,
     /// ZMAP v0.5 §15: SHA-256 of the lading delivered with this carrier, when the sender
     /// committed to one. Absent means **unproven**, never invalid.
     pub consignment_hash: Option<String>,
@@ -215,6 +220,7 @@ pub fn memo_text(memo: &[u8]) -> Option<String> {
 #[derive(Deserialize)]
 struct JsonMemo {
     asset_id: String,
+    ik: Option<String>,
     /// Identity v1: the description `asset_id` is derived from (with the memo's `ik`). A memo
     /// carrying it can drop `name`, `symbol` and `image_hash`: [`desc_fields`] recovers them.
     desc: Option<String>,
@@ -250,7 +256,10 @@ pub fn parse_memo(memo: &[u8]) -> Option<ZmapRecord> {
     // Dialect 1: JSON.
     if text.starts_with('{') {
         if let Ok(j) = serde_json::from_str::<JsonMemo>(&text) {
-            if j.asset_id.len() == 64 && j.asset_id.chars().all(|c| c.is_ascii_hexdigit()) {
+            // ZMAP §4: `asset_id` is 64 lower-case hex characters. An upper-case copy used to
+            // be a holding of its own that sorted before the genuine unit and spoke for it in
+            // the issuance check (review 2026-10-09, session 4, Issue B); it is not a unit.
+            if j.asset_id.len() == 64 && j.asset_id.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) {
                 // ZMAP §4: an identity-v1 memo's asset id MUST derive from its ik and desc. A memo
                 // that says otherwise is not a unit of anything and is not listed (audit
                 // 2026-10-08, ZMAP K); until then the derivation was checked only when sending.
@@ -266,25 +275,37 @@ pub fn parse_memo(memo: &[u8]) -> Option<ZmapRecord> {
                         }
                     }
                 }
-                // A v1 memo may carry only `ik` + `desc` (a transfer memo, ZMAP v0.5 §15): the
-                // name, symbol and image hash are read from the description it already holds.
+                // A v1 memo carries `ik` + `desc` (a transfer memo, ZMAP v0.5 §15), and §4 says
+                // its name, symbol and image hash are *derived* from the description the id
+                // commits to. They are, and only from it: free `name`/`image_hash` fields in a
+                // v1 memo are the sender's to write and used to win (review 2026-10-09,
+                // session 4, Issue F). A pre-v1 memo has no description and keeps its fields.
                 let from_desc = j.desc.as_deref().and_then(desc_fields);
+                let v1 = j.ik.is_some() && from_desc.is_some();
                 return Some(ZmapRecord {
-                    name: j
-                        .name
-                        .clone()
-                        .or_else(|| from_desc.as_ref().map(|d| d.0.clone()))
-                        .unwrap_or_else(|| j.asset_id[..8].to_string()),
+                    name: if v1 {
+                        from_desc.as_ref().map(|d| d.0.clone()).unwrap_or_default()
+                    } else {
+                        j.name
+                            .clone()
+                            .or_else(|| from_desc.as_ref().map(|d| d.0.clone()))
+                            .unwrap_or_else(|| j.asset_id[..8].to_string())
+                    },
                     // Pre-v1 memos: asset_id is the content hash, so it doubles as the image hash.
-                    image_hash: j
-                        .image_hash
-                        .clone()
-                        .or_else(|| from_desc.as_ref().map(|d| d.2.clone()))
-                        .or_else(|| Some(j.asset_id.clone())),
+                    image_hash: if v1 {
+                        from_desc.as_ref().map(|d| d.2.clone()).filter(|h| !h.is_empty())
+                    } else {
+                        j.image_hash
+                            .clone()
+                            .or_else(|| from_desc.as_ref().map(|d| d.2.clone()))
+                            .or_else(|| Some(j.asset_id.clone()))
+                    },
                     metadata_uri: j.metadata_uri.clone(),
-                    symbol: j.symbol.clone().or_else(|| from_desc.as_ref().map(|d| d.1.clone())),
+                    symbol: if v1 { from_desc.as_ref().map(|d| d.1.clone()) } else { j.symbol.clone().or_else(|| from_desc.as_ref().map(|d| d.1.clone())) },
                     decimals: j.decimals.unwrap_or(0),
                     asset_id: j.asset_id,
+                    ik: j.ik.map(|k| k.to_ascii_lowercase()),
+                    desc: j.desc.clone(),
                     dialect: Dialect::Json,
                     consignment_hash: j
                         .consignment_hash
@@ -313,6 +334,8 @@ pub fn parse_memo(memo: &[u8]) -> Option<ZmapRecord> {
         decimals: 0,
         metadata_uri: legacy_metadata_uri(text.as_str()),
         image_hash: Some(hash),
+        ik: None,
+        desc: None,
         dialect: Dialect::LegacyProse,
         consignment_hash: None,
     })
@@ -2050,6 +2073,32 @@ mod memo_v1_tests {
     }
 
     /// A memo whose asset id does not derive from its ik and desc is a forgery: never re-issued.
+    #[test]
+    fn an_upper_case_asset_id_is_not_a_unit() {
+        // ZMAP §4: lower-case hex. An upper-case copy used to be a holding of its own that
+        // sorted before the genuine unit and spoke for it in the issuance check (review
+        // 2026-10-09, session 4, Issue B).
+        let lower = parse_memo(BCN26_010.as_bytes()).expect("the genuine memo parses");
+        let upper = BCN26_010.replace(&lower.asset_id, &lower.asset_id.to_ascii_uppercase());
+        assert_ne!(upper, BCN26_010);
+        assert!(parse_memo(upper.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn a_v1_memo_takes_name_symbol_and_image_hash_from_its_description_only() {
+        // §4: a v1 reader derives them from `desc`; free fields are the sender's to write
+        // (review 2026-10-09, session 4, Issue F).
+        let r = parse_memo(BCN26_010.as_bytes()).unwrap();
+        let (name, symbol, image) = desc_fields(r.desc.as_deref().unwrap()).unwrap();
+        assert_eq!((r.name.as_str(), r.symbol.as_deref(), r.image_hash.as_deref()), (name.as_str(), Some(symbol.as_str()), Some(image.as_str())));
+        let mut v: serde_json::Value = serde_json::from_str(BCN26_010).unwrap();
+        v["name"] = serde_json::Value::String("Not this".into());
+        v["image_hash"] = serde_json::Value::String("f".repeat(64));
+        let r2 = parse_memo(v.to_string().as_bytes()).unwrap();
+        assert_eq!((r2.name, r2.image_hash), (r.name, r.image_hash), "free fields do not win over the description");
+        assert_eq!(r2.ik.as_deref().map(str::len), Some(64));
+    }
+
     #[test]
     fn a_v1_memo_whose_id_does_not_derive_is_not_a_unit() {
         // ZMAP §4 at parse time (audit 2026-10-08, ZMAP K; test added 2026-10-09, regression

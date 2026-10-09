@@ -114,6 +114,11 @@
   let fee = $state<Fee | null>(null);
   // A send whose real fee came out above the estimate shown: the figure to confirm.
   let feeNotice = $state<{ fee_zat: number; text: string } | null>(null);
+  // Who answers the chain questions a lineage proof needs, shown on the confirmation.
+  let chainSource = $state<string | null>(null);
+  invoke<{ choice: string; source: string }>("get_chain_source")
+    .then((c) => { chainSource = c.choice === "node" ? "your own node" : c.choice === "provider" ? "your provider" : "your node when it answers, else your provider"; })
+    .catch(() => { chainSource = null; });
   let acceptedFeeZat = $state<number | null>(null);
   invoke<Fee>("fee_readiness").then((f) => { fee = f; }).catch(() => { fee = null; });
   // What this particular item's send will carry and cost (0.7.1). The flat figure above is the
@@ -165,12 +170,22 @@
               memo = m;
             }
           }
-          if (params.has("message")) {
+          // ZIP 321: `message` is a label for the payer, `memo` is what is sent. Until
+          // 2026-10-09 a `message` silently replaced the memo, and unknown required
+          // parameters were ignored (review, session 4, Issue H).
+          if (params.has("message") && !params.has("memo")) {
             memo = params.get("message") || "";
+          }
+          for (const k of params.keys()) {
+            if (k.startsWith("req-")) {
+              throw new Error(`this payment request needs "${k}", which Zecboat does not support`);
+            }
           }
         }
       } catch (e) {
-        console.error("Failed to parse Zcash URI", e);
+        // A request this wallet cannot honour is said, not logged: a required parameter it
+        // does not support, or a malformed address part.
+        txResult = { success: false, message: `Payment request not accepted: ${String((e as any)?.message ?? e)}` };
       }
     }
   }
@@ -404,15 +419,30 @@
           <span class="label">To:</span>
           <span class="value">{toAddress}</span>
         </div>
-        <div class="detail-row amount-row">
-          <span class="label">Amount:</span>
-          <span class="value amount-value">{amount} {assetType}</span>
-        </div>
-        {#if memo}
-          <div class="detail-row memo-row">
-            <span class="label">Message:</span>
-            <span class="value memo-value">{memo}</span>
+        {#if assetType === "ZSA"}
+          <!-- Exactly one unit moves, carried by its 0.0001 ZEC note, with its own memo; the
+               amount and message fields do not apply and are not sent (review 2026-10-09). -->
+          <div class="detail-row amount-row">
+            <span class="label">Sends:</span>
+            <span class="value amount-value">1 unit (its 0.00010000 ZEC carrier note and its memo)</span>
           </div>
+          {#if chainSource}
+            <div class="detail-row">
+              <span class="label">Chain answers from:</span>
+              <span class="value">{chainSource}</span>
+            </div>
+          {/if}
+        {:else}
+          <div class="detail-row amount-row">
+            <span class="label">Amount:</span>
+            <span class="value amount-value">{amount} {assetType}</span>
+          </div>
+          {#if memo}
+            <div class="detail-row memo-row">
+              <span class="label">Message:</span>
+              <span class="value memo-value">{memo}</span>
+            </div>
+          {/if}
         {/if}
       </div>
       
@@ -458,7 +488,7 @@
           </div>
         {/if}
         <button class="btn secondary" onclick={cancelSend} disabled={isSending}>Cancel</button>
-        <button class="btn primary" onclick={() => { if (feeNotice) { acceptedFeeZat = feeNotice.fee_zat; feeNotice = null; } confirmAndSend(); }} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven) || (yubikeyWallet && !yubikeyPresent)}>
+        <button class="btn primary" onclick={() => { if (feeNotice) { acceptedFeeZat = feeNotice.fee_zat; feeNotice = null; } confirmAndSend(); }} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven) || (yubikeyWallet && !yubikeyPresent) || (assetType === "ZSA" && !estimate)}>
           {#if isSending && yubiMsg}
             <span>👉 {yubiMsg}</span>
           {:else if isSending}

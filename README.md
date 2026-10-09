@@ -3,8 +3,10 @@
 A desktop Zcash wallet that holds **shielded assets** as well as ZEC.
 
 A shielded asset here is an ordinary Zcash note carrying a memo that names it. Sending one spends
-that exact note and reproduces the memo byte for byte, so custody changes hands while identity does
-not. It is an ordinary shielded note underneath — no new cryptography, no second chain, no bridge.
+that exact note and writes the same identity into the next note's memo (ZMAP §5.3: the asset id,
+the issuer key and the description it derives from, plus the hash of the unit's lineage record),
+so custody changes hands while identity does not. It is an ordinary shielded note underneath: no
+new cryptography, no second chain, no bridge.
 
 Built on the Ironwood (NU6.3) `librustzcash` stack. Rust core, Tauri 2 shell, Svelte 5 interface.
 
@@ -12,8 +14,9 @@ Built on the Ironwood (NU6.3) `librustzcash` stack. Rust core, Tauri 2 shell, Sv
 
 ## ⚠️ Beta software
 
-**Zecboat has not had an independent security review.** It is unsigned, has no installer and no
-automatic updates, and it handles real money on Zcash mainnet.
+**Zecboat has not had an independent security review.** Releases are signed (an Ed25519 signature
+over the download's hashes, checked by the installer against the published key); there are no
+automatic updates, and it handles real value on Zcash mainnet.
 
 **Use amounts you can afford to lose**, and read [Backups](#backups) before putting funds in it.
 

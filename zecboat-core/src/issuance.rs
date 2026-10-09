@@ -70,6 +70,11 @@ use serde::{Deserialize, Serialize};
 /// probed only that path — which is how "Barcelona has no manifest" got written into
 /// CLAUDE.md while a generation-2 manifest had been live for ten days. Read what is served
 /// before designing where it should be.
+/// The pre-v1 pinned issuers' names and keys, for look-alike checks against registrations.
+pub fn pinned_issuer_names() -> Vec<(&'static str, &'static str)> {
+    PINNED_ISSUERS.iter().map(|(l, k, _)| (*l, *k)).collect()
+}
+
 const PINNED_ISSUERS: &[(&str, &str, &str)] = &[
     (
         "Happy Birthday Zcash",

@@ -74,6 +74,9 @@
 
   // Export asks for the passphrase (or YubiKey PIN) again (audit 2026-10-08, Zecboat L).
   let showExportInput = $state(false);
+  // What the passphrase prompt reveals: the recovery phrase, or the full viewing key, which
+  // opens the wallet's whole history and is gated the same way (review 2026-10-09).
+  let exportWhat = $state<'seed' | 'viewkey'>('seed');
   let exportSecret = $state("");
   let exportUsesYubikey = $state(false);
   let isExporting = $state(false);
@@ -220,10 +223,16 @@
     if (!exportSecret) return;
     isExporting = true;
     try {
-      const phrase: string = await invoke("export_keys", { passphrase: exportSecret });
-      showExportInput = false;
-      // The phrase alone is the copy value; the words around it are only shown.
-      actionFeedback = { type: 'success', message: 'Your recovery phrase. Write it down; anyone who has it holds this wallet.', detail: phrase, copyValue: phrase };
+      if (exportWhat === 'viewkey') {
+        const key: string = await invoke("get_viewkey", { passphrase: exportSecret });
+        showExportInput = false;
+        actionFeedback = { type: 'success', message: 'Your full viewing key. Anyone who has it can read every transaction of this wallet, past and future.', detail: key, copyValue: key };
+      } else {
+        const phrase: string = await invoke("export_keys", { passphrase: exportSecret });
+        showExportInput = false;
+        // The phrase alone is the copy value; the words around it are only shown.
+        actionFeedback = { type: 'success', message: 'Your recovery phrase. Write it down; anyone who has it holds this wallet.', detail: phrase, copyValue: phrase };
+      }
     } catch (e: any) {
       actionFeedback = { type: 'error', message: `${e}` };
     } finally {
@@ -233,7 +242,8 @@
   }
 
   async function handleAction(action: string) {
-    if (action === 'Export Keys') {
+    if (action === 'Export Keys' || action === 'Get Viewkey') {
+      exportWhat = action === 'Get Viewkey' ? 'viewkey' : 'seed';
       showExportInput = true;
       showImportInput = false;
       showRestoreInput = false;
@@ -308,9 +318,6 @@
       } else if (action === 'Backup Wallet') {
         const res: string = await invoke("backup_wallet");
         actionFeedback = { type: 'success', message: res };
-      } else if (action === 'Get Viewkey') {
-        const res: string = await invoke("get_viewkey");
-        actionFeedback = { type: 'success', message: 'Full Viewing Key generated safely!', detail: res, copyValue: res };
       } else if (action === 'Remove YubiKey') {
         actionFeedback = { type: 'success', message: 'YubiKey removed from wallet configuration. Database re-encrypted with standard password.' };
       }
@@ -459,13 +466,13 @@
     
     {#if showExportInput}
       <div class="import-section slide-in">
-        <label for="export-secret">{exportUsesYubikey ? "YubiKey PIN" : "Wallet password"}, to show the recovery phrase</label>
+        <label for="export-secret">{exportUsesYubikey ? "YubiKey PIN" : "Wallet password"}, to show the {exportWhat === 'viewkey' ? 'full viewing key' : 'recovery phrase'}</label>
         <input id="export-secret" type="password" autocomplete="current-password" bind:value={exportSecret}
                disabled={isExporting} onkeydown={(e) => { if (e.key === 'Enter') confirmExport(); }} />
         <div class="import-actions">
           <button class="btn secondary" onclick={() => { showExportInput = false; exportSecret = ""; }} disabled={isExporting}>Cancel</button>
           <button class="btn primary" onclick={confirmExport} disabled={isExporting || !exportSecret}>
-            {isExporting ? "Checking..." : "Show phrase"}
+            {isExporting ? "Checking..." : (exportWhat === 'viewkey' ? "Show viewing key" : "Show phrase")}
           </button>
         </div>
       </div>

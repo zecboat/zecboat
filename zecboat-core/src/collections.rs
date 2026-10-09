@@ -370,23 +370,49 @@ pub struct Held {
 }
 
 /// Group carrier memos by the collection key they name. Pure; used by [`holdings_by_ik`].
+/// A name reduced for comparison: lower case, letters and digits only, with the common
+/// Cyrillic and Greek look-alikes folded onto their Latin twins. Two registrations whose
+/// skeletons match but whose keys differ are shown as look-alikes (review 2026-10-09,
+/// session 4, Issue A). A short table, not UTS #39: it catches the cheap cases.
+pub fn name_skeleton(name: &str) -> String {
+    name.chars()
+        .filter_map(|c| {
+            let c = match c {
+                'а' | 'α' => 'a', 'е' | 'ε' => 'e', 'о' | 'ο' => 'o', 'р' | 'ρ' => 'p', 'с' | 'ϲ' => 'c', 'х' | 'χ' => 'x',
+                'у' | 'υ' => 'y', 'і' | 'ι' => 'i', 'ј' => 'j', 'ѕ' => 's', 'ԁ' => 'd', 'ν' => 'v', 'к' | 'κ' => 'k', 'т' | 'τ' => 't',
+                'н' => 'h', 'в' => 'b', 'м' => 'm', 'ⅼ' | 'ӏ' | '1' | 'l' => 'l', '0' => 'o',
+                other => other,
+            };
+            let c = c.to_ascii_lowercase();
+            c.is_ascii_alphanumeric().then_some(c)
+        })
+        .collect()
+}
+
 pub fn group_held(memos: &[Vec<u8>]) -> std::collections::HashMap<String, Held> {
+    // One strict reading of a memo, the item list's (`parse_memo`): duplicate keys and
+    // upper-case ids are refused there, and used to be accepted here (review 2026-10-09,
+    // session 4, Issue E). `parse_memo` already refuses a v1 memo whose id does not derive, so
+    // `bad_ids` counts memos that name this key and fail that reading.
     let mut out: std::collections::HashMap<String, Held> = std::collections::HashMap::new();
     for m in memos {
         let text = trim(m);
         if text.first() != Some(&b'{') {
             continue;
         }
-        let Ok(j) = serde_json::from_slice::<serde_json::Value>(text) else { continue };
-        let (Some(ik), Some(id), Some(desc)) = (j["ik"].as_str(), j["asset_id"].as_str(), j["desc"].as_str()) else { continue };
-        let Ok(ik_bytes) = hex::decode(ik) else { continue };
-        let Ok(ik_arr) = <[u8; 32]>::try_from(ik_bytes.as_slice()) else { continue };
-        let e = out.entry(ik.to_ascii_lowercase()).or_default();
-        if crate::issuance_v1::derive_asset_id(&ik_arr, desc).eq_ignore_ascii_case(id) {
-            e.count += 1;
-            e.asset_ids.push(id.to_ascii_lowercase());
-        } else {
-            e.bad_ids += 1;
+        match crate::zmap::parse_memo(text) {
+            Some(r) => {
+                let (Some(ik), Some(_)) = (r.ik.as_deref(), r.desc.as_deref()) else { continue };
+                let e = out.entry(ik.to_ascii_lowercase()).or_default();
+                e.count += 1;
+                e.asset_ids.push(r.asset_id.to_ascii_lowercase());
+            }
+            None => {
+                let Ok(j) = serde_json::from_slice::<serde_json::Value>(text) else { continue };
+                if let (Some(ik), Some(_), Some(_)) = (j["ik"].as_str(), j["asset_id"].as_str(), j["desc"].as_str()) {
+                    out.entry(ik.to_ascii_lowercase()).or_default().bad_ids += 1;
+                }
+            }
         }
     }
     out
@@ -506,6 +532,27 @@ mod tests {
     }
 
     /// Anyone can send to the registry. A registration claiming someone else's ik must fail.
+    #[test]
+    fn held_memos_are_read_by_the_one_strict_parser() {
+        // Duplicate keys and upper-case ids are refused by the item list's parser; Collections
+        // used to read them with a lenient one and count them (review 2026-10-09, session 4,
+        // Issue E).
+        let ik = [7u8; 32];
+        let desc = "zmap-desc-v1|Coll|1|Coll #001|CL|".to_string() + &"a".repeat(64);
+        let id = crate::issuance_v1::derive_asset_id(&ik, &desc);
+        let good = format!(r#"{{"asset_id":"{id}","ik":"{}","desc":"{desc}"}}"#, hex::encode(ik));
+        let upper = good.replace(&id, &id.to_ascii_uppercase());
+        let dup = format!(r#"{{"asset_id":"{id}","ik":"{}","desc":"other","desc":"{desc}"}}"#, hex::encode(ik));
+        let forged = good.replace(&id[..8], "deadbeef");
+        let held = group_held(&[good.into_bytes(), upper.into_bytes(), dup.into_bytes(), forged.into_bytes()]);
+        let h = &held[&hex::encode(ik)];
+        // One genuine memo counts; every memo naming this key that the strict reader refuses
+        // (a forged id, an upper-case id, duplicate keys) is flagged, none is counted as held.
+        assert_eq!((h.count, h.bad_ids), (1, 3));
+        assert_eq!(name_skeleton("Lagоs Post Card"), name_skeleton("Lagos Post Card"), "Cyrillic о folds onto o");
+        assert_ne!(name_skeleton("Lagos Post Card"), name_skeleton("Lagos Post Card 2"));
+    }
+
     #[test]
     fn a_registration_under_someone_elses_ik_fails() {
         let mut memos = tx("Lagos Post Card", UFVK);

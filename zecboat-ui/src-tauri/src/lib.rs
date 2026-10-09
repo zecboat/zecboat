@@ -338,8 +338,8 @@ async fn export_keys(passphrase: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn get_viewkey() -> Result<String, String> {
-    zecboat_core::get_viewkey().await.map_err(|e| e.to_string())
+async fn get_viewkey(passphrase: String) -> Result<String, String> {
+    zecboat_core::get_viewkey(passphrase).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

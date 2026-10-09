@@ -450,10 +450,19 @@ pub fn dropbox_choice() -> String {
 }
 
 fn dropbox_from_env() -> Option<String> {
+    // The same rule as the Settings path: https or a local folder, nothing else (review
+    // 2026-10-09, session 4, Issue M: the environment value was not checked).
     std::env::var("ZECBOAT_DROPBOX")
         .ok()
         .map(|s| s.trim().trim_end_matches('/').to_string())
         .filter(|s| !s.is_empty())
+        .filter(|s| {
+            let ok = s.starts_with("https://") || s.starts_with("file://");
+            if !ok {
+                eprintln!("[wake] ZECBOAT_DROPBOX={s:?} is neither https:// nor file://; ignored");
+            }
+            ok
+        })
 }
 
 /// Whether any drop-box is in use: only when one is named, in Settings or by `ZECBOAT_DROPBOX`.
@@ -504,6 +513,7 @@ pub fn dropbox_put(hash_hex: &str, sealed: &[u8]) -> Result<()> {
     let url = format!("{base}/{hash_hex}");
     let res = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
+        .no_proxy()
         .build()?
         .put(&url)
         .header("content-type", "application/json")
@@ -533,6 +543,7 @@ pub fn dropbox_get(hash_hex: &str) -> Result<Option<Vec<u8>>> {
     let url = format!("{base}/{hash_hex}");
     let res = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
+        .no_proxy()
         .build()?
         .get(&url)
         .send()

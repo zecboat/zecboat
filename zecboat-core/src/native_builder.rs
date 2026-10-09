@@ -916,6 +916,21 @@ pub fn send_zmap_asset(
             Pairing::Mispaired { action_index } => {
                 println!("[zsa] attempt {attempt}: carrier spend in Action {action_index} was paired with change; rebuilding");
             }
+            // An Orchard-pool carrier (pre-NU6.3) is spent in the Orchard bundle and its
+            // successor is an Ironwood output, so the one-Action pairing of ZMAP §5.5 cannot
+            // hold and WAKE (Ironwood only, WAKE-v1 §2) cannot follow it. It moves, unproven;
+            // it used to fail as "internal" (review 2026-10-09, session 4, Issue N).
+            Pairing::CarrierSpendMissing if source_pool == ShieldedPool::Orchard => {
+                if wake_lading.is_some() {
+                    return Err(anyhow!(
+                        "an Orchard-pool carrier cannot carry a Wake lineage (WAKE-v1 section 2: Ironwood only); \
+                         it can only be sent unproven"
+                    ));
+                }
+                println!("[zsa] Orchard-pool carrier: no Action pairing is possible across bundles; sending unproven (attempt {attempt})");
+                paired = Some((candidate, usize::MAX, [0u8; 32]));
+                break;
+            }
             Pairing::CarrierSpendMissing => {
                 return Err(anyhow!(
                     "internal: the built transaction does not spend the asset's carrier"
@@ -996,6 +1011,10 @@ pub fn send_zmap_asset(
         let conn = rusqlite::Connection::open(wallet_db_path()?)
             .map_err(|e| anyhow!("could not open the wallet to record the lineage: {}", e))?;
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
+        if successor_action_index == usize::MAX {
+            // An Orchard-pool carrier: no successor Action to record (see the pairing above).
+            return Ok(());
+        }
         let mut successor_txid = [0u8; 32];
         successor_txid.copy_from_slice(txid.as_ref());
         let spent_index = u32::try_from(plan.carrier.output_index())

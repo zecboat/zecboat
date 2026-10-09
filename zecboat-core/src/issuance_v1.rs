@@ -30,9 +30,16 @@ pub const PERSONAL: &[u8; 15] = b"ZMAP-AssetID-v1";
 pub const VERSION: u8 = 1;
 
 /// Collections under identity v1 pinned in this build: (label, ik hex, manifest location
-/// relative to the registry base). Empty until the first real collection is minted; the owner
-/// adds a line per collection, as for `PINNED_ISSUERS`.
-pub const PINNED_V1: &[(&str, &str, &str)] = &[];
+/// relative to the registry base). A pinned key is the only thing that lets a collection's
+/// green badge mean "the issuer this wallet knows": the Registry is open and self-signed, and
+/// a name plus a short key fragment is forgeable (review 2026-10-09, session 4, Issue A: a
+/// 32-bit fragment ground in under two hours). A collection found only in the Registry is
+/// shown as registered, never green. The owner adds a line per collection they vouch for.
+pub const PINNED_V1: &[(&str, &str, &str)] = &[
+    ("Lagos Post Card", "e9be4cf91390aba0740ce108a0c2f390d1610ef5c77ede09b445e888fd79b590", "issuance/lpc_issuance_manifest.json"),
+    ("Happy Birthday Zcash 10", "1ba0bd2f1a1891d616ce912b5e02c38069a9ec87d6b33769bdd8a00741ce1fa0", "issuance/hbd10_issuance_manifest.json"),
+    ("Barcelona Post Card 2026", "d289030848144bc321be1030051f90dbf170f0c6752ab8dbf6ed029658d1a820", "issuance/bcn26_issuance_manifest.json"),
+];
 
 /// The Zecboat Registry (created 2026-09-27, `~/zecboat_registry/ZECBOAT_REGISTRY.md`): the one
 /// account every identity-v1 collection registers with. From this viewing key and birthday alone,
@@ -108,23 +115,41 @@ async fn fetch(source: &str, suffix: &str) -> std::result::Result<Vec<u8>, Strin
         let p = if suffix == ".sig" { path.replace(".json", ".sig") } else { path.to_string() };
         return std::fs::read(&p).map_err(|e| format!("{p}: {e}"));
     }
-    let url = format!("{}/{}{}", crate::rpc::registry_base(), source.trim_start_matches('/'), suffix);
+    // `name.json` and `name.sig` side by side, as the site publishes them.
+    let path = if suffix == ".sig" && source.ends_with(".json") {
+        source.trim_start_matches('/').trim_end_matches(".json").to_string() + ".sig"
+    } else {
+        format!("{}{}", source.trim_start_matches('/'), suffix)
+    };
+    let url = format!("{}/{}", crate::rpc::registry_base(), path);
     crate::rpc::registry_fetch(&url, crate::issuance::MAX_MANIFEST_BYTES)
         .await
         .map(|(_, b)| b)
         .map_err(|e| e.to_string())
 }
 
-/// The holder's own carrier memo for `asset_id`, as JSON, if this wallet holds one.
-fn holder_memo(asset_id: &str) -> Option<Value> {
-    let db = crate::paths::as_string::wallet_db_path().ok()?;
-    let conn = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
-    let rows = crate::zmap::read_carrier_rows(&conn).ok()?;
+/// Every carrier memo this wallet holds for `asset_id`, as JSON. All of them, not the first:
+/// a copy anyone can send used to be the one memo read, and framed the genuine unit as
+/// "Not issued by" (review 2026-10-09, session 4, Issue B).
+fn holder_memos(asset_id: &str) -> Vec<Value> {
+    let Ok(db) = crate::paths::as_string::wallet_db_path() else { return Vec::new() };
+    let Ok(conn) = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else { return Vec::new() };
+    let Ok(rows) = crate::zmap::read_carrier_rows(&conn) else { return Vec::new() };
     let holdings = crate::zmap::holdings_from_rows(rows);
-    let h = holdings.iter().find(|h| h.asset_id.eq_ignore_ascii_case(asset_id))?;
-    let memo = &h.carriers.first()?.memo;
-    let end = memo.iter().position(|&b| b == 0).unwrap_or(memo.len());
-    serde_json::from_slice(&memo[..end]).ok()
+    holdings
+        .iter()
+        .filter(|h| h.asset_id.eq_ignore_ascii_case(asset_id))
+        .flat_map(|h| h.carriers.iter())
+        .filter_map(|c| {
+            let end = c.memo.iter().position(|&b| b == 0).unwrap_or(c.memo.len());
+            serde_json::from_slice(&c.memo[..end]).ok()
+        })
+        .collect()
+}
+
+/// The first memo for `asset_id`, kept for the registry path's "is it registered" lookup.
+fn holder_memo(asset_id: &str) -> Option<Value> {
+    holder_memos(asset_id).into_iter().next()
 }
 
 /// The v1 badge, if any v1 pin lists `asset_id`. `None` when no v1 pin knows the asset (the
@@ -177,7 +202,25 @@ pub async fn verify(asset_id: &str) -> Option<BadgeState> {
     };
     let asset = v["assets"].as_array().and_then(|x| x.iter().find(|x| x["asset_id"].as_str().map(|s| s.eq_ignore_ascii_case(asset_id)).unwrap_or(false))).cloned()?;
     let pin = Pin { label: a.name.clone(), ik, source: "zecboat-registry".into(), test_only: false };
-    Some(check(&pin, &body, &v, &sig, &asset, asset_id, Some(a.audited_to)).await)
+    let mut state = check(&pin, &body, &v, &sig, &asset, asset_id, Some(a.audited_to)).await;
+    // A registration whose name reads like a collection this wallet knows, under another key,
+    // is the impostor the open Registry cannot stop (review 2026-10-09, session 4, Issue A).
+    if let BadgeState::Verified { caveat, .. } = &mut state {
+        let mine = crate::collections::name_skeleton(&a.name);
+        let known = PINNED_V1
+            .iter()
+            .map(|(l, k, _)| (*l, *k))
+            .chain(crate::issuance::pinned_issuer_names().into_iter())
+            .find(|(l, k)| crate::collections::name_skeleton(l) == mine && !k.eq_ignore_ascii_case(&a.ik));
+        if let Some((l, _)) = known {
+            *caveat = format!(
+                "LOOK-ALIKE NAME: this registration is called \"{}\" but its key is not the one this wallet knows for \"{l}\". \
+                 Compare the full key with one the issuer published elsewhere. {caveat}",
+                a.name
+            );
+        }
+    }
+    Some(state)
 }
 
 /// The v1 checks, over a manifest and signature from either origin: a pinned collection's
@@ -216,19 +259,29 @@ async fn check(pin: &Pin, body: &[u8], v: &Value, sig: &[u8], asset: &Value, ass
             "6' asset id recomputed from the pinned ik and the published description".into()
         },
     ];
-    match holder_memo(asset_id) {
-        Some(m) => {
-            if m["desc"].as_str() != Some(desc) {
-                return BadgeState::NotListed { issuer: pin.label.clone(), detail: "your carrier's memo carries a different description than the manifest".into() };
-            }
-            if let Some(mik) = m["ik"].as_str() {
-                if !mik.eq_ignore_ascii_case(&hex::encode(pin.ik)) {
-                    return BadgeState::NotListed { issuer: pin.label.clone(), detail: "your carrier's memo names a different issuer key".into() };
-                }
-            }
-            checks.push("6' your carrier's memo carries the same description (and ik, when it names one)".into());
+    // Every copy this wallet holds is read; one that carries the manifest's description (and
+    // this ik, when it names one) is enough. A copy that does not is someone else's memo, and
+    // is judged on its own in the per-copy list; it never speaks for the genuine unit.
+    let memos = holder_memos(asset_id);
+    if memos.is_empty() {
+        checks.push("6' (no carrier of this asset in this wallet to compare)".into());
+    } else {
+        let agrees = |m: &Value| {
+            m["desc"].as_str() == Some(desc)
+                && m["ik"].as_str().map(|mik| mik.eq_ignore_ascii_case(&hex::encode(pin.ik))).unwrap_or(true)
+        };
+        let n = memos.iter().filter(|m| agrees(m)).count();
+        if n == 0 {
+            return BadgeState::NotListed {
+                issuer: pin.label.clone(),
+                detail: "no carrier of this asset in this wallet carries the manifest's description and issuer key".into(),
+            };
         }
-        None => checks.push("6' (no carrier of this asset in this wallet to compare)".into()),
+        if n == memos.len() {
+            checks.push("6' your carrier's memo carries the same description (and ik, when it names one)".into());
+        } else {
+            checks.push(format!("6' {n} of {} copies in this wallet carry the manifest's description; the others are somebody's copies and are judged on their own", memos.len()));
+        }
     }
     // CHECK 5': the genesis output is on chain with the stated commitment.
     let iss = &asset["issuance"];
@@ -317,8 +370,11 @@ mod tests {
         std::env::set_var("ZECBOAT_PINNED_V1", "WT2|7e0a1a7333d80469be1273ff78953fede09f3d136526cb90e06408e9e698e7f7|file:///x.json; bad|zz|y");
         let p = pins();
         std::env::remove_var("ZECBOAT_PINNED_V1");
-        assert_eq!(p.len(), 1);
-        assert!(p[0].test_only);
+        // The compiled pins (never test-only) plus the one well-formed env pin (test-only).
+        assert_eq!(p.len(), PINNED_V1.len() + 1);
+        assert!(p[..PINNED_V1.len()].iter().all(|x| !x.test_only));
+        assert!(p[PINNED_V1.len()].test_only);
+        assert!(PINNED_V1.iter().all(|(_, k, s)| hex32(k).is_some() && s.ends_with(".json")), "every compiled pin has a 32-byte key and a manifest path");
     }
 
     #[test]

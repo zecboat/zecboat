@@ -106,10 +106,26 @@ say "Sapling proving parameters"
 PARAMS="$HOME/.zcash-params"
 FILES=(sapling-spend.params sapling-output.params)
 
+# The published hashes (the ones zcash_proofs pins). A file already present is checked too:
+# a corrupt or truncated one fails at the first send with an error that says nothing about
+# parameters (review 2026-10-09, session 4, Issue K).
+param_sha() {
+  case "$1" in
+    sapling-spend.params)  echo 8e48ffd23abb3a5fd9c5589204f32d9c31285a04b78096ba40a79b75677efc13 ;;
+    sapling-output.params) echo 2f0ebbcbb9bb0bcffe95a397e7eba89c29eb4dde6191c339db88570e3f3fb0e4 ;;
+  esac
+}
 NEED_P=()
 for f in "${FILES[@]}"; do
   if [[ -s "$PARAMS/$f" ]]; then
-    info "$f ($(du -h "$PARAMS/$f" | cut -f1))"
+    got="$(sha256sum "$PARAMS/$f" | cut -d' ' -f1)"
+    if [[ "$got" == "$(param_sha "$f")" ]]; then
+      info "$f ($(du -h "$PARAMS/$f" | cut -f1)) sha256 OK"
+    else
+      warn "$f is present but its sha256 is not the published one; it will be replaced"
+      rm -f "$PARAMS/$f"
+      NEED_P+=("$f")
+    fi
   else
     warn "$f — MISSING"
     NEED_P+=("$f")
@@ -132,10 +148,7 @@ if [[ "${#NEED_P[@]}" -gt 0 ]]; then
       # Only move into place once complete, and only if the bytes are the published ones
       # (the hashes zcash_proofs pins; audit 2026-10-08, Zecboat N). A truncated params file
       # fails at proving time with an error that says nothing about downloads.
-      case "$f" in
-        sapling-spend.params)  want=8e48ffd23abb3a5fd9c5589204f32d9c31285a04b78096ba40a79b75677efc13 ;;
-        sapling-output.params) want=2f0ebbcbb9bb0bcffe95a397e7eba89c29eb4dde6191c339db88570e3f3fb0e4 ;;
-      esac
+      want="$(param_sha "$f")"
       got="$(sha256sum "$PARAMS/$f.part" | cut -d' ' -f1)"
       [[ "$got" == "$want" ]] || { rm -f "$PARAMS/$f.part"; die "$f downloaded with the wrong sha256 ($got); not installed"; }
       mv "$PARAMS/$f.part" "$PARAMS/$f"

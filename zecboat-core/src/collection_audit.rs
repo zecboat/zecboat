@@ -272,28 +272,43 @@ pub fn run_checks(reg: &Registration, ufvk: &str, outs: &[Out], flows: &[Flow]) 
     add(7, "manifest names this viewing key as its issuance account",
         v["identity"]["issuance_ufvk"].as_str().map(str::trim) == Some(ufvk.trim()), None);
 
-    // Carriers: JSON memos with asset_id and desc; a memo that names an ik must name this one.
+    // Carriers: memos the wallet itself would list (`parse_memo`: JSON, lower-case id, a v1
+    // id that derives from ik and desc, no duplicate keys), carrying a description; a memo
+    // that names an ik must name this one. One reader for the audit, the item list and
+    // Collections (review 2026-10-09, session 4, Issue E).
     let carriers: Vec<(&Out, String, String)> = outs
         .iter()
         .filter(|o| o.memo.first() == Some(&b'{'))
         .filter_map(|o| {
-            let j: serde_json::Value = serde_json::from_slice(&o.memo).ok()?;
-            if let Some(mik) = j["ik"].as_str() {
+            let r = crate::zmap::parse_memo(&o.memo)?;
+            if let Some(mik) = r.ik.as_deref() {
                 if !mik.eq_ignore_ascii_case(&close_ik) {
                     return None;
                 }
             }
-            Some((o, j["asset_id"].as_str()?.to_ascii_lowercase(), j["desc"].as_str()?.to_string()))
+            Some((o, r.asset_id.to_ascii_lowercase(), r.desc?))
         })
         .collect();
     let before: Vec<&(&Out, String, String)> = carriers.iter().filter(|c| c.0.height < close_height).collect();
-    let after = carriers.len() - before.len();
+    // ZMAP §7.3.2 and §7.4: ANY output of the account mined after the close is a breach, not
+    // only a well-formed carrier (review 2026-10-09, session 4, Issue D: a payment, a second
+    // pin or a malformed carrier after the close used to pass). The close's own outputs are
+    // the close.
+    let after_any = outs.iter().filter(|o| o.height > close_height || (o.height == close_height && o.txid != close_out.txid)).count();
     add(8, "carriers issued before the close equal the close memo's count", before.len() as u32 == close.count,
         Some(format!("{} carriers, count {}", before.len(), close.count)));
-    add(9, "no carrier issued by this account at or after the close", after == 0,
-        (after > 0).then(|| format!("{after} after the close")));
-    add(10, "every carrier's id derives from ik and its own description",
-        !carriers.is_empty() && carriers.iter().all(|c| derive_asset_id(&close.ik, &c.2) == c.1), None);
+    add(9, "no output issued by this account after the close", after_any == 0,
+        (after_any > 0).then(|| format!("{after_any} output(s) after the close")));
+    // Uniqueness (review 2026-10-09, session 4, Issue E): one unit number and one id each.
+    let mut units_seen = std::collections::HashSet::new();
+    let mut ids_seen = std::collections::HashSet::new();
+    let unique = before.iter().all(|c| {
+        let unit = c.2.split('|').nth(2).unwrap_or("");
+        units_seen.insert(unit.to_string()) && ids_seen.insert(c.1.clone())
+    });
+    add(10, "every carrier's id derives from ik and its own description, and unit numbers and ids are each used once",
+        !carriers.is_empty() && carriers.iter().all(|c| derive_asset_id(&close.ik, &c.2) == c.1) && unique,
+        (!unique).then(|| "a unit number or an asset id appears twice".to_string()));
     add(11, "every carrier is exactly 10,000 zat", before.iter().all(|c| c.0.value == CARRIER_ZAT), None);
 
     // Genesis, in unit order (the unit number is the description's third field).
@@ -410,27 +425,28 @@ async fn sync_to_tip(db_path: &str, floor: u32) -> Result<u32> {
     Err(anyhow!("the scan did not reach the tip"))
 }
 
-/// Fetch a transaction in full: (raw bytes, mined height).
-async fn fetch_tx(txid_internal: &[u8]) -> Result<(Vec<u8>, u32)> {
+/// Fetch a transaction in full: (raw bytes, mined height). Through the chain source in force
+/// (the user's node, or the provider under the cover of the block the scan found it in), and
+/// checked against the id asked for, as every other transaction read is. Until 2026-10-09 this
+/// asked the sync provider by id for every transaction of the issuance account whatever the
+/// setting, and took the bytes on trust (review, session 4, Issue C). The compact-block scan
+/// that finds the account's transactions still runs through the provider; the report says so.
+async fn fetch_tx(txid_internal: &[u8], height: u32) -> Result<(Vec<u8>, u32)> {
+    let id: [u8; 32] = txid_internal.try_into().map_err(|_| anyhow!("txid is not 32 bytes"))?;
+    let mut disp = id;
+    disp.reverse();
     let mut last = None;
-    for attempt in 0..5u64 {
-        match client().await {
-            Ok(mut c) => {
-                let r = c
-                    .get_transaction(tonic::Request::new(zcash_client_backend::proto::service::TxFilter {
-                        block: None,
-                        index: 0,
-                        hash: txid_internal.to_vec(),
-                    }))
-                    .await;
-                match r {
-                    Ok(r) => {
-                        let r = r.into_inner();
-                        return Ok((r.data, r.height as u32));
-                    }
-                    Err(e) => last = Some(anyhow!("{e}")),
-                }
+    for attempt in 0..3u64 {
+        let r = tokio::task::block_in_place(|| {
+            let chain = crate::wake::chain();
+            if height > 0 {
+                chain.hint_height(&hex::encode(disp), height);
             }
+            chain.raw_transaction(&id)
+        });
+        match r {
+            Ok(Some((h, data))) => return Ok((data, if h > 0 { h } else { height })),
+            Ok(None) => return Err(anyhow!("the chain source does not know transaction {}", hex::encode(disp))),
             Err(e) => last = Some(e),
         }
         tokio::time::sleep(std::time::Duration::from_secs(2 * (attempt + 1))).await;
@@ -473,7 +489,7 @@ async fn decrypted(db_path: &str, ufvk: &zcash_keys::keys::UnifiedFullViewingKey
         let mut disp = txid_internal.clone();
         disp.reverse();
         let txid = hex::encode(&disp);
-        let (raw, _) = fetch_tx(&txid_internal).await.map_err(|e| anyhow!("fetch {}…: {e}", &txid[..12]))?;
+        let (raw, _) = fetch_tx(&txid_internal, height).await.map_err(|e| anyhow!("fetch {}…: {e}", &txid[..12]))?;
         let tx = zcash_primitives::transaction::Transaction::read(&raw[..], BranchId::for_height(&MainNetwork, BlockHeight::from_u32(height)))
             .map_err(|e| anyhow!("{txid}: {e}"))?;
         let iw_cmx: Vec<[u8; 32]> = tx.ironwood_bundle().map(|b| b.actions().iter().map(|a| a.cmx().to_bytes()).collect()).unwrap_or_default();
@@ -544,7 +560,9 @@ pub async fn audit(reg: &Registration) -> Result<AuditReport> {
         count: close.as_ref().map(|c| c.2),
         birthday,
         audited_to: tip,
-        node: crate::rpc::grpc_endpoint(),
+        // What answered: the scan is the provider's (compact blocks); the transactions and the
+        // tree state came through the chain source in force.
+        node: format!("scan via {}; transactions via {}", crate::rpc::grpc_endpoint(), crate::wake::chain().described()),
         audited_at: chrono_now(),
         manifest_hex: etched.as_ref().map(|e| hex::encode(&e.0)),
         signature_hex: etched.as_ref().map(|e| hex::encode(&e.1)),

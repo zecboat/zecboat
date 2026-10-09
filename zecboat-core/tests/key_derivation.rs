@@ -360,7 +360,7 @@ async fn database_backed_entry_points_agree_with_direct_derivation() {
         let (stored_ufvk, stored_addr) = stored_account(&sb.wallet_db());
         assert_eq!(stored_ufvk, expected.encode(&MainNetwork), "create_account derived a different key");
         assert_eq!(stored_addr, default_ua(&expected).0.encode(&MainNetwork));
-        let viewkey = zecboat_core::get_viewkey().await.expect("get_viewkey");
+        let viewkey = zecboat_core::get_viewkey(held_password()).await.expect("get_viewkey");
         assert_eq!(viewkey, stored_ufvk, "get_viewkey disagrees with the stored account");
     }
 
@@ -374,7 +374,7 @@ async fn database_backed_entry_points_agree_with_direct_derivation() {
     let (stored_ufvk, stored_addr) = stored_account(&sb.wallet_db());
     assert_eq!(stored_ufvk, w.ufvk, "recovery derived a different wallet from the fixture phrase");
     assert_eq!(stored_addr, w.default_ua);
-    assert_eq!(zecboat_core::get_viewkey().await.unwrap(), w.ufvk);
+    assert_eq!(zecboat_core::get_viewkey(held_password()).await.unwrap(), w.ufvk);
 
     // import_wallet: replaces the wallet in the SAME home (it needs the unlocked
     // identity recovery just wrote). Padded with whitespace on purpose: it stores
@@ -385,7 +385,7 @@ async fn database_backed_entry_points_agree_with_direct_derivation() {
     let (stored_ufvk, stored_addr) = stored_account(&sb.wallet_db());
     assert_eq!(stored_ufvk, alt.ufvk, "import derived a different wallet from the fixture phrase");
     assert_eq!(stored_addr, alt.default_ua);
-    assert_eq!(zecboat_core::get_viewkey().await.unwrap(), alt.ufvk);
+    assert_eq!(zecboat_core::get_viewkey(held_password()).await.unwrap(), alt.ufvk);
 }
 
 /// The four sites a test cannot drive are held to the same parameters by reading
@@ -776,7 +776,7 @@ async fn the_view_key_shown_is_the_one_the_wallet_scans_with() {
     zecboat_core::unlock_wallet("pw".into(), false).await.expect("unlock");
 
     // Healthy wallet: the key shown is the account's key.
-    let shown = zecboat_core::get_viewkey().await.expect("a healthy wallet shows its view key");
+    let shown = zecboat_core::get_viewkey(held_password()).await.expect("a healthy wallet shows its view key");
     let (stored, _) = stored_account(&sb.wallet_db());
     assert_eq!(shown, stored, "the view key shown differs from the account's stored UFVK");
     assert_eq!(shown, w.ufvk);
@@ -789,7 +789,7 @@ async fn the_view_key_shown_is_the_one_the_wallet_scans_with() {
         .unwrap()
         .execute("UPDATE accounts SET ufvk = ?1", [other])
         .unwrap();
-    let err = zecboat_core::get_viewkey()
+    let err = zecboat_core::get_viewkey(held_password())
         .await
         .expect_err("the seed does not derive the account's UFVK; get_viewkey must refuse");
     let msg = err.to_string();

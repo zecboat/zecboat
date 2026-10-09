@@ -64,6 +64,11 @@ for sc in install.sh install_depends.sh uninstall_zecboat_deb.sh; do
   cp "$SRC_REPO/packaging/$sc" "$ZIPDIR/"; chmod +x "$ZIPDIR/$sc"
 done
 ( cd "$ZIPDIR" && sha256sum ./*.deb ./*.sh | sed 's|\./||' > SHA256SUMS )
+# The in-zip SHA256SUMS is signed too, and the public key travels with it, so install.sh can
+# check the signature before trusting the sums it was shipped with (review 2026-10-09,
+# session 4, Issue K: the inner file was unsigned and the installer proceeded without one).
+openssl pkeyutl -sign -inkey "$KEY" -rawin -in "$ZIPDIR/SHA256SUMS" -out "$ZIPDIR/SHA256SUMS.sig" || die "signing the in-zip sums failed"
+cp "$PUB" "$ZIPDIR/release_public_key.hex"
 python3 - "$S/.zipwork" "$S/artifacts/zecboat-$V-debian.zip" <<'PYZIP'
 import os, sys, zipfile
 root, out = sys.argv[1], sys.argv[2]
