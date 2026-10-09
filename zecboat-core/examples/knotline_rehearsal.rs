@@ -34,7 +34,7 @@ fn main() -> Result<()> {
     .ok_or_else(|| anyhow!("no lading can be made for this asset"))?;
     println!("next hop proved in {:.1?}: lading of {} proofs, {} bytes, sha256 {}…", t.elapsed(), lading.hops, lading.bytes.len(), &lading.hash_hex[..16]);
 
-    let (extras, what) = zecboat_core::wake_memo::extra_outputs(&conn, plan.carrier.txid().as_ref(), &lading.bytes, lading.hops)?;
+    let (extras, what) = zecboat_core::wake_memo::extra_outputs(&conn, plan.carrier.txid().as_ref(), None, &lading.bytes, lading.hops)?;
     println!("{what}");
     let to_recipient: Vec<&[u8]> = extras.iter().filter(|(to, _)| matches!(to, zecboat_core::wake_memo::ExtraTo::Recipient)).map(|(_, m)| &m[..]).collect();
     let to_record: Vec<(&String, &[u8])> = extras

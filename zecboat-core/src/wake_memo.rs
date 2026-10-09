@@ -113,7 +113,7 @@ pub enum ExtraTo {
 
 /// The extra outputs that carry `lading` in this transfer, and a line saying what they are.
 /// Empty when the mode is off or the lading cannot travel this way.
-pub fn extra_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32], lading_bytes: &[u8], hops: usize) -> Result<(Vec<(ExtraTo, [u8; 512])>, String)> {
+pub fn extra_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32], carrier_note_id: Option<i64>, lading_bytes: &[u8], hops: usize) -> Result<(Vec<(ExtraTo, [u8; 512])>, String)> {
     match send_mode() {
         SendMode::Off => Ok((Vec::new(), String::new())),
         SendMode::FullRecord => {
@@ -121,7 +121,7 @@ pub fn extra_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 3
             let n = memos.len();
             Ok((memos.into_iter().map(|m| (ExtraTo::Recipient, m)).collect(), format!("the whole lading, {n} memo output(s) to the recipient")))
         }
-        SendMode::Knotline => knotline_outputs(conn, carrier_txid_internal, lading_bytes),
+        SendMode::Knotline => knotline_outputs(conn, carrier_txid_internal, carrier_note_id, lading_bytes),
     }
 }
 
@@ -129,21 +129,65 @@ pub fn extra_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 3
 /// are left to the other routes.
 pub const MAX_JOIN_HOPS: usize = 6;
 
-fn memos_in_transaction(conn: &rusqlite::Connection, txid_internal: &[u8; 32]) -> Result<Vec<Vec<u8>>> {
-    let mut stmt = conn.prepare(
-        "SELECT n.memo FROM ironwood_received_notes n
-           JOIN transactions t ON t.id_tx = n.transaction_id
-          WHERE t.txid = ?1 AND n.memo IS NOT NULL",
-    )?;
-    let memos = stmt.query_map([txid_internal.as_slice()], |r| r.get::<_, Vec<u8>>(0))?.collect::<rusqlite::Result<_>>()?;
+/// The memos of this transaction's notes that were received by the same account and address
+/// as carrier note `note_id`: the key memo for a carrier is taken only from an output to the
+/// carrier's own receiver, never from any note of the transaction (review 2026-10-09, Knotline
+/// F). A carrier for which no note id is known falls back to the whole transaction.
+fn memos_in_transaction(conn: &rusqlite::Connection, txid_internal: &[u8; 32], note_id: Option<i64>) -> Result<Vec<Vec<u8>>> {
+    let memos: Vec<Vec<u8>> = match note_id {
+        Some(id) => {
+            let mut stmt = conn.prepare(
+                "SELECT n.memo FROM ironwood_received_notes n
+                   JOIN transactions t ON t.id_tx = n.transaction_id
+                   JOIN ironwood_received_notes me ON me.id = ?2
+                  WHERE t.txid = ?1 AND n.memo IS NOT NULL
+                    AND n.account_id = me.account_id AND n.diversifier = me.diversifier",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![txid_internal.as_slice(), id], |r| r.get::<_, Vec<u8>>(0))?;
+            rows.collect::<rusqlite::Result<Vec<Vec<u8>>>>()?
+        }
+        None => {
+            let mut stmt = conn.prepare(
+                "SELECT n.memo FROM ironwood_received_notes n
+                   JOIN transactions t ON t.id_tx = n.transaction_id
+                  WHERE t.txid = ?1 AND n.memo IS NOT NULL",
+            )?;
+            let rows = stmt.query_map([txid_internal.as_slice()], |r| r.get::<_, Vec<u8>>(0))?;
+            rows.collect::<rusqlite::Result<Vec<Vec<u8>>>>()?
+        }
+    };
     Ok(memos)
+}
+
+/// Where a walk may spend its effort: a deadline and a byte allowance, so a line nobody asked
+/// for cannot hold a wallet (review 2026-10-09, Knotline A and D).
+pub struct WalkBudget {
+    pub deadline: std::time::Instant,
+    pub bytes_left: std::cell::Cell<usize>,
+}
+
+impl WalkBudget {
+    pub fn new(time: std::time::Duration, bytes: usize) -> WalkBudget {
+        WalkBudget { deadline: std::time::Instant::now() + time, bytes_left: std::cell::Cell::new(bytes) }
+    }
+    fn spend(&self, bytes: usize) -> Result<()> {
+        if std::time::Instant::now() > self.deadline {
+            return Err(anyhow!("the walk's time budget is spent"));
+        }
+        let left = self.bytes_left.get();
+        if bytes > left {
+            return Err(anyhow!("the walk's byte budget is spent"));
+        }
+        self.bytes_left.set(left - bytes);
+        Ok(())
+    }
 }
 
 /// Knotline, sending: one key memo to the recipient and one record under a fresh key. The
 /// record holds only the newest hop when the carrier arrived with a key memo of its own (its
 /// history is already in the log); otherwise the item joins the log and the record holds the
 /// history so far.
-fn knotline_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32], lading_bytes: &[u8]) -> Result<(Vec<(ExtraTo, [u8; 512])>, String)> {
+fn knotline_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32], carrier_note_id: Option<i64>, lading_bytes: &[u8]) -> Result<(Vec<(ExtraTo, [u8; 512])>, String)> {
     use zmap_wake::knotline as log;
     let l = Lading::parse(lading_bytes).map_err(|e| anyhow!("{e}"))?;
     let n = l.hops.len();
@@ -153,18 +197,25 @@ fn knotline_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32
     if l.to_bytes() != lading_bytes {
         return Ok((Vec::new(), String::new()));
     }
-    let memos = memos_in_transaction(conn, carrier_txid_internal)?;
+    let memos = memos_in_transaction(conn, carrier_txid_internal, carrier_note_id)?;
     let prev_key = log::key_from_memos(memos.iter().map(|m| m.as_slice()));
     // Chain to the key memo only when the lading being extended was itself rebuilt from the
-    // line under that key (its stored copy says so). A key memo alone proves nothing: a
-    // previous holder could add one with a random key and hand the real lading over by file,
-    // and every later sender would chain to a knot nobody can open (audit 2026-10-08,
-    // Knotline A). Otherwise the item starts a line of its own, or travels another way.
-    let rebuilt_from_line = n >= 2 && {
-        let mut before = l.clone();
-        before.hops.pop();
-        let h = hex::encode(lading_hash(&before.to_bytes()));
-        crate::zmap::consignment_by_hash(conn, &h)?.map(|c| c.source.as_deref() == Some("knotline")).unwrap_or(false)
+    // line under exactly that key, starting at exactly this transaction: the stored copy
+    // records the pair (audit 2026-10-08, Knotline A; review 2026-10-09, Knotline F). A key
+    // memo alone proves nothing: a previous holder could add one with a random key and hand
+    // the real lading over by file. And a line the reader will refuse is not extended: past
+    // MAX_KNOTS - 1 knots the item starts a new line (Knotline H).
+    let provenance = (n >= 2)
+        .then(|| {
+            let mut before = l.clone();
+            before.hops.pop();
+            let h = hex::encode(lading_hash(&before.to_bytes()));
+            crate::zmap::consignment_knotline(conn, &h).ok().flatten()
+        })
+        .flatten();
+    let rebuilt_from_line = match (prev_key, provenance) {
+        (Some(k), Some((key, txid, walked))) => k == key && txid == *carrier_txid_internal && walked + 1 < log::MAX_KNOTS,
+        _ => false,
     };
     let (record, what) = match prev_key {
         Some(k) if rebuilt_from_line => (
@@ -242,9 +293,20 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Optio
     let held_lading = crate::wake::carrier_note(conn, plan.carrier.txid().as_ref(), plan.carrier.output_index() as u32)
         .ok()
         .and_then(|n| crate::zmap::consignment_for_carrier(conn, asset_id, committed.as_deref(), &n.note.rho().to_bytes(), note_id).ok().flatten());
+    // Mirrors the sender's rule exactly: chain only to the recorded (key, transaction) pair,
+    // and not past the reader's bound (review 2026-10-09, Knotline F and H).
+    let memos_here = memos_in_transaction(conn, plan.carrier.txid().as_ref(), note_id)?;
+    let key_here = zmap_wake::knotline::key_from_memos(memos_here.iter().map(|m| m.as_slice()));
     let (held, rebuilt_from_line, canonical) = match &held_lading {
         Some(c) => match Lading::parse(&c.json) {
-            Ok(l) => (l.hops.len(), c.source.as_deref() == Some("knotline"), l.to_bytes() == c.json),
+            Ok(l) => {
+                let prov = crate::zmap::consignment_knotline(conn, &c.sha256).ok().flatten();
+                let chained = match (key_here, prov) {
+                    (Some(k), Some((key, txid, walked))) => k == key && txid[..] == plan.carrier.txid().as_ref()[..] && walked + 1 < zmap_wake::knotline::MAX_KNOTS,
+                    _ => false,
+                };
+                (l.hops.len(), chained, l.to_bytes() == c.json)
+            }
             Err(_) => (0, false, false),
         },
         None => (0, false, true),
@@ -261,8 +323,7 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Optio
         SendMode::FullRecord => plain(&carrier, copies),
         SendMode::Knotline if !canonical => plain(&carrier, copies),
         SendMode::Knotline => {
-            let memos = memos_in_transaction(conn, plan.carrier.txid().as_ref())?;
-            let linked = zmap_wake::knotline::key_from_memos(memos.iter().map(|m| m.as_slice())).is_some() && after >= 2 && rebuilt_from_line;
+            let linked = after >= 2 && rebuilt_from_line;
             if linked {
                 with("knot", after, (2 + 64 + 2 + HOP).div_ceil(CHUNK) + 1, &carrier, copies)
             } else if after <= MAX_JOIN_HOPS {
@@ -277,12 +338,13 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Optio
 /// Knotline, receiving: if the carrier's transaction hands this wallet a key, walk the log
 /// back and return the rebuilt lading and the number of records walked. The result hashes to
 /// `expected_hash_hex` or it is an error. `None` when there is no key memo.
-pub fn lading_from_knotline(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32], expected_hash_hex: &str) -> Result<Option<(Vec<u8>, usize)>> {
+pub fn lading_from_knotline(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32], carrier_note_id: Option<i64>, expected_hash_hex: &str, budget: Option<&WalkBudget>) -> Result<Option<(Vec<u8>, usize, [u8; 32])>> {
     use zmap_wake::knotline as log;
-    let memos = memos_in_transaction(conn, carrier_txid_internal)?;
+    let memos = memos_in_transaction(conn, carrier_txid_internal, carrier_note_id)?;
     let Some(key) = log::key_from_memos(memos.iter().map(|m| m.as_slice())) else {
         return Ok(None);
     };
+    let start_key = key;
     // A transaction this wallet already holds is read from its own database; an older one is
     // asked of the chain source (own node if it answers, the provider otherwise).
     let mut chain: Option<crate::wake::Chain> = None;
@@ -293,6 +355,9 @@ pub fn lading_from_knotline(conn: &rusqlite::Connection, carrier_txid_internal: 
         let (raw, height) = match held {
             Some((raw, Some(h))) => (raw, h),
             _ => {
+                if let Some(b) = budget {
+                    b.spend(0)?;
+                }
                 let c = chain.get_or_insert_with(crate::wake::chain);
                 if let Some(h) = known_height {
                     let mut display = *txid;
@@ -300,7 +365,12 @@ pub fn lading_from_knotline(conn: &rusqlite::Connection, carrier_txid_internal: 
                     c.hint_height(&hex::encode(display), h);
                 }
                 match c.raw_transaction(txid)? {
-                    Some((h, raw)) => (raw, h),
+                    Some((h, raw)) => {
+                        if let Some(b) = budget {
+                            b.spend(raw.len())?;
+                        }
+                        (raw, h)
+                    }
                     // Told apart from "the key opens nothing" (audit 2026-10-08, Knotline L):
                     // a transaction the source does not know is "could not be checked".
                     None => return Err(anyhow!("transaction {}… is not known to {}", hex::encode(&txid[..6]), c.described())),
@@ -315,7 +385,7 @@ pub fn lading_from_knotline(conn: &rusqlite::Connection, carrier_txid_internal: 
         return Err(anyhow!("the lading rebuilt from the Knotline does not hash to the memo's consignment_hash"));
     }
     Lading::parse(&bytes).map_err(|e| anyhow!("{e}"))?;
-    Ok(Some((bytes, walked)))
+    Ok(Some((bytes, walked, start_key)))
 }
 
 fn hex32(s: &str) -> Result<[u8; 32]> {
@@ -440,7 +510,7 @@ pub fn from_memos<'a>(memos: impl IntoIterator<Item = &'a [u8]>, expected_hash_h
 
 /// The record for carrier `(txid, consignment hash)` if its own transaction carries it.
 pub fn record_in_transaction(conn: &rusqlite::Connection, txid_internal: &[u8; 32], expected_hash_hex: &str) -> Result<Option<Vec<u8>>> {
-    let memos = memos_in_transaction(conn, txid_internal)?;
+    let memos = memos_in_transaction(conn, txid_internal, None)?;
     Ok(from_memos(memos.iter().map(|m| m.as_slice()), expected_hash_hex))
 }
 

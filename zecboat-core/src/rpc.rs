@@ -2627,7 +2627,10 @@ pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, 
             // Waits for a line another pass is walking (the item list starts one and stops
             // waiting after 20 s): "being collected" must not read as "absent" here (review
             // 2026-10-09, regression over 12-13, Issue B).
-            match tokio::task::spawn_blocking(move || crate::wake::fetch_missing_consignments_waiting(&db_path, std::time::Duration::from_secs(90))).await {
+            let aid = asset_id.map(|s| s.to_string()).unwrap_or_default();
+            // This asset's carriers only (review 2026-10-09, Knotline A): the send used to walk
+            // every holding's line and wait for all of them.
+            match tokio::task::spawn_blocking(move || crate::wake::fetch_missing_consignments_scoped(&db_path, crate::wake::FetchScope::for_send(&aid))).await {
                 Ok(Ok(r)) if !r.in_progress.is_empty() => {
                     anyhow::bail!("the lineage of {} is still being collected ({}); try again in a moment", r.in_progress.join(", "), "another pass is walking its Knotline")
                 }
@@ -3495,17 +3498,10 @@ pub async fn get_zsas() -> Result<Vec<Value>> {
     let db_path = crate::paths::as_string::wallet_db_path()?;
     // Wake (chapter 8): pick up any lading the drop-box holds for a carrier whose memo commits
     // to one. Best effort; a fetch failure must not hide the holdings.
-    {
-        let p = db_path.clone();
-        // Bounded wait: a long or hostile line must not hold the item list (audit 2026-10-08,
-        // Knotline B). The walk goes on in its thread and its result lands in the database.
-        match tokio::time::timeout(std::time::Duration::from_secs(20), tokio::task::spawn_blocking(move || crate::wake::fetch_missing_consignments(&p))).await {
-            Ok(Ok(Ok(r))) if r.fetched > 0 || !r.failed.is_empty() => println!("[wake] consignments: {r:?}"),
-            Ok(Ok(Err(e))) => eprintln!("[wake] consignment fetch skipped: {e}"),
-            Err(_) => println!("[wake] consignments: still collecting; the item list is not waiting"),
-            _ => {}
-        }
-    }
+    // In a thread nobody waits for, with a budget, for assets this wallet has a reason to
+    // trust; the item list used to wait 20 s on any line a stranger sent (review 2026-10-09,
+    // Knotline A). Its result lands in the database and shows on the next open.
+    crate::wake::fetch_missing_consignments_in_background(db_path.clone());
     // 0.7.1: and send out any lading of ours that has not reached a drop-box yet (the drop-box
     // was unreachable at send time, or none was in use then). Not waited for: an unreachable
     // drop-box must not delay the holdings.

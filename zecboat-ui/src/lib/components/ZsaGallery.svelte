@@ -30,6 +30,18 @@
   // lineage must be visible beside a genuine unit, not hidden under it (review 2026-10-09).
   type CarrierState = { txid: string; output_index: number; state: Wake };
   let copies = $state<CarrierState[] | null>(null);
+  // On demand: a line is walked automatically only for a collection this wallet knows; for
+  // any other the holder asks (review 2026-10-09, Knotline A).
+  let collecting = $state(false);
+  let collectNote = $state<string | null>(null);
+  async function collectLineage() {
+    if (!selectedAssetId) return;
+    collecting = true; collectNote = null;
+    try {
+      const r: any = await invoke("collect_lineage", { assetId: selectedAssetId });
+      collectNote = r.fetched > 0 ? "Collected. Re-open the item to see its lineage." : (r.failed?.length ? `Could not collect: ${r.failed.join("; ")}` : "Nothing to collect yet.");
+    } catch (e: any) { collectNote = String(e); } finally { collecting = false; }
+  }
   let isCheckingLineage = $state(false);
   // WAKE-v1 §11: no implementation may report "verified" on the strength of a wake proof until
   // the circuit's external review. Until then a passing lineage shows AMBER, "awaiting external
@@ -343,6 +355,13 @@
                 <span class="check-line caveat">The chain's answers here are your provider's word, the same trust your balance rests on. With your own node running on this machine, the wallet checks them itself.</span>
                 {#if !WAKE_REVIEWED}<span class="check-line caveat">Wake is a draft circuit without external review (WAKE-v1 §11). This badge is exploratory.</span>{/if}
               </details>
+            </div>
+          {:else if wake?.state === 'no_wake' && wake.detail.includes('commits to lading')}
+            <div class="verify-badge amber">
+              ◌ Lineage not collected yet
+              <span class="verify-detail">{wake.detail}</span>
+              <button class="btn secondary" style="margin-top: 0.5rem;" disabled={collecting} onclick={collectLineage}>{collecting ? 'Collecting…' : 'Collect its lineage now'}</button>
+              {#if collectNote}<span class="verify-detail">{collectNote}</span>{/if}
             </div>
           {:else if wake?.state === 'no_wake'}
             <div class="verify-badge unknown">

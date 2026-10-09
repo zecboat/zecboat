@@ -401,6 +401,7 @@
             {:else}
               ⛓ Its lineage travels in this transfer: {estimate.proofs} proof{estimate.proofs === 1 ? "" : "s"}.
             {/if}
+            <span class="fee-note" style="display:block; opacity: 0.8;">Written to the chain for good, under a key the new owner receives; the Knotline and Wake are awaiting external review (KNOTLINE-v1 §12).</span>
           </p>
         {/if}
         {#if estimate && fee.spendable_zat < estimate.fee_zat}

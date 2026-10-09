@@ -519,7 +519,7 @@ pub fn send_zmap_asset(
     use zcash_client_backend::wallet::ReceivedNote;
 
     // ── 1. Resolve exactly which note moves, and what memo it must carry ────────────────────
-    let plan = {
+    let (plan, carrier_note_id) = {
         let conn = rusqlite::Connection::open_with_flags(
             wallet_db_path()?,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -535,17 +535,32 @@ pub fn send_zmap_asset(
         // A lading this unit's memo commits to that another pass is still collecting is not
         // "absent": the send is refused for now rather than offered unproven, which would strip
         // the hash for good (review 2026-10-09, regression over 12-13, Issue B).
-        if let Some(c) = holdings
+        let chosen = holdings
             .iter()
             .flat_map(|h| h.carriers.iter())
-            .find(|c| c.txid_bytes[..] == plan.carrier.txid().as_ref()[..] && c.output_index as u32 == plan.carrier.output_index())
-        {
+            .find(|c| c.txid_bytes[..] == plan.carrier.txid().as_ref()[..] && c.output_index as u32 == plan.carrier.output_index());
+        if let Some(c) = chosen {
             if c.consignment_hash.is_some() && crate::wake::walk_in_progress(c) {
                 return Err(anyhow!("the lineage this unit's memo commits to is still being collected; try again in a moment"));
             }
         }
-        plan
+        (plan, chosen.map(|c| c.note_id))
     };
+
+    // The published issuance accounts never send units (TRUST_MODEL row 13): their viewing keys
+    // are public, so every knot and key memo they sent would be readable by anyone. Checked
+    // against the registry's listed accounts (review 2026-10-09, Knotline G).
+    {
+        let mine = usk.to_unified_full_viewing_key().encode(&zcash_protocol::consensus::MainNetwork);
+        if let Ok(view) = crate::collections::registry_view() {
+            if view.registrations.iter().any(|r| r.ufvk.as_deref().map(|u| u.trim() == mine.trim()).unwrap_or(false)) {
+                return Err(anyhow!(
+                    "this wallet is a published issuance account (its viewing key is in the Zecboat Registry); \
+                     units are not sent from it, since anyone could read where they went. Send from the treasury wallet."
+                ));
+            }
+        }
+    }
 
     // ── 1a. Wake (chapter 8): prove THIS carrier before anything is built ───────────────────
     //
@@ -577,7 +592,7 @@ pub fn send_zmap_asset(
     let record_memos: Vec<(crate::wake_memo::ExtraTo, [u8; 512])> = match &wake_lading {
         Some(l) => {
             let conn = rusqlite::Connection::open_with_flags(wallet_db_path()?, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-            let (extras, what) = crate::wake_memo::extra_outputs(&conn, plan.carrier.txid().as_ref(), &l.bytes, l.hops)?;
+            let (extras, what) = crate::wake_memo::extra_outputs(&conn, plan.carrier.txid().as_ref(), carrier_note_id, &l.bytes, l.hops)?;
             if !extras.is_empty() {
                 println!("[wake] carrying the lading in this transfer: {what}");
             }

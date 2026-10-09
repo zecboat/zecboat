@@ -1004,7 +1004,10 @@ pub fn ensure_consignments_table(conn: &rusqlite::Connection) -> rusqlite::Resul
     // failure was a console line; the wallet could not say which ladings never left.
     // 2026-10-08 (audit, Knotline A): where a lading came from ("knotline", "memo", "dropbox",
     // "file", "sent"). A sender chains a knot only to a line it rebuilt itself.
-    for (col, ty) in [("delivered_at", "TEXT"), ("delivery_note", "TEXT"), ("source", "TEXT")] {
+    // 2026-10-09 (review, Knotline F and H): the key and transaction a Knotline walk started
+    // from, and how many knots it followed, so a sender chains only to exactly that pair and
+    // starts a new line before the reader's bound.
+    for (col, ty) in [("delivered_at", "TEXT"), ("delivery_note", "TEXT"), ("source", "TEXT"), ("knot_key", "BLOB"), ("knot_txid", "BLOB"), ("walked", "INTEGER")] {
         let has: bool = conn
             .prepare("SELECT 1 FROM pragma_table_info('ext_zecboat_zmap_consignments') WHERE name = ?1")?
             .exists([col])?;
@@ -1152,6 +1155,103 @@ fn consignment_cols(conn: &rusqlite::Connection) -> rusqlite::Result<String> {
 }
 
 /// Record where a stored lading came from (see [`ensure_consignments_table`]).
+/// Record that a lading was rebuilt from the line under `key` starting at `txid` (stored byte
+/// order), `walked` knots long. The sender chains its next knot only to exactly that pair.
+pub fn mark_consignment_knotline(conn: &rusqlite::Connection, sha256_hex: &str, key: &[u8; 32], txid: &[u8; 32], walked: usize) -> rusqlite::Result<()> {
+    let raw = hex::decode(sha256_hex).unwrap_or_default();
+    ensure_consignments_table(conn)?;
+    conn.execute(
+        "UPDATE ext_zecboat_zmap_consignments SET source = 'knotline', knot_key = ?2, knot_txid = ?3, walked = ?4 WHERE sha256 = ?1",
+        rusqlite::params![raw, key.as_slice(), txid.as_slice(), walked as i64],
+    )?;
+    Ok(())
+}
+
+/// `(key, txid, walked)` recorded for a lading rebuilt from a Knotline, if any.
+pub fn consignment_knotline(conn: &rusqlite::Connection, sha256_hex: &str) -> rusqlite::Result<Option<([u8; 32], [u8; 32], usize)>> {
+    let has: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('ext_zecboat_zmap_consignments') WHERE name = 'knot_key'")?
+        .exists([])?;
+    if !has {
+        return Ok(None);
+    }
+    let raw = hex::decode(sha256_hex).unwrap_or_default();
+    let mut stmt = conn.prepare("SELECT knot_key, knot_txid, walked FROM ext_zecboat_zmap_consignments WHERE sha256 = ?1 AND knot_key IS NOT NULL")?;
+    let mut rows = stmt.query([raw.as_slice()])?;
+    match rows.next()? {
+        Some(r) => {
+            let k: Vec<u8> = r.get(0)?;
+            let t: Vec<u8> = r.get(1)?;
+            let w: i64 = r.get::<_, Option<i64>>(2)?.unwrap_or(0);
+            match (<[u8; 32]>::try_from(k), <[u8; 32]>::try_from(t)) {
+                (Ok(k), Ok(t)) => Ok(Some((k, t, w as usize))),
+                _ => Ok(None),
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+/// Walks that failed, by carrier outpoint, with a back-off that doubles and survives a restart
+/// (review 2026-10-09, Knotline A: an in-memory back-off restarted every walk at every launch).
+pub fn ensure_walk_failures_table(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ext_zecboat_zmap_walk_failures (
+            txid TEXT NOT NULL,
+            output_index INTEGER NOT NULL,
+            failures INTEGER NOT NULL,
+            next_after INTEGER NOT NULL,
+            last_error TEXT NOT NULL,
+            PRIMARY KEY (txid, output_index)
+        )",
+        [],
+    )?;
+    Ok(())
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+/// Ten minutes after the first failure, doubling each time, at most a day.
+pub fn record_walk_failure(conn: &rusqlite::Connection, txid_hex: &str, output_index: i64, error: &str) -> rusqlite::Result<()> {
+    ensure_walk_failures_table(conn)?;
+    let failures: i64 = conn
+        .query_row("SELECT failures FROM ext_zecboat_zmap_walk_failures WHERE txid = ?1 AND output_index = ?2", rusqlite::params![txid_hex, output_index], |r| r.get(0))
+        .unwrap_or(0)
+        + 1;
+    let delay = (600i64 * (1i64 << (failures - 1).min(8))).min(86_400);
+    conn.execute(
+        "INSERT OR REPLACE INTO ext_zecboat_zmap_walk_failures (txid, output_index, failures, next_after, last_error) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![txid_hex, output_index, failures, now_secs() + delay, error],
+    )?;
+    Ok(())
+}
+
+/// `(last_error, failures, seconds until the next try)` when a carrier's walk is in back-off.
+pub fn walk_failure(conn: &rusqlite::Connection, txid_hex: &str, output_index: i64) -> rusqlite::Result<Option<(String, i64, i64)>> {
+    let exists: bool = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ext_zecboat_zmap_walk_failures'")?
+        .exists([])?;
+    if !exists {
+        return Ok(None);
+    }
+    let r: Option<(String, i64, i64)> = conn
+        .query_row(
+            "SELECT last_error, failures, next_after FROM ext_zecboat_zmap_walk_failures WHERE txid = ?1 AND output_index = ?2",
+            rusqlite::params![txid_hex, output_index],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .ok();
+    Ok(r.map(|(e, f, next)| (e, f, next - now_secs())))
+}
+
+pub fn clear_walk_failure(conn: &rusqlite::Connection, txid_hex: &str, output_index: i64) -> rusqlite::Result<()> {
+    ensure_walk_failures_table(conn)?;
+    conn.execute("DELETE FROM ext_zecboat_zmap_walk_failures WHERE txid = ?1 AND output_index = ?2", rusqlite::params![txid_hex, output_index])?;
+    Ok(())
+}
+
 pub fn mark_consignment_source(conn: &rusqlite::Connection, sha256_hex: &str, source: &str) -> rusqlite::Result<()> {
     let Ok(raw) = hex::decode(sha256_hex) else { return Ok(()) };
     conn.execute("UPDATE ext_zecboat_zmap_consignments SET source = ?2 WHERE sha256 = ?1", rusqlite::params![raw, source])?;
@@ -1418,6 +1518,26 @@ mod tests {
         let id = "a21c64a9012d95a0b923f825f3d16b483a76804393948ff085715509f278c837";
         let memo = format!(r#"{{"asset_id":"{id}","consignment_hash":"nope"}}"#);
         assert_eq!(parse_memo(memo.as_bytes()).unwrap().consignment_hash, None);
+    }
+
+    #[test]
+    fn walk_failures_back_off_and_double_and_survive_in_the_database() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        assert!(walk_failure(&conn, "aa", 0).unwrap().is_none());
+        record_walk_failure(&conn, "aa", 0, "no knot").unwrap();
+        let (e, f, wait) = walk_failure(&conn, "aa", 0).unwrap().unwrap();
+        assert_eq!((e.as_str(), f), ("no knot", 1));
+        assert!(wait > 500 && wait <= 600, "{wait}");
+        record_walk_failure(&conn, "aa", 0, "no knot").unwrap();
+        let (_, f, wait) = walk_failure(&conn, "aa", 0).unwrap().unwrap();
+        assert!(f == 2 && wait > 1100 && wait <= 1200, "{f} {wait}");
+        for _ in 0..12 {
+            record_walk_failure(&conn, "aa", 0, "x").unwrap();
+        }
+        assert!(walk_failure(&conn, "aa", 0).unwrap().unwrap().2 <= 86_400, "capped at a day");
+        assert!(walk_failure(&conn, "aa", 1).unwrap().is_none(), "keyed on the outpoint");
+        clear_walk_failure(&conn, "aa", 0).unwrap();
+        assert!(walk_failure(&conn, "aa", 0).unwrap().is_none());
     }
 
     #[test]

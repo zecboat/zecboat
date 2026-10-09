@@ -133,7 +133,7 @@
 {:else}
   <div class="box-row">
     <span class="mark {route?.route === 'off' ? 'wait' : 'ok'}">●</span>
-    <span class="where" title="The lineage record is written into the same transaction as the item, sealed under a one-time key handed to its new owner; earlier owners cannot read what comes after their own sale. No server is needed to deliver it; a wallet without its own node still asks its provider for older records. It adds outputs to the transfer, so the fee is higher; the confirmation screen shows it.">
+    <span class="where" title="Awaiting external review (KNOTLINE-v1 §12). The lineage record is written into the same transaction as the item, for good, sealed under a one-time key handed to its new owner; earlier owners cannot read what comes after their own sale. No server is needed to deliver it; a wallet without its own node still asks its provider for older records. It adds outputs to the transfer, so the fee is higher; the confirmation screen shows it.">
       {#if route?.route === "off"}Lineage does not travel with a sent item{:else if route?.route === "whole"}Lineage travels in the transfer · whole lading (test route){:else}Lineage travels in the transfer · Knotline{/if}
     </span>
     {#if route?.source === "environment"}

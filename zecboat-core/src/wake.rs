@@ -586,11 +586,6 @@ pub fn deliver(recipient_ua: &str, lading: &SendLading) -> Result<()> {
 // ── receiving ────────────────────────────────────────────────────────────────────────────────
 
 /// What a fetch pass did.
-/// Lines whose walk failed, by the memo's consignment hash, and when. Kept for this process
-/// only: a restart tries once more.
-static FAILED_WALKS: std::sync::Mutex<Option<std::collections::HashMap<String, std::time::Instant>>> = std::sync::Mutex::new(None);
-const WALK_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-
 /// Lines being walked right now, by the memo's consignment hash: the item list, the estimate
 /// and the send each start a fetch pass, and a slow but valid line used to be walked several
 /// times at once (review 2026-10-09, regression Finding 9).
@@ -629,20 +624,6 @@ fn walk_key(c: &crate::zmap::CarrierRef) -> String {
     format!("{}#{}", c.txid.to_ascii_lowercase(), c.output_index)
 }
 
-fn walk_failed(key: &str) {
-    if let Ok(mut g) = FAILED_WALKS.lock() {
-        g.get_or_insert_with(Default::default).insert(key.to_string(), std::time::Instant::now());
-    }
-}
-
-fn walk_failed_recently(key: &str) -> bool {
-    FAILED_WALKS
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().and_then(|m| m.get(key).map(|t| t.elapsed() < WALK_RETRY_AFTER)))
-        .unwrap_or(false)
-}
-
 /// Whether a walk for this carrier is running in another pass right now.
 pub fn walk_in_progress(c: &crate::zmap::CarrierRef) -> bool {
     WALKS_IN_PROGRESS
@@ -662,35 +643,139 @@ pub struct FetchReport {
     /// A caller that needs the lading (the send) waits or refuses; it never reads "in progress"
     /// as "absent" (review 2026-10-09, regression over 12-13, Issue B).
     pub in_progress: Vec<String>,
+    /// Carriers whose asset nobody vouches for, left for the user to ask about.
+    pub not_known: Vec<String>,
+}
+
+/// The user asked for one asset's lineage: walk it whatever its collection, with a larger budget.
+pub fn collect_lineage(db_path: &str, asset_id: &str) -> Result<FetchReport> {
+    let conn = Connection::open(db_path)?;
+    for h in crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?) {
+        if h.asset_id.eq_ignore_ascii_case(asset_id) {
+            for c in &h.carriers {
+                let _ = crate::zmap::clear_walk_failure(&conn, &c.txid, c.output_index);
+            }
+        }
+    }
+    drop(conn);
+    fetch_missing_consignments_scoped(db_path, FetchScope::on_demand(asset_id))
 }
 
 /// For every held carrier whose memo commits to a lading this wallet does not hold, try the
 /// drop-box. What comes back must open with this wallet's keys and hash to the memo's value.
-pub fn fetch_missing_consignments(db_path: &str) -> Result<FetchReport> {
-    fetch_missing_consignments_waiting(db_path, std::time::Duration::ZERO)
+/// What one fetch pass is for (review 2026-10-09, Knotline A).
+pub struct FetchScope {
+    /// Only this asset's carriers; `None` for every holding.
+    pub asset: Option<String>,
+    /// Walk lines of assets no pinned manifest or passed audit names (the user asked for it).
+    pub include_unknown: bool,
+    /// How long to wait for a walk another pass is running before reporting it in progress.
+    pub wait: std::time::Duration,
+    /// Time and bytes the pass may spend on walks through the chain source.
+    pub budget: crate::wake_memo::WalkBudget,
 }
 
-/// As [`fetch_missing_consignments`], but a line another pass is walking is waited for, up to
-/// `wait`, instead of skipped. The send path uses this: it must not conclude "no lading" while
-/// one is being collected.
-pub fn fetch_missing_consignments_waiting(db_path: &str, wait: std::time::Duration) -> Result<FetchReport> {
+impl FetchScope {
+    /// The unattended pass: every known asset, no waiting, a modest budget.
+    pub fn background() -> FetchScope {
+        FetchScope {
+            asset: None,
+            include_unknown: false,
+            wait: std::time::Duration::ZERO,
+            budget: crate::wake_memo::WalkBudget::new(std::time::Duration::from_secs(120), 32 * 1024 * 1024),
+        }
+    }
+    /// Before a send or an estimate: this asset only, waiting for a running walk.
+    pub fn for_send(asset_id: &str) -> FetchScope {
+        FetchScope {
+            asset: Some(asset_id.to_string()),
+            include_unknown: true,
+            wait: std::time::Duration::from_secs(90),
+            budget: crate::wake_memo::WalkBudget::new(std::time::Duration::from_secs(120), 32 * 1024 * 1024),
+        }
+    }
+    /// The user asked for this asset's lineage: unknown assets too, a larger budget.
+    pub fn on_demand(asset_id: &str) -> FetchScope {
+        FetchScope {
+            asset: Some(asset_id.to_string()),
+            include_unknown: true,
+            wait: std::time::Duration::from_secs(300),
+            budget: crate::wake_memo::WalkBudget::new(std::time::Duration::from_secs(600), 64 * 1024 * 1024),
+        }
+    }
+}
+
+/// Whether a carrier's asset is one this wallet has a reason to trust before walking its line:
+/// a pinned v1 key named in its memo, a passed cached registry audit listing the asset, or the
+/// local test manifest (test builds). A stranger's note naming an asset nobody vouches for is
+/// not walked unless the user asks (review 2026-10-09, Knotline A).
+fn asset_is_known(asset_id: &str, c: &crate::zmap::CarrierRef) -> bool {
+    if genesis_from_local_manifest(asset_id).is_some() {
+        return true;
+    }
+    if let Some(rec) = crate::zmap::parse_memo(&c.memo) {
+        if let Some(ik) = rec.ik.as_deref() {
+            if crate::issuance_v1::PINNED_V1.iter().any(|(_, k, _)| k.eq_ignore_ascii_case(ik)) {
+                return true;
+            }
+        }
+    }
+    crate::collection_audit::audited_collection_listing(asset_id).map(|a| a.passed).unwrap_or(false)
+}
+
+/// The unattended pass, in a thread nobody waits for, at most once a minute.
+pub fn fetch_missing_consignments_in_background(db_path: String) {
+    static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    {
+        let mut last = LAST.lock().unwrap();
+        if last.map(|t| t.elapsed() < std::time::Duration::from_secs(60)).unwrap_or(false) {
+            return;
+        }
+        *last = Some(std::time::Instant::now());
+    }
+    std::thread::spawn(move || match fetch_missing_consignments_scoped(&db_path, FetchScope::background()) {
+        Ok(r) if r.fetched > 0 || !r.failed.is_empty() => println!("[wake] consignments: {r:?}"),
+        Err(e) => eprintln!("[wake] consignment fetch skipped: {e}"),
+        _ => {}
+    });
+}
+
+pub fn fetch_missing_consignments(db_path: &str) -> Result<FetchReport> {
+    fetch_missing_consignments_scoped(db_path, FetchScope::background())
+}
+
+/// The fetch pass under a [`FetchScope`].
+pub fn fetch_missing_consignments_scoped(db_path: &str, scope: FetchScope) -> Result<FetchReport> {
     let started = std::time::Instant::now();
+    let wait = scope.wait;
     let conn = Connection::open(db_path)?;
     let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?);
     let mut report = FetchReport::default();
     for h in &holdings {
+        if scope.asset.as_deref().map(|a| !a.eq_ignore_ascii_case(&h.asset_id)).unwrap_or(false) {
+            continue;
+        }
         for c in &h.carriers {
             let Some(hash) = c.consignment_hash.as_deref() else { continue };
-            if crate::zmap::consignment_by_hash(&conn, hash)?.is_some() {
+            // A lading this wallet made for a send to itself is re-read from its own line, so
+            // the next transfer chains instead of starting over (review 2026-10-09, Knotline H).
+            let held = crate::zmap::consignment_by_hash(&conn, hash)?;
+            let self_sent = held.as_ref().map(|x| x.source.as_deref() == Some("sent")).unwrap_or(false);
+            if held.is_some() && !self_sent {
                 report.already_held += 1;
                 continue;
             }
-            // A line that failed to rebuild is not tried again at once: this runs on every
-            // item-list load and before every send, and a carrier anyone can send used to
-            // start a fresh walk each time (audit 2026-10-08, Knotline B).
-            let key = walk_key(c);
-            if walk_failed_recently(&key) {
+            if !scope.include_unknown && !asset_is_known(&h.asset_id, c) {
+                report.not_known.push(format!("{}: {}", h.name, walk_key(c)));
                 continue;
+            }
+            // A line that failed to rebuild is not tried again at once; the delay doubles and
+            // survives a restart (audit 2026-10-08, Knotline B; review 2026-10-09, Knotline A).
+            let key = walk_key(c);
+            if let Some((_, _, left)) = crate::zmap::walk_failure(&conn, &c.txid, c.output_index)? {
+                if left > 0 {
+                    continue;
+                }
             }
             let mut guard = WalkGuard::start(&key);
             while guard.is_none() && started.elapsed() < wait {
@@ -700,7 +785,7 @@ pub fn fetch_missing_consignments_waiting(db_path: &str, wait: std::time::Durati
                 }
                 guard = WalkGuard::start(&key);
             }
-            if crate::zmap::consignment_by_hash(&conn, hash)?.is_some() {
+            if !self_sent && crate::zmap::consignment_by_hash(&conn, hash)?.is_some() {
                 report.already_held += 1;
                 continue;
             }
@@ -708,29 +793,39 @@ pub fn fetch_missing_consignments_waiting(db_path: &str, wait: std::time::Durati
                 report.in_progress.push(key);
                 continue;
             };
-            // Prototype, Knotline: a key memo in the carrier's transaction opens the newest knot,
-            // and each knot leads to the one before it.
-            match crate::wake_memo::lading_from_knotline(&conn, &c.txid_bytes, hash) {
-                Ok(Some((bytes, walked))) => {
-                    match accept_lading(&conn, &h.asset_id, c, &bytes, "knotline") {
-                        Ok(_) => {
+            // Knotline: a key memo to the carrier's receiver opens the newest knot, and each
+            // knot leads to the one before it. A failed walk does not stop the other routes
+            // (review 2026-10-09, Knotline E).
+            match crate::wake_memo::lading_from_knotline(&conn, &c.txid_bytes, Some(c.note_id), hash, Some(&scope.budget)) {
+                Ok(Some((bytes, walked, start_key))) => {
+                    let stored = if self_sent {
+                        Ok(hash.to_string())
+                    } else {
+                        accept_lading(&conn, &h.asset_id, c, &bytes, "knotline")
+                    };
+                    match stored {
+                        Ok(hh) => {
+                            let _ = crate::zmap::mark_consignment_knotline(&conn, &hh, &start_key, &c.txid_bytes, walked);
+                            let _ = crate::zmap::clear_walk_failure(&conn, &c.txid, c.output_index);
                             println!("[wake] lading for {} rebuilt from its Knotline: {walked} knot(s) followed back", h.name);
                             report.fetched += 1;
+                            continue;
                         }
                         Err(e) => {
-                            walk_failed(&key);
-                            report.failed.push(format!("{}: {e}", h.name))
+                            let _ = crate::zmap::record_walk_failure(&conn, &c.txid, c.output_index, &e.to_string());
+                            report.failed.push(format!("{}: {e}", h.name));
                         }
                     }
-                    continue;
                 }
                 Ok(None) => {}
                 Err(e) => {
                     eprintln!("[wake] Knotline for {}: {e}", h.name);
                     report.failed.push(format!("{}: Knotline: {e}", h.name));
-                    walk_failed(&key);
-                    continue;
+                    let _ = crate::zmap::record_walk_failure(&conn, &c.txid, c.output_index, &e.to_string());
                 }
+            }
+            if self_sent {
+                continue;
             }
             // First choice (prototype): the record may be in the carrier's own transaction.
             match crate::wake_memo::record_in_transaction(&conn, &c.txid_bytes, hash) {
@@ -960,7 +1055,7 @@ pub async fn asset_send_estimate(asset_id: String) -> Result<crate::wake_memo::S
     // The manifest's genesis, so the estimate ranks the copies as the send will.
     let genesis = genesis_outpoint(&asset_id).await.map(|(t, i, _)| (t, i));
     tokio::task::spawn_blocking(move || {
-        let _ = fetch_missing_consignments(&db_path);
+        let _ = fetch_missing_consignments_scoped(&db_path, FetchScope::for_send(&asset_id));
         let conn = Connection::open(&db_path)?;
         crate::wake_memo::send_estimate(&conn, &asset_id, genesis.as_ref())
     })
@@ -1249,7 +1344,16 @@ fn verify_carrier(
         }
         return Ok(WakeState::NoWake {
             detail: match &carrier.consignment_hash {
-                Some(hh) => format!("the memo commits to lading {}… but it has not been fetched", &hh[..16]),
+                Some(hh) => match crate::zmap::rejected_lading_for_note(conn, carrier.note_id)?.map(|_| ()).or(None) {
+                    _ => match crate::zmap::walk_failure(conn, &carrier.txid, carrier.output_index)? {
+                        Some((err, n, left)) if left > 0 => format!(
+                            "the memo commits to lading {}… and collecting it failed ({n} time(s), last: {err}); next try in {} min, or ask for it now",
+                            &hh[..16],
+                            (left / 60).max(1)
+                        ),
+                        _ => format!("the memo commits to lading {}… but it has not been fetched; ask for it, or it is collected in the background when its collection is one this wallet knows", &hh[..16]),
+                    },
+                },
                 None => "no lineage travelled with this unit (a unit straight from its mint, or sent by a wallet before 0.7.0); its first proof is made when it is sent".into(),
             },
         });
