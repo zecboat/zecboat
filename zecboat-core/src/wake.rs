@@ -13,8 +13,8 @@
 //!    contacted by default. Never plaintext, never listed.
 //! 3. **Receive.** A carrier whose memo carries `consignment_hash` and no stored lading triggers
 //!    a fetch; what comes back must open with this wallet's keys and hash to the memo's value.
-//! 4. **Verify.** `verify_chain` against the node named by `ZECBOAT_ZEBRAD_RPC`, with the note
-//!    in hand's ρ. The badge has four states and never collapses them (see [`WakeState`]).
+//! 4. **Verify.** `verify_chain` against the chain source the wallet chose (`chain()`: its own
+//!    node, else its provider), with the note in hand's ρ. The badge has four states and never collapses them (see [`WakeState`]).
 //!
 //! Every wallet read here is of *this* wallet's database, which is the one case the Wake
 //! crate's `.AppVault` guard does not cover: the guard protects copies from being confused with
@@ -221,6 +221,15 @@ impl Chain {
         }
     }
 
+    /// Transaction bytes a provider has sent this source so far, cover included; a node of
+    /// one's own is asked for the wanted transaction only, and reports nothing here.
+    pub fn bytes_fetched(&self) -> usize {
+        match self {
+            Chain::Node(..) => 0,
+            Chain::Provider(p) => p.bytes_fetched(),
+        }
+    }
+
     /// In words, for a badge: who answered.
     pub fn described(&self) -> String {
         match self {
@@ -269,21 +278,65 @@ pub enum GenesisSource {
     Registry,
 }
 
-/// `(txid display hex, action_index, source)` of the asset's genesis output, or `None` if no
-/// manifest this wallet trusts names one. Tried in order: the local manifest override, then the
-/// pinned issuers over the network.
-pub async fn genesis_outpoint(asset_id: &str) -> Option<(String, u32, GenesisSource)> {
-    if let Some((t, i)) = genesis_from_local_manifest(asset_id) {
-        return Some((t, i, GenesisSource::LocalManifest));
+/// A trusted manifest's genesis output for an asset, with what a reader needs beside the
+/// outpoint (review 2026-10-09, gate second pass, Issues A to C).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenesisRef {
+    /// Display-order hex, lower case.
+    pub txid: String,
+    pub action_index: u32,
+    /// The commitment the manifest states at that output (v1 manifests; the manifest is
+    /// signed). A held lading descends from this genesis only when its first proof opens from
+    /// this commitment: the offline form of W1. `None` when the manifest states none (the
+    /// test override, a registry-only collection): such a lading cannot then be ranked as
+    /// checking out, and several copies are not sent.
+    pub cmx: Option<[u8; 32]>,
+    /// The block the manifest states for the genesis transaction: the only hint a provider is
+    /// given for the W1 fetch, never a number taken from the lading itself (Issue B).
+    pub height: Option<u32>,
+    pub source: GenesisSource,
+}
+
+impl GenesisRef {
+    pub fn is_outpoint(&self, txid_hex: &str, action_index: u32) -> bool {
+        self.txid.eq_ignore_ascii_case(txid_hex) && self.action_index == action_index
     }
-    crate::issuance::genesis_outpoint(asset_id)
-        .await
-        .map(|(t, i, via_registry)| (t, i, if via_registry { GenesisSource::Registry } else { GenesisSource::PinnedManifest }))
+}
+
+/// The asset's genesis output per a manifest this wallet trusts, or `None` if none names one.
+/// Tried in order, the first two with no network: the local manifest override (test builds), a
+/// manifest this wallet holds (a passed audit's chain copy or a built-in seed, signature
+/// checked), then the Zecboat Registry's audited collections. Until 2026-10-09 the pinned path
+/// went through the issuance badge, whose check 5' asks the chain, so a send with the chain
+/// source down had no genesis and offered a first-holder unit as unproven (gate second pass,
+/// Issue C).
+pub async fn genesis_outpoint(asset_id: &str) -> Option<GenesisRef> {
+    if let Some((t, i, cmx)) = genesis_from_local_manifest(asset_id) {
+        return Some(GenesisRef { txid: t, action_index: i, cmx, height: None, source: GenesisSource::LocalManifest });
+    }
+    if let Some(g) = crate::issuance_v1::pinned_genesis_offline(asset_id) {
+        return Some(GenesisRef {
+            txid: g.txid,
+            action_index: g.action_index,
+            cmx: Some(g.cmx),
+            height: Some(g.height),
+            source: if g.via_chain_copy { GenesisSource::Registry } else { GenesisSource::PinnedManifest },
+        });
+    }
+    crate::issuance::genesis_outpoint(asset_id).await.map(|(t, i, via_registry)| GenesisRef {
+        txid: t,
+        action_index: i,
+        cmx: None,
+        height: None,
+        source: if via_registry { GenesisSource::Registry } else { GenesisSource::PinnedManifest },
+    })
 }
 
 /// The local manifest override alone (`ZECBOAT_WAKE_MANIFEST`), for headless callers. Read only
-/// by a build with `--features test-overrides` (`crate::test_override`).
-pub fn genesis_from_local_manifest(asset_id: &str) -> Option<(String, u32)> {
+/// by a build with `--features test-overrides` (`crate::test_override`). The third field is the
+/// genesis row's `cmx` when the file states one; without it, copies of the asset rank as
+/// "cannot be bound" (gate second pass, Issue A).
+pub fn genesis_from_local_manifest(asset_id: &str) -> Option<(String, u32, Option<[u8; 32]>)> {
     let path = crate::test_override("ZECBOAT_WAKE_MANIFEST")?;
     let bytes = std::fs::read(&path).ok()?;
     let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
@@ -299,7 +352,8 @@ pub fn genesis_from_local_manifest(asset_id: &str) -> Option<(String, u32)> {
         entry.get("txid").and_then(|t| t.as_str()),
         entry.get("output_index").and_then(|i| i.as_u64()),
     ) {
-        return Some((t.to_ascii_lowercase(), i as u32));
+        let cmx = entry.get("cmx").and_then(|c| c.as_str()).and_then(|c| zmap_wake::oracle::decode_hex_32(c).ok());
+        return Some((t.to_ascii_lowercase(), i as u32, cmx));
     }
     let unit = entry.get("unit").or_else(|| entry.get("index"))?;
     let unit = match unit {
@@ -315,6 +369,7 @@ pub fn genesis_from_local_manifest(asset_id: &str) -> Option<(String, u32)> {
     Some((
         g.get("txid")?.as_str()?.to_ascii_lowercase(),
         g.get("action_index")?.as_u64()? as u32,
+        g.get("cmx").and_then(|c| c.as_str()).and_then(|c| zmap_wake::oracle::decode_hex_32(c).ok()),
     ))
 }
 
@@ -336,8 +391,8 @@ pub fn carrier_note(conn: &Connection, txid_internal: &[u8; 32], output_index: u
 /// What `send_zmap_asset` needs to know about Wake before it builds the transfer.
 #[derive(Clone, Debug, Default)]
 pub struct SendOptions {
-    /// The asset's genesis outpoint per a trusted manifest, looked up by the async caller.
-    pub genesis: Option<(String, u32)>,
+    /// The asset's genesis per a trusted manifest, looked up by the async caller with no network.
+    pub genesis: Option<GenesisRef>,
     /// The user acknowledged that the unit arrives unproven if no lading can be made.
     pub acknowledge_unproven: bool,
     /// The user chose, under its own warning, to send a unit whose memo commits to a lading
@@ -374,7 +429,7 @@ pub fn prepare_send_lading<P: zcash_protocol::consensus::Parameters>(
     asset_id: &str,
     carrier_txid_internal: &[u8; 32],
     output_index: u32,
-    genesis: Option<&(String, u32)>,
+    genesis: Option<&GenesisRef>,
     oracle: &Chain,
 ) -> Result<Option<SendLading>> {
     // The lading this carrier's memo commits to, never "the newest for the asset" (audit
@@ -408,9 +463,7 @@ pub fn prepare_send_lading<P: zcash_protocol::consensus::Parameters>(
             l
         }
         None => match genesis {
-            Some((g_txid, g_idx)) if g_txid.eq_ignore_ascii_case(&note_txid_hex) && *g_idx == note.action_index => {
-                Lading::new(&note_txid_hex, note.action_index)
-            }
+            Some(g) if g.is_outpoint(&note_txid_hex, note.action_index) => Lading::new(&note_txid_hex, note.action_index),
             _ => return Ok(None),
         },
     };
@@ -662,8 +715,10 @@ pub fn collect_lineage(db_path: &str, asset_id: &str) -> Result<FetchReport> {
     let conn = Connection::open(db_path)?;
     for h in crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?) {
         if h.asset_id.eq_ignore_ascii_case(asset_id) {
+            // The delay is lifted, the count of failures kept: a copy that failed before still
+            // walks after the ones that never did (gate second pass, Issue E).
             for c in &h.carriers {
-                let _ = crate::zmap::clear_walk_failure(&conn, &c.txid, c.output_index);
+                let _ = crate::zmap::clear_walk_delay(&conn, &c.txid, c.output_index);
             }
         }
     }
@@ -769,7 +824,11 @@ pub fn fetch_missing_consignments_scoped(db_path: &str, scope: FetchScope) -> Re
         if scope.asset.as_deref().map(|a| !a.eq_ignore_ascii_case(&h.asset_id)).unwrap_or(false) {
             continue;
         }
-        for c in &h.carriers {
+        // Copies whose walks failed before go last, so a slow or dead line a stranger sent
+        // cannot use up every pass before the genuine unit's turn (gate second pass, Issue E).
+        let mut carriers: Vec<&crate::zmap::CarrierRef> = h.carriers.iter().collect();
+        carriers.sort_by_key(|c| crate::zmap::walk_failure(&conn, &c.txid, c.output_index).ok().flatten().map(|(_, n, _)| n).unwrap_or(0));
+        for c in carriers {
             if started.elapsed() > scope.pass_deadline {
                 // Out of time for the pass: nothing is recorded against carriers not reached.
                 break 'pass;
@@ -855,7 +914,7 @@ pub fn fetch_missing_consignments_scoped(db_path: &str, scope: FetchScope) -> Re
                     // A server that did not answer is not a wrong line: a short, flat delay
                     // (review 2026-10-09, regression over 12-15, Issue F).
                     let text = e.to_string();
-                    if text.contains("transient:") {
+                    if zmap_wake::oracle::is_transient(&text) {
                         let _ = crate::zmap::record_walk_failure_transient(&conn, &c.txid, c.output_index, &text);
                     } else {
                         let _ = crate::zmap::record_walk_failure(&conn, &c.txid, c.output_index, &text);
@@ -1091,7 +1150,7 @@ pub fn import_sealed(db_path: &str, sealed: &[u8]) -> Result<Imported> {
 pub async fn asset_send_estimate(asset_id: String) -> Result<crate::wake_memo::SendEstimate> {
     let db_path = crate::paths::as_string::wallet_db_path()?;
     // The manifest's genesis, so the estimate ranks the copies as the send will.
-    let genesis = genesis_outpoint(&asset_id).await.map(|(t, i, _)| (t, i));
+    let genesis = genesis_outpoint(&asset_id).await;
     tokio::task::spawn_blocking(move || {
         let _ = fetch_missing_consignments_scoped(&db_path, FetchScope::for_send(&asset_id));
         let conn = Connection::open(&db_path)?;
@@ -1203,7 +1262,7 @@ fn classify(e: &WakeFailure) -> bool {
 /// one carrier (the smallest txid) was checked against the newest lading stored for the asset,
 /// so an unsolicited copy of a unit, sent by anyone who knew the address, could make the
 /// genuine unit show Broken and refuse to send (audit, ZMAP B / Zecboat C / ZMAP I).
-pub fn verify_holding(db_path: &str, asset_id: &str, genesis: Option<&(String, u32, GenesisSource)>) -> Result<WakeState> {
+pub fn verify_holding(db_path: &str, asset_id: &str, genesis: Option<&GenesisRef>) -> Result<WakeState> {
     let conn = Connection::open(db_path)?;
     let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?);
     let Some(h) = holdings.iter().find(|h| h.asset_id == asset_id) else {
@@ -1251,7 +1310,7 @@ pub struct CarrierState {
 /// badge is the best of these; this is what lets the screen say "2 copies: one checks out, one
 /// came with a broken lineage" instead of hiding the second under the first (review
 /// 2026-10-09, regression Finding 11).
-pub fn holding_carrier_states(db_path: &str, asset_id: &str, genesis: Option<&(String, u32, GenesisSource)>) -> Result<Vec<CarrierState>> {
+pub fn holding_carrier_states(db_path: &str, asset_id: &str, genesis: Option<&GenesisRef>) -> Result<Vec<CarrierState>> {
     let conn = Connection::open(db_path)?;
     let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?);
     let Some(h) = holdings.iter().find(|h| h.asset_id == asset_id) else { return Ok(Vec::new()) };
@@ -1278,14 +1337,12 @@ pub fn holding_carrier_states(db_path: &str, asset_id: &str, genesis: Option<&(S
 /// was rejected. Until 2026-10-09 the rank was taken from `verify_carrier` with no genesis, so
 /// a copy with a self-consistent lading of its own outranked the genuine first-holder unit
 /// (review, regression over 12-13, Issue A).
-pub fn carrier_send_rank(conn: &Connection, asset_id: &str, c: &crate::zmap::CarrierRef, genesis: Option<&(String, u32)>) -> u8 {
+pub fn carrier_send_rank(conn: &Connection, asset_id: &str, c: &crate::zmap::CarrierRef, genesis: Option<&GenesisRef>) -> u8 {
     if !is_ironwood(c) {
         return 2;
     }
     let Ok(note) = carrier_note(conn, &c.txid_bytes, c.output_index as u32) else { return 0 };
-    let outpoint_is_genesis = genesis
-        .map(|(t, i)| t.eq_ignore_ascii_case(&hex::encode(note.txid_display)) && *i == note.action_index)
-        .unwrap_or(false);
+    let outpoint_is_genesis = genesis.map(|g| g.is_outpoint(&hex::encode(note.txid_display), note.action_index)).unwrap_or(false);
     let rho = note.note.rho().to_bytes();
     let lading = crate::zmap::consignment_for_carrier(conn, asset_id, c.consignment_hash.as_deref(), &rho, Some(c.note_id))
         .ok()
@@ -1296,7 +1353,7 @@ pub fn carrier_send_rank(conn: &Connection, asset_id: &str, c: &crate::zmap::Car
 
 #[cfg(test)]
 mod send_rank_tests {
-    use super::send_rank;
+    use super::{send_rank, GenesisRef, GenesisSource};
 
     /// The copy variants the regression review listed (2026-10-09, Issue A), ranked without an
     /// oracle: the published Wake Test #001 lading (real proofs) stands for "a valid lading".
@@ -1305,8 +1362,26 @@ mod send_rank_tests {
         let vector: &[u8] = include_bytes!("../../zmap-wake/docs/test_vector/wake_test_001_lading.json");
         let rho_bytes = zmap_wake::oracle::decode_hex_32("c208b5304d072f05e40142cce0026e6faa4961b83b7ae81ac255013aad404a39").unwrap();
         let rho: orchard::note::Rho = Option::from(orchard::note::Rho::from_bytes(&rho_bytes)).unwrap();
-        let genesis = ("14b8a35a93fec522b597115e18e5100885c30964f222a998cd8325df9118f362".to_string(), 2u32);
-        let other = ("ab".repeat(32), 0u32);
+        // The genesis commitment, as the signed manifest would state it: the vector's own first
+        // proof opens from it (checked against the chain in the vector's `verify_chain` test).
+        let (_, proofs) = zmap_wake::verify_local(vector, None, &rho).unwrap();
+        let cmx = proofs[0].instance_bytes()[zmap_wake::circuit::LINK];
+        let at = |txid: &str, action_index: u32, cmx: Option<[u8; 32]>| GenesisRef {
+            txid: txid.to_string(),
+            action_index,
+            cmx,
+            height: None,
+            source: GenesisSource::PinnedManifest,
+        };
+        let genesis = at("14b8a35a93fec522b597115e18e5100885c30964f222a998cd8325df9118f362", 2, Some(cmx));
+        let other = at(&"ab".repeat(32), 0, Some(cmx));
+        // The same label over proofs that do not open from the manifest's commitment: a
+        // stranger's relabelled lading (gate second pass, Issue A).
+        let relabelled = at("14b8a35a93fec522b597115e18e5100885c30964f222a998cd8325df9118f362", 2, Some([7u8; 32]));
+        assert_eq!(send_rank(false, Some(vector), &rho, Some(&relabelled), false), 1);
+        // A manifest that states no commitment cannot bind the lading: not "checks out".
+        let unbound = at("14b8a35a93fec522b597115e18e5100885c30964f222a998cd8325df9118f362", 2, None);
+        assert_eq!(send_rank(false, Some(vector), &rho, Some(&unbound), false), 3);
         // The genuine unit at its first holder: its outpoint is the genesis output.
         assert_eq!(send_rank(true, None, &rho, Some(&genesis), false), 6);
         // A held lading with real proofs descending from the manifest's genesis.
@@ -1358,7 +1433,7 @@ mod send_decision_tests {
 }
 
 /// The pure part of [`carrier_send_rank`], so the copy variants can be tested without a wallet.
-pub fn send_rank(outpoint_is_genesis: bool, lading: Option<&[u8]>, rho: &orchard::note::Rho, genesis: Option<&(String, u32)>, rejected: bool) -> u8 {
+pub fn send_rank(outpoint_is_genesis: bool, lading: Option<&[u8]>, rho: &orchard::note::Rho, genesis: Option<&GenesisRef>, rejected: bool) -> u8 {
     if outpoint_is_genesis {
         return 6;
     }
@@ -1372,8 +1447,19 @@ pub fn send_rank(outpoint_is_genesis: bool, lading: Option<&[u8]>, rho: &orchard
         }
         Some(bytes) => match zmap_wake::verify_local(bytes, None, rho) {
             Err(_) => 1,
-            Ok((l, _)) => match genesis {
-                Some((t, i)) if t.eq_ignore_ascii_case(&l.genesis.txid) && *i == l.genesis.action_index => 5,
+            Ok((l, proofs)) => match genesis {
+                // The label alone binds nothing: anyone can write the manifest's genesis over
+                // real proofs of their own note. Rank 5 needs the first proof to open from the
+                // commitment the signed manifest states at that output, W1 done offline
+                // (review 2026-10-09, gate second pass, Issue A).
+                Some(g) if g.is_outpoint(&l.genesis.txid, l.genesis.action_index) => {
+                    let first = proofs.first().map(|p| p.instance_bytes()[zmap_wake::circuit::LINK]);
+                    match (g.cmx, first) {
+                        (Some(cmx), Some(link)) if link == cmx => 5,
+                        (Some(_), _) => 1,
+                        (None, _) => 3,
+                    }
+                }
                 Some(_) => 1,
                 None => 3,
             },
@@ -1381,7 +1467,7 @@ pub fn send_rank(outpoint_is_genesis: bool, lading: Option<&[u8]>, rho: &orchard
     }
 }
 
-fn is_ironwood(c: &crate::zmap::CarrierRef) -> bool {
+pub(crate) fn is_ironwood(c: &crate::zmap::CarrierRef) -> bool {
     use zcash_protocol::{PoolType, ShieldedProtocol};
     matches!(crate::zmap::pool_type(c.pool), Some(PoolType::Shielded(ShieldedProtocol::Ironwood)))
 }
@@ -1391,7 +1477,7 @@ fn verify_carrier(
     conn: &Connection,
     asset_id: &str,
     carrier: &crate::zmap::CarrierRef,
-    genesis: Option<&(String, u32, GenesisSource)>,
+    genesis: Option<&GenesisRef>,
 ) -> Result<WakeState> {
     if !is_ironwood(carrier) {
         return Ok(WakeState::NoWake {
@@ -1435,17 +1521,35 @@ fn verify_carrier(
         .as_deref()
         .and_then(|hh| hex::decode(hh).ok())
         .and_then(|v| <[u8; 32]>::try_from(v).ok());
-    let oracle = chain();
     let lading = Lading::parse(&consignment.json).map_err(|e| anyhow!("stored lading unreadable: {e}"))?;
-    // The genesis proof is anchored at the block the genesis output was mined in, so the genesis
-    // transaction can be fetched under the cover of its block.
-    if let Some(first) = lading.hops.first() {
-        oracle.hint_height(&lading.genesis.txid, first.anchor_height);
-    }
+    // The W1 fetch of the genesis transaction is hinted from the block the signed manifest
+    // states, so a provider sees the block and not the transaction; never from the lading's
+    // own anchor height, which is its author's number. Until 2026-10-09 it was, and since a
+    // wrong hint fails a fetch (Knotline C), a lading with a false genesis label read "could
+    // not be checked" instead of Broken, and a lading anchored later than its genesis block
+    // could never be checked through a provider (gate second pass, Issue B). Should a hint
+    // still prove wrong, the question is asked once more without one.
+    let (oracle, outcome) = {
+        let o = chain();
+        if let Some(g) = genesis {
+            if let (Some(h), true) = (g.height, g.is_outpoint(&lading.genesis.txid, lading.genesis.action_index)) {
+                o.hint_height(&lading.genesis.txid, h);
+            }
+        }
+        let r = verify_chain(&consignment.json, expected, &note.note.rho(), &o, MIN_DEPTH);
+        match &r {
+            Err(zmap_wake::WakeFailure::Oracle(m)) if zmap_wake::oracle::is_wrong_hint(m) => {
+                let o2 = chain();
+                let r2 = verify_chain(&consignment.json, expected, &note.note.rho(), &o2, MIN_DEPTH);
+                (o2, r2)
+            }
+            _ => (o, r),
+        }
+    };
 
-    match verify_chain(&consignment.json, expected, &note.note.rho(), &oracle, MIN_DEPTH) {
+    match outcome {
         Ok(v) => {
-            let g_ok = genesis.map(|(t, i, _)| t.eq_ignore_ascii_case(&lading.genesis.txid) && *i == lading.genesis.action_index);
+            let g_ok = genesis.map(|g| g.is_outpoint(&lading.genesis.txid, lading.genesis.action_index));
             match g_ok {
                 Some(true) if v.trust == OracleTrust::FullNode => {
                     let _ = crate::zmap::mark_consignment_verified(conn, &consignment.sha256, Some(oracle.tip_height().unwrap_or(0)));
@@ -1454,7 +1558,7 @@ fn verify_carrier(
                         min_anchor_depth: v.min_anchor_depth,
                         genesis_txid: lading.genesis.txid.clone(),
                         genesis_action_index: lading.genesis.action_index,
-                        genesis_source: genesis.map(|g| g.2.clone()).unwrap_or(GenesisSource::PinnedManifest),
+                        genesis_source: genesis.map(|g| g.source.clone()).unwrap_or(GenesisSource::PinnedManifest),
                         consignment_hash: consignment.sha256.clone(),
                         asked: oracle.described(),
                     })
@@ -1466,7 +1570,7 @@ fn verify_carrier(
                     min_anchor_depth: v.min_anchor_depth,
                     genesis_txid: lading.genesis.txid.clone(),
                     genesis_action_index: lading.genesis.action_index,
-                    genesis_source: genesis.map(|g| g.2.clone()).unwrap_or(GenesisSource::PinnedManifest),
+                    genesis_source: genesis.map(|g| g.source.clone()).unwrap_or(GenesisSource::PinnedManifest),
                     consignment_hash: consignment.sha256.clone(),
                     asked: oracle.described(),
                 }),
@@ -1555,9 +1659,9 @@ mod tests {
             {"asset_id":"dd","index":"4/4","txid":"AB","output_index":7}],
             "genesis":[{"unit":1,"txid":"14B8","action_index":2},{"unit":2,"txid":"14b8","action_index":0}]}"#).unwrap();
         std::env::set_var("ZECBOAT_WAKE_MANIFEST", &p);
-        assert_eq!(genesis_from_local_manifest("aa"), Some(("14b8".into(), 0)));
-        assert_eq!(genesis_from_local_manifest("bb"), Some(("14b8".into(), 2)));
-        assert_eq!(genesis_from_local_manifest("dd"), Some(("ab".into(), 7)));
+        assert_eq!(genesis_from_local_manifest("aa"), Some(("14b8".into(), 0, None)));
+        assert_eq!(genesis_from_local_manifest("bb"), Some(("14b8".into(), 2, None)));
+        assert_eq!(genesis_from_local_manifest("dd"), Some(("ab".into(), 7, None)));
         assert_eq!(genesis_from_local_manifest("cc"), None);
         std::env::remove_var("ZECBOAT_WAKE_MANIFEST");
         let _ = std::fs::remove_dir_all(&dir);

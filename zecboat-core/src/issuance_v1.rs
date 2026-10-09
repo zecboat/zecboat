@@ -17,7 +17,7 @@
 //!  6'. the asset id recomputes from the pinned ik and the manifest's description, and the
 //!      holder's own carrier memo carries that same description and names that same ik;
 //!  5'. the genesis output the manifest names is on chain with the commitment it states,
-//!      asked of the node this wallet uses (`ZECBOAT_ZEBRAD_RPC`).
+//!      asked of the chain source this wallet chose (its own node, else its provider).
 //!
 //! What it does NOT check, and says so: that this unit descends from that genesis output
 //! (that is the lineage badge, Wake), and the collection's close and count (that is `audit`).
@@ -179,6 +179,65 @@ pub fn pinned_listing_offline(asset_id: &str) -> Option<[u8; 32]> {
         if v["assets"].as_array().map(|a| a.iter().any(|x| x["asset_id"].as_str().map(|s| s.eq_ignore_ascii_case(asset_id)).unwrap_or(false))).unwrap_or(false) {
             return hex32(seed.ik);
         }
+    }
+    None
+}
+
+/// The genesis output a manifest this wallet holds states for one asset, with the commitment
+/// and the block it states, read with no network: the chain copy of a passed audit under a
+/// pinned key, else a built-in seed, the signature checked either way (review 2026-10-09,
+/// gate second pass, Issues A and C). What the send planner needs beside the outpoint: the
+/// commitment binds a held lading's first proof to this genesis (W1 done offline, since the
+/// manifest is signed), and the block is the only hint a provider is given for the W1 fetch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinnedGenesis {
+    /// Display-order hex, lower case.
+    pub txid: String,
+    pub action_index: u32,
+    pub cmx: [u8; 32],
+    pub height: u32,
+    /// True when read from the chain copy rather than the built-in seed.
+    pub via_chain_copy: bool,
+}
+
+pub fn pinned_genesis_offline(asset_id: &str) -> Option<PinnedGenesis> {
+    let find = |v: &Value| -> Option<Value> {
+        v["assets"].as_array()?.iter().find(|x| x["asset_id"].as_str().map(|s| s.eq_ignore_ascii_case(asset_id)).unwrap_or(false)).cloned()
+    };
+    let read = |asset: &Value, via_chain_copy: bool| -> Option<PinnedGenesis> {
+        let iss = &asset["issuance"];
+        let txid = iss["txid"].as_str()?.to_ascii_lowercase();
+        if txid.len() != 64 || !txid.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        let action_index = u32::try_from(iss["action_index"].as_u64()?).ok()?;
+        let cmx = hex32(iss["cmx"].as_str()?)?;
+        let height = u32::try_from(iss["height"].as_u64()?).ok()?;
+        Some(PinnedGenesis { txid, action_index, cmx, height, via_chain_copy })
+    };
+    if let Some(a) = crate::collection_audit::audited_collection_listing(asset_id) {
+        if let Some(pin) = pins().into_iter().find(|p| hex::encode(p.ik).eq_ignore_ascii_case(&a.ik)) {
+            if let (Ok(body), Ok(sig)) = (hex::decode(a.manifest_hex.as_deref().unwrap_or("")), hex::decode(a.signature_hex.as_deref().unwrap_or(""))) {
+                if verify_bip340(&pin.ik, &body, &sig) {
+                    if let Ok(v) = serde_json::from_slice::<Value>(&body) {
+                        if v["schema"] == "zecboat-proof-of-issuance/2" {
+                            if let Some(g) = find(&v).and_then(|asset| read(&asset, true)) {
+                                return Some(g);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for seed in SEEDS {
+        let Some(ik) = hex32(seed.ik) else { continue };
+        let Ok(v) = serde_json::from_slice::<Value>(seed.manifest) else { continue };
+        let Some(asset) = find(&v) else { continue };
+        if !verify_bip340(&ik, seed.manifest, seed.signature) {
+            continue;
+        }
+        return read(&asset, false);
     }
     None
 }
@@ -450,6 +509,10 @@ mod tests {
                 let id = a["asset_id"].as_str().unwrap();
                 assert_eq!(derive_asset_id(&ik, a["asset_desc"].as_str().unwrap()), id.to_ascii_lowercase());
                 assert_eq!(pinned_listing_offline(id), Some(ik), "{label}: {id} is listed offline");
+                let g = pinned_genesis_offline(id).expect("the built-in manifest states the genesis");
+                assert_eq!(g.txid, a["issuance"]["txid"].as_str().unwrap().to_ascii_lowercase());
+                assert_eq!(hex::encode(g.cmx), a["issuance"]["cmx"].as_str().unwrap().to_ascii_lowercase());
+                assert!(g.height > 0 && !g.via_chain_copy, "{label}");
             }
         }
         assert!(pinned_listing_offline(&"0".repeat(64)).is_none());

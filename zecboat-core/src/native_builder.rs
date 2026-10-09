@@ -575,7 +575,9 @@ pub fn send_zmap_asset(
         if let Ok(view) = crate::collections::registry_view() {
             published.extend(view.registrations.iter().filter_map(|r| r.ufvk.as_deref().map(|u| u.trim().to_string())));
         }
-        if published.iter().any(|u| u == mine.trim()) {
+        // By the keys inside, not the string: a published key encoded with another set or
+        // order of items is the same account (gate second pass, Issue G).
+        if published.iter().any(|u| same_viewing_key(u, &mine)) {
             return Err(anyhow!(
                 "this wallet is a published issuance account (its viewing key is published); \
                  units are not sent from it, since anyone could read where they went. Send from the treasury wallet."
@@ -625,7 +627,10 @@ pub fn send_zmap_asset(
     // lading exists and can be collected; sending without it strips the hash for good. Only an
     // explicit abandon, under its own warning, goes on (review 2026-10-09, regression over
     // 12-15, Issue B; the hash follows the prefix so the screen can show it).
-    if wake_lading.is_none() {
+    // An Orchard-pool carrier has no Wake lineage to collect, whatever its memo commits to
+    // (gate second pass, Issue I): it moves unproven, under the acknowledgement below.
+    let ironwood_carrier = holdings_carrier(&plan).map(|c| crate::wake::is_ironwood(&c)).unwrap_or(true);
+    if wake_lading.is_none() && ironwood_carrier {
         let committed = crate::zmap::parse_memo(&plan.memo).and_then(|r| r.consignment_hash);
         if let Some(h) = committed {
             if !wake.abandon_lineage {
@@ -642,10 +647,19 @@ pub fn send_zmap_asset(
         Some(l) => println!("[wake] lading of {} proof(s) ready, sha256 {}…", l.hops, &l.hash_hex[..16]),
         None if wake.acknowledge_unproven => println!("[wake] no lading for this unit; sending it UNPROVEN as acknowledged"),
         None => {
+            // The reason as it is: no manifest at all, or a manifest whose genesis this carrier
+            // is not (gate second pass, Issue C: "no manifest" was said in both cases).
+            let why = match &wake.genesis {
+                Some(g) => format!(
+                    "the manifest names {}… output {} as the genesis and this carrier is not it",
+                    &g.txid[..16.min(g.txid.len())],
+                    g.action_index
+                ),
+                None => "no trusted manifest names its carrier as the issuance output".to_string(),
+            };
             return Err(anyhow!(
-                "{} this wallet holds no lineage proof for {} and no trusted manifest names its \
-                 carrier as the issuance output, so the recipient would receive it unproven. \
-                 Acknowledge that to send anyway.",
+                "{} this wallet holds no lineage proof for {} and {why}, so the recipient would \
+                 receive it unproven. Acknowledge that to send anyway.",
                 crate::wake::UNPROVEN_PREFIX,
                 asset_id
             ))
@@ -1187,4 +1201,31 @@ fn orchard_verifying_key() -> &'static ::orchard::circuit::VerifyingKey {
     VK.get_or_init(|| {
         ::orchard::circuit::VerifyingKey::build(::orchard::circuit::OrchardCircuitVersion::PostNu6_3)
     })
+}
+
+/// The carrier the plan spends, as the wallet lists it (pool included).
+fn holdings_carrier(plan: &crate::zmap::AssetSendPlan) -> Option<crate::zmap::CarrierRef> {
+    let conn = rusqlite::Connection::open_with_flags(wallet_db_path().ok()?, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn).ok()?)
+        .into_iter()
+        .flat_map(|h| h.carriers)
+        .find(|c| c.txid_bytes[..] == plan.carrier.txid().as_ref()[..] && c.output_index as u32 == plan.carrier.output_index())
+}
+
+/// Whether two encoded unified full viewing keys hold the same shielded account: equal as
+/// strings, or equal in their Orchard full viewing key once decoded. A key that does not decode
+/// is compared as a string only (gate second pass, Issue G).
+pub(crate) fn same_viewing_key(published: &str, mine: &str) -> bool {
+    let (published, mine) = (published.trim(), mine.trim());
+    if published == mine {
+        return true;
+    }
+    let decode = |s: &str| zcash_keys::keys::UnifiedFullViewingKey::decode(&zcash_protocol::consensus::MainNetwork, s).ok();
+    match (decode(published), decode(mine)) {
+        (Some(a), Some(b)) => match (a.orchard(), b.orchard()) {
+            (Some(x), Some(y)) => x.to_bytes() == y.to_bytes(),
+            _ => false,
+        },
+        _ => false,
+    }
 }

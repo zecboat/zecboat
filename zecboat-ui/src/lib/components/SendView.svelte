@@ -129,6 +129,8 @@
   // the confirmation screen quoted 0.0002 while the wallet went on to pay 0.0007 or 0.0017.
   type SendEstimate = { lineage: "none" | "knot" | "start" | "whole"; proofs: number; extra_outputs: number; outputs: number; fee_zat: number; carrier: string; copies: number };
   let estimate = $state<SendEstimate | null>(null);
+  // Why no estimate could be made (the send would refuse for the same reason), or null.
+  let estimateError = $state<string | null>(null);
   const zec = (z: number) => (z / 100_000_000).toFixed(8);
   let useHardwareWallet = $state(false);
   let isWaitingForHardware = $state(false);
@@ -197,10 +199,11 @@
     e.preventDefault();
     if (remainingChars < 0) return;
     estimate = null;
+    estimateError = null;
     if (assetType === "ZSA" && fromAddress.trim()) {
       invoke<SendEstimate>("asset_send_estimate", { assetId: fromAddress.trim() })
-        .then((e) => { estimate = e; })
-        .catch(() => { estimate = null; });
+        .then((e) => { estimate = e; estimateError = null; })
+        .catch((e) => { estimate = null; estimateError = String((e as any)?.message ?? e); });
     }
     showConfirmation = true;
     txResult = null;
@@ -405,6 +408,9 @@
           network fee of {estimate ? zec(estimate.fee_zat) : `about ${zec(fee.fee_zat)}`} ZEC is paid from your other funds — never
           from the carrier, which would destroy the asset.
         </p>
+        {#if estimateError}
+          <p class="fee-note">✗ {estimateError}</p>
+        {/if}
         {#if estimate && estimate.lineage !== "none"}
           <!-- One line: what travels with the item, so the higher fee has its reason beside it. -->
           <p class="fee-note">

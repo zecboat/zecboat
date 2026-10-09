@@ -132,7 +132,9 @@ pub const MAX_JOIN_HOPS: usize = 6;
 /// The memos of this transaction's notes that were received by the same account and address
 /// as carrier note `note_id`: the key memo for a carrier is taken only from an output to the
 /// carrier's own receiver, never from any note of the transaction (review 2026-10-09, Knotline
-/// F). A carrier for which no note id is known falls back to the whole transaction.
+/// F). A carrier for which no note id is known falls back to the whole transaction. `note_id`
+/// is an Ironwood row id: every caller excludes Orchard-pool carriers first, whose ids live in
+/// another table (gate second pass, Issue I).
 fn memos_in_transaction(conn: &rusqlite::Connection, txid_internal: &[u8; 32], note_id: Option<i64>) -> Result<Vec<Vec<u8>>> {
     let memos: Vec<Vec<u8>> = match note_id {
         Some(id) => {
@@ -263,7 +265,7 @@ pub struct SendEstimate {
     pub copies: usize,
 }
 
-pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Option<&(String, u32)>) -> Result<SendEstimate> {
+pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Option<&crate::wake::GenesisRef>) -> Result<SendEstimate> {
     // One packed hop: circuit byte, three instance fields, anchor height, proof length, proof.
     const HOP: usize = 1 + 96 + 4 + 2 + 4960;
     const CHUNK: usize = 512 - 9;
@@ -285,6 +287,15 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Optio
     let rank = |c: &crate::zmap::CarrierRef| -> u8 { crate::wake::carrier_send_rank(conn_ref, asset_id, c, genesis) };
     let plan = crate::zmap::plan_asset_send_preferring(&holdings, asset_id, &rank)?;
     let copies = holdings.iter().find(|h| h.asset_id == asset_id).map(|h| h.carriers.len()).unwrap_or(0);
+    // The send's own refusal, so the screen never names a copy the send then declines (gate
+    // second pass, suggestion 2).
+    if copies > 1 {
+        let ranks: Vec<u8> = holdings.iter().filter(|h| h.asset_id == asset_id).flat_map(|h| h.carriers.iter()).map(|c| rank(c)).collect();
+        let top = ranks.iter().copied().max().unwrap_or(0);
+        if let Err(why) = crate::wake::send_decision(top, ranks.iter().filter(|r| **r == top).count(), genesis.is_some()) {
+            return Err(anyhow!("this wallet holds {copies} copies of this asset and cannot tell which to send: {why}"));
+        }
+    }
     let carrier = format!("{}#{}", hex::encode(plan.carrier.txid().as_ref()).chars().take(12).collect::<String>(), plan.carrier.output_index());
     let chosen = holdings
         .iter()
@@ -361,6 +372,7 @@ pub fn lading_from_knotline(conn: &rusqlite::Connection, carrier_txid_internal: 
                     b.spend(0)?;
                 }
                 let c = chain.get_or_insert_with(crate::wake::chain);
+                let before = c.bytes_fetched();
                 if let Some(h) = known_height {
                     let mut display = *txid;
                     display.reverse();
@@ -369,13 +381,18 @@ pub fn lading_from_knotline(conn: &rusqlite::Connection, carrier_txid_internal: 
                 match c.raw_transaction(txid)? {
                     Some((h, raw)) => {
                         if let Some(b) = budget {
-                            b.spend(raw.len())?;
+                            // What was really downloaded, the cover included (gate second
+                            // pass, Issue F).
+                            b.spend(raw.len().max(c.bytes_fetched().saturating_sub(before)))?;
                         }
                         (raw, h)
                     }
                     // Told apart from "the key opens nothing" (audit 2026-10-08, Knotline L):
-                    // a transaction the source does not know is "could not be checked".
-                    None => return Err(anyhow!("transaction {}… is not known to {}", hex::encode(&txid[..6]), c.described())),
+                    // a transaction the source does not know is "could not be checked", a
+                    // source failure, not the line's (gate second pass, Issue D).
+                    None => {
+                        return Err(anyhow!("{} transaction {}… is not known to {}", zmap_wake::oracle::TRANSIENT, hex::encode(&txid[..6]), c.described()))
+                    }
                 }
             }
         };

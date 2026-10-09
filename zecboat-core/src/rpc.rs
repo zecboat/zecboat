@@ -2689,7 +2689,7 @@ pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, 
     // blocking builder, and its answer travels down as data.
     let wake = crate::wake::SendOptions {
         genesis: match asset_id {
-            Some(id) => crate::wake::genesis_outpoint(id).await.map(|(t, i, _)| (t, i)),
+            Some(id) => crate::wake::genesis_outpoint(id).await,
             None => None,
         },
         acknowledge_unproven,

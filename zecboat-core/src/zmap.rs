@@ -1260,6 +1260,14 @@ pub fn walk_failure(conn: &rusqlite::Connection, txid_hex: &str, output_index: i
     Ok(r.map(|(e, f, next)| (e, f, next - now_secs())))
 }
 
+/// Lift a walk's delay and keep its count of failures: the next pass may try at once, but the
+/// copy still comes after those that never failed (gate second pass, Issue E).
+pub fn clear_walk_delay(conn: &rusqlite::Connection, txid_hex: &str, output_index: i64) -> rusqlite::Result<()> {
+    ensure_walk_failures_table(conn)?;
+    conn.execute("UPDATE ext_zecboat_zmap_walk_failures SET next_after = 0 WHERE txid = ?1 AND output_index = ?2", rusqlite::params![txid_hex, output_index])?;
+    Ok(())
+}
+
 pub fn clear_walk_failure(conn: &rusqlite::Connection, txid_hex: &str, output_index: i64) -> rusqlite::Result<()> {
     ensure_walk_failures_table(conn)?;
     conn.execute("DELETE FROM ext_zecboat_zmap_walk_failures WHERE txid = ?1 AND output_index = ?2", rusqlite::params![txid_hex, output_index])?;
@@ -1327,16 +1335,18 @@ pub fn consignment_for_carrier(
         }
     }
     if let Some(mut c) = adoptable {
-        // Adoption writes once; on a read-only connection (the send and the estimate open one)
-        // nothing is written and the row is handed over unadopted for this call. A lading made
-        // for a send (`sent_txid` set) is never adopted, whatever its `source` says.
+        // Adoption writes once. On a read-only connection (the send and the estimate open one)
+        // nothing is written and nothing is handed over: the row is adopted by the next pass
+        // that can write (the item's badge), never assumed adopted, since the write is also
+        // the check that no send made it (`sent_txid`; gate second pass, Issue I). A lading
+        // made for a send is never adopted, whatever its `source` says.
         let raw = hex::decode(&c.sha256).unwrap_or_default();
         let n = conn
             .execute(
                 "UPDATE ext_zecboat_zmap_consignments SET received_note_id = ?2 WHERE sha256 = ?1 AND received_note_id IS NULL AND sent_txid IS NULL",
                 rusqlite::params![raw, me],
             )
-            .unwrap_or(1);
+            .unwrap_or(0);
         if n == 0 {
             return Ok(None);
         }
