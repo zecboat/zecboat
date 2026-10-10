@@ -26,6 +26,21 @@
   let view = $state<RegistryView | null>(null);
   let audits = $state<Record<string, AuditReport>>({});
   let scanning = $state(false);
+  // Where the registry read has got to, and the chain tip, while a scan runs: the same one
+  // line Network Status gives the wallet's own sync (owner, 2026-10-10), so a 15,000-block
+  // read does not look frozen. Polled from the registry database and the sync status.
+  let scanAt = $state(0);
+  let scanTip = $state(0);
+  let scanTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function pollScan() {
+    try {
+      const v = await invoke<RegistryView>("get_collections");
+      scanAt = v.scanned_to;
+      const d = JSON.parse(await invoke<string>("sync_status"));
+      if (typeof d.targetHeight === "number" && d.targetHeight > 0) scanTip = d.targetHeight;
+    } catch {}
+  }
   let auditing = $state<string | null>(null);
   let error = $state<string | null>(null);
   let auditError = $state<Record<string, string>>({});
@@ -80,13 +95,48 @@
   async function refresh() {
     scanning = true;
     error = null;
+    scanAt = view?.scanned_to ?? 0;
+    await pollScan();
+    scanTimer = setInterval(pollScan, 5000);
     try {
       view = await invoke<RegistryView>("scan_collections");
     } catch (e) {
       error = String(e);
     } finally {
       scanning = false;
+      if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
     }
+  }
+
+  // A scan the backend is already running (started before this page was opened, or by an
+  // earlier visit: the page is re-created each time it is shown): watch it to its end.
+  async function watchRunningScan() {
+    scanning = true;
+    await pollScan();
+    scanTimer = setInterval(pollScan, 5000);
+    try {
+      while (await invoke<boolean>("registry_scan_running")) {
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      await load();
+    } finally {
+      scanning = false;
+      if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+    }
+  }
+
+  // Where the running Check has got to: block scanned, block it started from, chain tip.
+  let auditAt = $state(0);
+  let auditFrom = $state(0);
+  let auditTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function pollAudit(r: Registration) {
+    try {
+      const p = await invoke<[number, number] | null>("audit_progress", { ik: r.ik, registrationTxid: r.registration_txid });
+      if (p) { auditAt = p[0]; auditFrom = p[1]; }
+      const d = JSON.parse(await invoke<string>("sync_status"));
+      if (typeof d.targetHeight === "number" && d.targetHeight > 0) scanTip = d.targetHeight;
+    } catch {}
   }
 
   async function check(r: Registration) {
@@ -94,6 +144,9 @@
     auditing = k;
     const { [k]: _drop, ...rest } = auditError;
     auditError = rest;
+    auditAt = 0; auditFrom = 0;
+    await pollAudit(r);
+    auditTimer = setInterval(() => pollAudit(r), 5000);
     try {
       const a = await invoke<AuditReport>("audit_collection", { ik: r.ik, registrationTxid: r.registration_txid });
       audits = { ...audits, [k]: a };
@@ -101,12 +154,57 @@
       auditError = { ...auditError, [k]: String(e) };
     } finally {
       auditing = null;
+      if (auditTimer) { clearInterval(auditTimer); auditTimer = null; }
+    }
+  }
+
+  // The first registry scan reads about 15,000 blocks through the chain source. On a fresh
+  // wallet it used to start the moment this view was mounted, hidden, behind the wallet's own
+  // first sync, and the two scans fought for the same engine (fresh wallet, 2026-10-10:
+  // "Syncing Slowly", twelve blocks left, no batch for twelve minutes). It now waits until
+  // the wallet itself is at the tip, polling the sync status, before it reads the registry.
+  async function walletAtTip(): Promise<boolean> {
+    try {
+      const d = JSON.parse(await invoke<string>("sync_status"));
+      return typeof d.blockHeight === "number" && typeof d.targetHeight === "number" && d.targetHeight > 0 && d.blockHeight >= d.targetHeight - 1;
+    } catch { return false; }
+  }
+
+  // A Check the backend is already running (started on an earlier visit): watch it to its end.
+  async function watchRunningAudit(k: string) {
+    const r = view?.registrations.find((x) => key(x) === k);
+    if (!r) return;
+    auditing = k;
+    auditAt = 0; auditFrom = 0;
+    await pollAudit(r);
+    auditTimer = setInterval(() => pollAudit(r), 5000);
+    try {
+      while ((await invoke<string[]>("audits_running")).includes(k)) {
+        await new Promise((res) => setTimeout(res, 5000));
+      }
+      await load();
+    } finally {
+      auditing = null;
+      if (auditTimer) { clearInterval(auditTimer); auditTimer = null; }
     }
   }
 
   onMount(async () => {
     await load();
-    if (view && view.scanned_to === 0) await refresh();
+    try {
+      const running = await invoke<string[]>("audits_running");
+      if (running.length) { watchRunningAudit(running[0]); }
+      if (await invoke<boolean>("registry_scan_running")) {
+        await watchRunningScan();
+        return;
+      }
+    } catch {}
+    if (view && view.scanned_to === 0) {
+      for (let i = 0; i < 480 && !(await walletAtTip()); i++) {
+        await new Promise((r) => setTimeout(r, 15000));
+      }
+      if (view && view.scanned_to === 0) await refresh();
+    }
   });
 </script>
 
@@ -125,6 +223,12 @@
 
   {#if error}
     <div class="banner bad">✗ {error}</div>
+  {/if}
+
+  {#if scanning}
+    <div class="banner" title="The registry is read from the chain through {view?.node ?? 'your chain source'}; nothing comes from zecboat.com.">
+      ⟳ Reading the Zecboat Registry from the chain: block {scanAt.toLocaleString()}{#if scanTip > scanAt} of {scanTip.toLocaleString()} · {(scanTip - scanAt).toLocaleString()} to go{/if}
+    </div>
   {/if}
 
   {#if scanning && !view?.registrations.length}
@@ -169,7 +273,7 @@
           {:else if a}
             check failed
           {:else if auditing === k}
-            checking…
+            checking… block {auditAt.toLocaleString()}{#if scanTip > auditAt} of {scanTip.toLocaleString()} · {(scanTip - auditAt).toLocaleString()} to go{/if}{#if auditFrom > 0 && scanTip > auditFrom} (reads {(scanTip - auditFrom).toLocaleString()} blocks of this collection's history from your chain source){/if}
           {:else}
             not checked
           {/if}
@@ -230,7 +334,7 @@
   {/if}
 
   {#if view && view.scanned_to > 0}
-    <div class="foot" title={`node ${view.node}`}>block {view.scanned_to.toLocaleString()}</div>
+    <div class="foot" title={`Read from the chain through ${view.node}; nothing comes from zecboat.com`}>Registry read to block {view.scanned_to.toLocaleString()}</div>
   {/if}
 </div>
 
@@ -298,4 +402,5 @@
   .spin { display: inline-block; animation: spin 1s linear infinite; }
   .spin.big { font-size: 2rem; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .banner { margin: 0.5rem 0; padding: 0.5rem 0.75rem; border-radius: 8px; font-size: 0.9rem; background: rgba(160, 160, 170, 0.12); border: 1px solid rgba(160, 160, 170, 0.3); }
 </style>

@@ -36,6 +36,11 @@
   }
 
   let nodePreference = $state("local");
+  // A node of the user's own that is not on this machine (a zainod on the LAN): named here,
+  // before the wallet exists, so such a wallet never touches a public lightwalletd at all
+  // (owner, 2026-10-10). The same "Custom" as Settings.
+  let customUrl = $state("");
+  let nodeError = $state("");
   let useYubikey = $state(false);
 
   // What the backend resolved at startup. Non-empty only when ZECBOAT_PROVIDER was
@@ -95,10 +100,17 @@
   async function handleNodeSelection() {
     // Previously this discarded nodePreference entirely and just advanced the
     // screen, so the wizard's choice never reached the backend.
+    nodeError = "";
     const url =
       nodePreference === "configured"
         ? configuredUrl
-        : NODE_URLS[nodePreference] ?? NODE_URLS.local;
+        : nodePreference === "custom"
+          ? customUrl.trim()
+          : NODE_URLS[nodePreference] ?? NODE_URLS.local;
+    if (nodePreference === "custom" && !/^https?:\/\/[^\s/]+(:\d+)?\/?$/.test(url)) {
+      nodeError = "Enter the node's address as http://host:port or https://host:port.";
+      return;
+    }
     try {
       await invoke("set_provider_url", { url });
       localStorage.setItem(
@@ -114,7 +126,7 @@
           presetId:
             nodePreference === "remote"
               ? "public"
-              : nodePreference === "configured"
+              : nodePreference === "configured" || nodePreference === "custom"
                 ? "custom"
                 : "local",
           url
@@ -327,6 +339,17 @@
         </label>
 
         <label class="node-option">
+          <input type="radio" bind:group={nodePreference} value="custom" />
+          <div class="option-details">
+            <span class="option-title">My own node, elsewhere</span>
+            <span class="option-desc">A zainod or lightwalletd-compatible node you run on another machine, for example on your LAN. Nothing is sent to any public node.</span>
+            {#if nodePreference === "custom"}
+              <input type="text" class="node-url" bind:value={customUrl} placeholder="http://192.168.1.20:8137" spellcheck="false" autocomplete="off" />
+            {/if}
+          </div>
+        </label>
+
+        <label class="node-option">
           <input type="radio" bind:group={nodePreference} value="remote" />
           <div class="option-details">
             <span class="option-title">zec.rocks (Public Node)</span>
@@ -335,9 +358,12 @@
         </label>
       </div>
 
+      {#if nodeError}
+        <p class="error">{nodeError}</p>
+      {/if}
       <div class="actions">
         <button class="secondary-btn" onclick={() => { pendingRestore = false; currentScreen = 1; }}>Back</button>
-        <button class="primary-btn" onclick={handleNodeSelection}>Continue</button>
+        <button class="primary-btn" onclick={handleNodeSelection} disabled={nodePreference === "custom" && !customUrl.trim()}>Continue</button>
       </div>
     </div>
   <!-- YubiKey screen hidden 2026-09-01. The integration is a MOCK: zecboat-core/src/yubi.rs
@@ -671,6 +697,18 @@
     border-color: var(--accent-color);
   }
 
+  .node-url {
+    display: block;
+    width: 100%;
+    margin-top: 0.5rem;
+    padding: 0.45rem 0.6rem;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(0, 0, 0, 0.25);
+    color: inherit;
+    font-family: ui-monospace, monospace;
+    font-size: 0.9rem;
+  }
   .error {
     color: #ff5252;
     margin-top: 1rem;

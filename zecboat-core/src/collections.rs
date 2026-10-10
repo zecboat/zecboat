@@ -303,6 +303,12 @@ async fn ensure_registry_account(db_path: &str) -> Result<()> {
 /// One scan at a time: the UI's Refresh can be pressed twice.
 static SCANNING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Whether a registry scan is running right now. The Collections view is re-created each
+/// time it is opened, so it asks the backend instead of remembering (owner, 2026-10-10).
+pub fn scan_in_progress() -> bool {
+    SCANNING.try_lock().is_err()
+}
+
 /// What the Collections view shows.
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistryView {
@@ -334,7 +340,7 @@ pub async fn scan_registry() -> Result<RegistryView> {
     let mut retreat = 0usize;
     let mut settled = 0u32;
     for _ in 0..10_000 {
-        match crate::rpc::sync_pass(&db).await? {
+        match crate::rpc::sync_pass_polite(&db).await? {
             crate::rpc::SyncStep::Advanced(_) => {}
             crate::rpc::SyncStep::AtTip(_) => {
                 // At the tip, sync_pass services the backend's requests, which is where the

@@ -40,6 +40,18 @@ first public release of everything listed under 0.7.0, with that fixed.
   be sent by any means; **Open a lineage file…** takes one in. A finished send of an item shows
   the same mark under the transaction id. Before, delivery was tried once and a failure was a
   line on the console.
+- **A new wallet starts at the tip, or says why it cannot.** The setup wizard's node screen
+  gains "My own node, elsewhere" for a zainod on another machine, so a wallet meant never to
+  touch a public node never does. If the node you chose does not answer, the wallet refuses to
+  create itself and says which node, instead of silently starting an 85,000-block first sync.
+- **Collections say where they are.** The registry read waits until your wallet is synced,
+  shows the block it is on and how many remain, and gives way to your wallet's own sync; a
+  Check does the same. Both survive leaving the page. The footer says what block the registry
+  was read to.
+- **Checks through a provider work for collections older than two weeks.** A provider that
+  reports no height for an older transaction used to keep the collection's close from being
+  stored, so every Check of it failed; and the collection's own registration, sent after the
+  close, was counted as an issue. Both fixed; Lagos Post Card checks 17/17 again.
 - **You choose the copy when the wallet cannot.** If someone sends you a bare copy of a unit
   you hold and neither carries a lineage the wallet can check, the send no longer refuses for
   good: the confirmation lists the copies with each one's lineage state and you name the one
@@ -133,14 +145,17 @@ What is open, all rated Low or Informational by the last pass, and left for 0.7.
   no YubiKey applet implements it. Once the wallet is unlocked, signing is software exactly
   as before. The wallet says this on the screen where you turn the feature on.
 
-  **Requires `age-plugin-yubikey`, which you install yourself:**
+  **Requires `age-plugin-yubikey`.** 0.7.1 ships `install_yubikey.sh` beside the installer:
+  it installs the smart-card daemon, a Rust toolchain if you have none (the official rustup,
+  checked against its published hash, after asking), builds the plugin from its published
+  source at a pinned version, and puts it where a wallet started from the menu finds it.
+  By hand it is:
 
   ```
-  cargo install age-plugin-yubikey
+  cargo install age-plugin-yubikey --version 0.5.1 --locked
   ```
 
-  It is not packaged for Debian and installing it needs a Rust toolchain, so in this release
-  **YubiKey support is effectively developer-only.** We chose not to bundle the plugin: it
+  It is not packaged for Debian. We chose not to bundle the plugin: it
   links `libpcsclite`, so shipping it would re-add that dependency for every user, including
   everyone who will never own a YubiKey. Without the plugin the option simply does not
   appear — nothing breaks, but nothing advertises itself either, so this note is the only

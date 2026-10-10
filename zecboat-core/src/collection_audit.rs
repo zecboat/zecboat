@@ -304,7 +304,17 @@ pub fn run_checks(reg: &Registration, ufvk: &str, outs: &[Out], flows: &[Flow]) 
     // only a well-formed carrier (review 2026-10-09, session 4, Issue D: a payment, a second
     // pin or a malformed carrier after the close used to pass). The close's own outputs are
     // the close.
-    let after_any = outs.iter().filter(|o| o.height > close_height || (o.height == close_height && o.txid != close_out.txid)).count();
+    // The registration in the Zecboat Registry is sent by the issuance account AFTER the
+    // close, by construction (it names the close): it is the issuer's act of registering, not
+    // an issue, and its outputs are not counted. Until 2026-10-10 the audit passed this check
+    // only because a provider reporting no height for that transaction kept it from being
+    // stored at all (hardening 25); once stored, Lagos Post Card read "3 output(s) after the
+    // close" and failed.
+    let after_any = outs
+        .iter()
+        .filter(|o| o.height > close_height || (o.height == close_height && o.txid != close_out.txid))
+        .filter(|o| !o.txid.eq_ignore_ascii_case(&reg.registration_txid))
+        .count();
     add(8, "carriers issued before the close equal the close memo's count", before.len() as u32 == close.count,
         Some(format!("{} carriers, count {}", before.len(), close.count)));
     add(9, "no output issued by this account after the close", after_any == 0,
@@ -425,7 +435,7 @@ async fn ensure_account(db_path: &str, ufvk: &zcash_keys::keys::UnifiedFullViewi
 async fn sync_to_tip(db_path: &str, floor: u32) -> Result<u32> {
     let mut retreat = 0usize;
     for _ in 0..100_000 {
-        match crate::rpc::sync_pass(db_path).await? {
+        match crate::rpc::sync_pass_polite(db_path).await? {
             crate::rpc::SyncStep::Advanced(_) => {}
             crate::rpc::SyncStep::AtTip(tip) => return Ok(tip),
             crate::rpc::SyncStep::Continuity(at) => {
@@ -676,6 +686,21 @@ pub fn cached_audits() -> Result<Vec<(String, AuditReport)>> {
         .collect())
 }
 
+/// Where a collection's audit scan has got to: `(scanned_to, from)`, the last block its own
+/// database holds and the block the scan starts from (the mint minus the margin). `None` when
+/// the registration is unknown or nothing has been scanned yet. Read-only, no network: the
+/// Collections page polls it while a Check runs, so a 22,000-block read is not a bare
+/// "checking…" (owner, 2026-10-10).
+pub fn audit_progress(ik: &str, registration_txid: &str) -> Option<(u32, u32)> {
+    let view = crate::collections::registry_view().ok()?;
+    let reg = view.registrations.into_iter().find(|r| r.ik.eq_ignore_ascii_case(ik) && r.registration_txid.eq_ignore_ascii_case(registration_txid))?;
+    let from = reg.mint_height.saturating_sub(BIRTHDAY_MARGIN).max(1);
+    let db = audit_db_path(reg.ufvk.as_deref()?).ok()?;
+    let c = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let at = c.query_row("SELECT MAX(height) FROM blocks", [], |r| r.get::<_, Option<i64>>(0)).ok().flatten().map(|h| h as u32).unwrap_or(from);
+    Some((at.max(from), from))
+}
+
 /// The height the registry scan has reached (the wallet's own view), for judging audit age
 /// without the network. `None` before any scan.
 pub fn registry_scanned_tip() -> Option<u32> {
@@ -693,12 +718,42 @@ pub fn store_for(registration_txid: &str, r: &AuditReport) -> Result<()> {
 }
 
 /// Audit the registration identified by `(ik, registration_txid)` from the last registry scan.
+/// The audits running right now, keyed "registration_txid:ik" as the cache keys them. The
+/// Collections page is re-created on each visit and asks here which Check to keep watching
+/// (owner, 2026-10-10). One audit per collection at a time.
+static AUDITS_RUNNING: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+
+struct AuditMark(String);
+impl Drop for AuditMark {
+    fn drop(&mut self) {
+        if let Ok(mut g) = AUDITS_RUNNING.lock() {
+            if let Some(set) = g.as_mut() {
+                set.remove(&self.0);
+            }
+        }
+    }
+}
+
+/// Keys ("registration_txid:ik") of the audits running right now.
+pub fn audits_running() -> Vec<String> {
+    AUDITS_RUNNING.lock().ok().and_then(|g| g.as_ref().map(|s| s.iter().cloned().collect())).unwrap_or_default()
+}
+
 pub async fn audit_registered(ik: &str, registration_txid: &str) -> Result<AuditReport> {
     let reg = crate::collections::registry_view()?
         .registrations
         .into_iter()
         .find(|r| r.ik.eq_ignore_ascii_case(ik) && r.registration_txid.eq_ignore_ascii_case(registration_txid))
         .ok_or_else(|| anyhow!("that registration is not in the registry as last read; refresh first"))?;
+    let key = format!("{}:{}", registration_txid.to_ascii_lowercase(), ik.to_ascii_lowercase());
+    let _mark = {
+        let mut g = AUDITS_RUNNING.lock().map_err(|_| anyhow!("audit bookkeeping poisoned"))?;
+        let set = g.get_or_insert_with(Default::default);
+        if !set.insert(key.clone()) {
+            return Err(anyhow!("a check of this collection is already running"));
+        }
+        AuditMark(key)
+    };
     let report = audit(&reg).await?;
     store_for(registration_txid, &report)?;
     Ok(report)

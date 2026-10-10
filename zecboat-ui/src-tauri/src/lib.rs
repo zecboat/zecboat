@@ -388,6 +388,18 @@ async fn audit_collection(ik: String, registration_txid: String) -> Result<zecbo
     zecboat_core::collection_audit::audit_registered(&ik, &registration_txid).await.map_err(|e| e.to_string())
 }
 
+/// The Checks running right now, keyed "registration_txid:ik".
+#[tauri::command]
+fn audits_running() -> Vec<String> {
+    zecboat_core::collection_audit::audits_running()
+}
+
+/// Where a running Check has got to: `[scanned_to, from]`, or null.
+#[tauri::command]
+fn audit_progress(ik: String, registration_txid: String) -> Option<(u32, u32)> {
+    zecboat_core::collection_audit::audit_progress(&ik, &registration_txid)
+}
+
 /// A3b phase 3: units this wallet holds, per collection key. Reads wallet.db read-only.
 #[tauri::command]
 fn get_collection_holdings() -> Result<std::collections::HashMap<String, zecboat_core::collections::Held>, String> {
@@ -398,6 +410,12 @@ fn get_collection_holdings() -> Result<std::collections::HashMap<String, zecboat
 #[tauri::command]
 fn get_collection_audits() -> Result<std::collections::HashMap<String, zecboat_core::collection_audit::AuditReport>, String> {
     zecboat_core::collection_audit::cached_audits().map(|v| v.into_iter().collect()).map_err(|e| e.to_string())
+}
+
+/// Whether a registry scan is running in the backend right now.
+#[tauri::command]
+fn registry_scan_running() -> bool {
+    zecboat_core::collections::scan_in_progress()
 }
 
 /// A3b: bring the registry level with the chain (the wallet's node), then list it.
@@ -414,7 +432,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sync_status, yubikey_message, set_provider_url, get_provider_url, get_balance, get_balance_breakdown, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
-            registry_base, get_lineage_route, set_lineage_route, get_chain_source, set_chain_source, asset_send_estimate, asset_carrier_states, collect_lineage, lineage_outgoing, lineage_export, lineage_import, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
+            registry_base, get_lineage_route, set_lineage_route, get_chain_source, set_chain_source, asset_send_estimate, asset_carrier_states, collect_lineage, lineage_outgoing, lineage_export, lineage_import, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, registry_scan_running, audit_progress, audits_running, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_zsas, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, wallet_uses_yubikey, lock_wallet,
             create_new_account, backup_wallet, list_backups, restore_backup, rescan_from_height, export_keys, get_viewkey, check_yubikey,
             get_roster, add_roster_contact, delete_roster_contact, validate_address

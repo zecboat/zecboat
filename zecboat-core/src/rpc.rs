@@ -731,13 +731,17 @@ async fn service_transaction_data_requests(
                 } else {
                     let n = found.len();
                     for (data, height) in found {
-                        let tx = match Transaction::read(
-                            &data[..],
-                            zcash_protocol::consensus::BranchId::for_height(
-                                &MainNetwork,
-                                BlockHeight::from_u32(height as u32),
-                            ),
-                        ) {
+                        // The same rule as the enhancement below: a server's height 0 is "no
+                        // height", not block 0. A transparent transaction is not in the
+                        // shielded scan, so there is no known block to fall back on: skipped.
+                        let h = match height {
+                            0 => {
+                                println!("[w9] a transaction for {} skipped: the server reports no height for it", addr);
+                                continue;
+                            }
+                            s => BlockHeight::from_u32(s as u32),
+                        };
+                        let tx = match Transaction::read(&data[..], zcash_protocol::consensus::BranchId::for_height(&MainNetwork, h)) {
                             Ok(tx) => tx,
                             Err(e) => {
                                 println!("[w9] could not parse a transaction for {}: {}", addr, e);
@@ -748,7 +752,7 @@ async fn service_transaction_data_requests(
                             &MainNetwork,
                             &mut wallet_db,
                             &tx,
-                            Some(BlockHeight::from_u32(height as u32)),
+                            Some(h),
                         ) {
                             println!("[w9] could not store a transaction for {}: {:?}", addr, e);
                         }
@@ -762,7 +766,24 @@ async fn service_transaction_data_requests(
                 if let Some((data, height)) = fetch_tx(client, txid).await {
                     let mut wallet_db = WalletDb::for_path(db_path, MainNetwork, SystemClock, OsRng)
                         .map_err(|e| anyhow::anyhow!("could not open wallet: {:?}", e))?;
-                    let h = BlockHeight::from_u32(height as u32);
+                    // The height the server reports is not relied on. Some servers answer 0 for
+                    // a transaction outside their recent window although it is mined (zaino,
+                    // seen 2026-10-06 and again 2026-10-10 on zec.rocks for the registry's
+                    // transactions, 14,000 blocks old); storing it "mined at 0" fails the
+                    // database's height_consistency rule, so the transaction was never stored,
+                    // and a collection's close was never read: every registry check of a
+                    // collection older than the server's window failed. The wallet's own scan
+                    // already knows the block the transaction is in; that height is used.
+                    let known = wallet_db.get_tx_height(txid).ok().flatten();
+                    let h = match (height, known) {
+                        (0, Some(k)) => k,
+                        (0, None) => {
+                            println!("[w9] enhancement of {} skipped: the server reports no height and the scan has not placed it yet", txid);
+                            serviced += 1;
+                            continue;
+                        }
+                        (s, _) => BlockHeight::from_u32(s as u32),
+                    };
                     match Transaction::read(
                         &data[..],
                         zcash_protocol::consensus::BranchId::for_height(&MainNetwork, h),
@@ -1139,6 +1160,18 @@ pub(crate) fn truncate_wallet_to(db_path: &str, height: u32) -> Result<BlockHeig
 /// caller can refresh status and react to divergence rather than blocking on a
 /// full sync.
 pub(crate) async fn sync_pass(db_path: &str) -> Result<SyncStep> {
+    sync_pass_with(db_path, false).await
+}
+
+/// A pass that gives way to the wallet's own sync: short (three chunks), and paused whenever
+/// the wallet is behind the tip, so its small requests get through a node that serves one
+/// stream at a time (a zainod in pass-through mode, 2026-10-10: a Check held the wallet at
+/// "18 to scan, no progress for 18 min"). For the registry read and the collection audits.
+pub(crate) async fn sync_pass_polite(db_path: &str) -> Result<SyncStep> {
+    sync_pass_with(db_path, true).await
+}
+
+async fn sync_pass_with(db_path: &str, polite: bool) -> Result<SyncStep> {
     use zcash_client_backend::data_api::WalletWrite;
 
     use zcash_client_backend::data_api::WalletRead;
@@ -1171,6 +1204,7 @@ pub(crate) async fn sync_pass(db_path: &str) -> Result<SyncStep> {
         .map_err(|e| anyhow::anyhow!("GetLightdInfo failed: {}", e))?
         .into_inner()
         .block_height as u32;
+    let chain_tip = tip;
 
     // Tell the wallet where the chain ends. This is also what refreshes the scan
     // queue, so it must happen before asking what to scan.
@@ -1231,11 +1265,25 @@ pub(crate) async fn sync_pass(db_path: &str) -> Result<SyncStep> {
     let mut scanned_to = range_start.saturating_sub(1);
     let tip = range_end.saturating_sub(1); // bound this pass to the chosen range
 
-    for _ in 0..SYNC_CHUNKS_PER_PASS {
+    // A polite pass takes the node in 50-block pieces, three per pass, and before each piece
+    // waits as long as the wallet is behind the tip (three minutes at most, so a wallet whose
+    // own loop is stuck cannot hold the registry forever). A zainod in pass-through mode
+    // serves one stream at a time and takes longer than a short wait to deliver a 200-block
+    // piece, so a 15-second wait never let the wallet's seven blocks through (2026-10-10).
+    let chunks = if polite { 3 } else { SYNC_CHUNKS_PER_PASS };
+    let chunk = if polite { 50 } else { SYNC_CHUNK };
+    for _ in 0..chunks {
         if cur > tip {
             break;
         }
-        let end = std::cmp::min(cur + SYNC_CHUNK - 1, tip);
+        if polite {
+            let mut waited = 0u32;
+            while waited < 240 && (WALLET_HEIGHT.load(Ordering::Relaxed) as u32) + 1 < chain_tip {
+                sleep(Duration::from_millis(750)).await;
+                waited += 1;
+            }
+        }
+        let end = std::cmp::min(cur + chunk - 1, tip);
 
         // The commitment-tree frontier as of the block before this chunk. Must be
         // fetched per chunk; one tree state for a whole run is wrong.
@@ -1310,14 +1358,22 @@ pub(crate) async fn sync_pass(db_path: &str) -> Result<SyncStep> {
         let mut wallet_db = WalletDb::for_path(db_path, MainNetwork, SystemClock, OsRng)
             .map_err(|e| anyhow::anyhow!("could not open wallet: {:?}", e))?;
 
-        match zcash_client_backend::data_api::chain::scan_cached_blocks(
-            &MainNetwork,
-            &source,
-            &mut wallet_db,
-            BlockHeight::from_u32(cur),
-            &chain_state,
-            count,
-        ) {
+        // Trial decryption of a 2,000-block batch is CPU work for seconds to minutes. Run inline
+        // it held an async worker thread, so a second scan on the same runtime (the registry's,
+        // or a collection audit's) starved the wallet's own sync: "last batch 754 s ago" with
+        // twelve blocks to scan (fresh wallet on el5353, 2026-10-10). block_in_place hands the
+        // thread to the blocking pool for the duration; the runtime is multi-threaded.
+        let scanned = tokio::task::block_in_place(|| {
+            zcash_client_backend::data_api::chain::scan_cached_blocks(
+                &MainNetwork,
+                &source,
+                &mut wallet_db,
+                BlockHeight::from_u32(cur),
+                &chain_state,
+                count,
+            )
+        });
+        match scanned {
             Ok(_) => {
                 scanned_to = end;
                 cur = end + 1;
@@ -2938,20 +2994,26 @@ pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday
     // An explicit birthday wins. A new seed's correct answer is the tip, but the
     // caller may know better — a phrase generated elsewhere weeks ago, or a node
     // reporting a tip that is wrong. Lowering it only costs scanning time.
+    // 2026-10-10: the fallback is no longer silent. A new wallet whose chosen node did not
+    // answer used to be given Ironwood activation as its birthday and then spent its first
+    // hour scanning 85,000 blocks it cannot appear in, with nothing on screen saying why
+    // (the wizard's default node is the loopback one, which a first-time user rarely has).
+    // The honest answer is to say which node did not answer and let the user choose
+    // another, or set a birthday, before the wallet exists.
     let birthday_height = match birthday {
         Some(h) => h,
         None => match current_chain_tip().await {
-        Ok(tip) => tip,
-        Err(e) => {
-            eprintln!(
-                "[wallet] could not reach a node to read the chain tip ({e}); \
-                 using Ironwood activation {IRONWOOD_ACTIVATION} as the birthday. \
-                 The first sync will scan more of the chain than it needs to."
-            );
-            IRONWOOD_ACTIVATION
-        }
+            Ok(tip) => tip,
+            Err(e) => {
+                anyhow::bail!(
+                    "the node chosen for this wallet did not answer ({e}), so its birthday cannot be set. \
+                     Go back and choose a node that answers (the public node, or your own once it runs), \
+                     or set a birthday yourself. Nothing was created."
+                );
+            }
         },
     };
+    let _ = IRONWOOD_ACTIVATION;
     println!("[wallet] new account birthday: {birthday_height}");
 
     // Resolved BEFORE anything on disk is replaced. It is the only await in this function,
