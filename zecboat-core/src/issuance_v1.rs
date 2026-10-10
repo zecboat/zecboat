@@ -122,6 +122,9 @@ async fn fetch(source: &str, suffix: &str) -> std::result::Result<Vec<u8>, Strin
 /// Every carrier memo this wallet holds for `asset_id`, as JSON. All of them, not the first:
 /// a copy anyone can send used to be the one memo read, and framed the genuine unit as
 /// "Not issued by" (review 2026-10-09, session 4, Issue B).
+/// Only memos the wallet itself lists as units reach here: `holdings_from_rows` keeps a
+/// carrier only when `parse_memo` accepts its memo, so both the listed path (check 6') and
+/// the unlisted path (`claimed_iks`) read the same population, the one strict reader's.
 fn holder_memos(asset_id: &str) -> Vec<Value> {
     let Ok(db) = crate::paths::as_string::wallet_db_path() else { return Vec::new() };
     let Ok(conn) = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else { return Vec::new() };
@@ -235,10 +238,14 @@ pub fn unlisted_verdict(memo_iks: &[String], audits: &[(String, crate::collectio
             });
         }
     }
+    // A failed newest audit is the collection's answer, not this unit's: shown in amber with
+    // the check named, never as this unit's forgery red (gate eighth pass, Issue B: a provider
+    // lying in the scan can fail an audit, and an item badge must not turn red on a third
+    // party's word). The Collections view carries the failure itself.
     for s in &standings {
         if let KeyStanding::Failed { name, audited_to, check } = s {
-            return Some(BadgeState::SignatureFailed {
-                detail: format!("{name}'s newest check (to block {audited_to}) failed {check}; see Collections"),
+            return Some(BadgeState::CouldNotCheck {
+                detail: format!("{name}'s newest check (to block {audited_to}) failed {check}; this unit is not judged by it. See Collections"),
             });
         }
     }
@@ -250,6 +257,11 @@ pub fn unlisted_verdict(memo_iks: &[String], audits: &[(String, crate::collectio
         }
     }
     None
+}
+
+/// The registration txid of a `cached_audits` key (`"{registration_txid}:{ik}"`).
+pub fn registration_of_cache_key(key: &str) -> String {
+    key.split(':').next().unwrap_or("").to_string()
 }
 
 /// SHA-256 of each built-in seed manifest, as the Registry records a registration's manifest.
@@ -442,7 +454,7 @@ pub async fn verify(asset_id: &str) -> Option<BadgeState> {
         let iks = claimed_iks(&holder_memos(asset_id), asset_id);
         // Audits keyed by the registration they were made for (`cached_audits` keys "tx:ik").
         let audits: Vec<(String, crate::collection_audit::AuditReport)> = crate::collection_audit::cached_audits()
-            .map(|v| v.into_iter().map(|(key, a)| (key.split(':').next().unwrap_or("").to_string(), a)).collect())
+            .map(|v| v.into_iter().map(|(key, a)| (registration_of_cache_key(&key), a)).collect())
             .unwrap_or_default();
         let registered: Vec<RegisteredKey> = crate::collections::registry_view()
             .map(|v| {
@@ -696,6 +708,37 @@ mod tests {
         ];
         assert!(claimed_iks(&memos, &genuine_x).is_empty(), "a bare ik, and an ik+desc that derive another id, claim nothing for X");
         assert_eq!(claimed_iks(&memos, &forged), vec![lagos_ik.to_string()], "the forgery under Lagos's key is a claim for its own id");
+        // The decoy beside a GENUINE memo (gate eighth pass, Issue G): a unit of another key,
+        // with a stranger's Lagos-keyed notes next to it, claims its own key and nothing else.
+        let other_key = [5u8; 32];
+        let other_desc = "zmap-desc-v1|Other|1|Other #001|OTH|".to_string() + &"11".repeat(32);
+        let genuine_id = derive_asset_id(&other_key, &other_desc);
+        let beside = vec![
+            serde_json::json!({ "asset_id": genuine_id, "ik": hex::encode(other_key), "desc": other_desc }),
+            serde_json::json!({ "asset_id": genuine_id, "ik": lagos_ik }),
+            serde_json::json!({ "asset_id": genuine_id, "ik": lagos_ik, "desc": desc }),
+        ];
+        assert_eq!(claimed_iks(&beside, &genuine_id), vec![hex::encode(other_key)]);
+        // That key, registered and unchecked, is amber; with a failed newest audit, amber naming
+        // the check (eighth pass, Issue B); with an audit kept without its manifest, amber.
+        let other_hex = hex::encode(other_key);
+        let reg = RegisteredKey { ik: other_hex.clone(), name: "Other".into(), registration_txid: "ff".repeat(32), manifest_sha256: "ee".repeat(32) };
+        let failed = crate::collection_audit::AuditReport {
+            ik: other_hex.clone(), name: "Other".into(), passed: false,
+            checks: vec![crate::collection_audit::Check { n: 14, label: "value accounting".into(), pass: false, detail: None }],
+            units: vec![], close_height: Some(10), close_txid: None, count: Some(1), birthday: 1, audited_to: 200, node: String::new(),
+            audited_at: String::new(), manifest_hex: None, signature_hex: None, ..Default::default()
+        };
+        match unlisted_verdict(&[other_hex.clone()], &[("ff".repeat(32), failed.clone())], &[reg.clone()], &shas) {
+            Some(BadgeState::CouldNotCheck { detail }) => assert!(detail.contains("failed check 14"), "{detail}"),
+            other => panic!("expected amber naming the failed check, got {other:?}"),
+        }
+        let no_manifest = crate::collection_audit::AuditReport { passed: true, checks: (1..=17).map(|n| crate::collection_audit::Check { n, label: String::new(), pass: true, detail: None }).collect(), ..failed.clone() };
+        match unlisted_verdict(&[other_hex.clone()], &[("ff".repeat(32), no_manifest)], &[reg.clone()], &shas) {
+            Some(BadgeState::CouldNotCheck { detail }) => assert!(detail.contains("not checked yet"), "{detail}"),
+            other => panic!("expected amber for an audit without its manifest, got {other:?}"),
+        }
+        assert_eq!(registration_of_cache_key("abcd:0011"), "abcd");
     }
 
     #[test]

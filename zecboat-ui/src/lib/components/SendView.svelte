@@ -131,6 +131,34 @@
   let estimate = $state<SendEstimate | null>(null);
   // Why no estimate could be made (the send would refuse for the same reason), or null.
   let estimateError = $state<string | null>(null);
+  // When the wallet cannot tell the copies of a unit apart, the user names the one to send
+  // (gate eighth pass, Issue A: a stranger's bare copy used to freeze a unit with no lineage).
+  type CopyState = { txid: string; output_index: number; state: { state: string; failure?: string } };
+  let copies = $state<CopyState[] | null>(null);
+  let chosenCopy = $state<string | null>(null);
+
+  function requestEstimate() {
+    estimate = null;
+    estimateError = null;
+    if (assetType === "ZSA" && fromAddress.trim()) {
+      invoke<SendEstimate>("asset_send_estimate", { assetId: fromAddress.trim(), carrier: chosenCopy ?? undefined })
+        .then((e) => { estimate = e; estimateError = null; })
+        .catch((e) => {
+          estimate = null;
+          estimateError = String((e as any)?.message ?? e);
+          if (estimateError.includes("cannot tell which to send") && !copies) {
+            invoke<CopyState[]>("asset_carrier_states", { assetId: fromAddress.trim() })
+              .then((c) => { copies = c; })
+              .catch(() => { copies = null; });
+          }
+        });
+    }
+  }
+
+  function chooseCopy(key: string) {
+    chosenCopy = key;
+    requestEstimate();
+  }
   const zec = (z: number) => (z / 100_000_000).toFixed(8);
   let useHardwareWallet = $state(false);
   let isWaitingForHardware = $state(false);
@@ -198,13 +226,9 @@
   function handleReview(e: Event) {
     e.preventDefault();
     if (remainingChars < 0) return;
-    estimate = null;
-    estimateError = null;
-    if (assetType === "ZSA" && fromAddress.trim()) {
-      invoke<SendEstimate>("asset_send_estimate", { assetId: fromAddress.trim() })
-        .then((e) => { estimate = e; estimateError = null; })
-        .catch((e) => { estimate = null; estimateError = String((e as any)?.message ?? e); });
-    }
+    copies = null;
+    chosenCopy = null;
+    requestEstimate();
     showConfirmation = true;
     txResult = null;
   }
@@ -242,7 +266,8 @@
           acknowledgeUnproven: assetId ? acknowledgeUnproven : undefined,
           // The fee this screen showed; a higher real fee comes back as a question, below.
           maxFeeZat: assetId ? (acceptedFeeZat ?? estimate?.fee_zat ?? undefined) : undefined,
-          abandonLineage: assetId ? abandonLineage : undefined
+          abandonLineage: assetId ? abandonLineage : undefined,
+          carrier: assetId ? (chosenCopy ?? undefined) : undefined
         });
         
         txResult = {
@@ -410,6 +435,20 @@
         </p>
         {#if estimateError}
           <p class="fee-note">✗ {estimateError}</p>
+        {/if}
+        {#if estimateError && copies && copies.length > 1}
+          <!-- The wallet cannot tell these copies apart; the choice is the user's, by outpoint,
+               with each copy's own lineage state beside it. -->
+          <div class="fee-note">
+            Choose the copy to send:
+            {#each copies as c}
+              {@const key = `${c.txid}#${c.output_index}`}
+              <label style="display:block; cursor:pointer;">
+                <input type="radio" name="copy" value={key} checked={chosenCopy === key} onchange={() => chooseCopy(key)} />
+                <span class="mono">{c.txid.slice(0, 12)}… #{c.output_index}</span> · {c.state.state}{c.state.state === 'broken' ? ` (${c.state.failure})` : ''}
+              </label>
+            {/each}
+          </div>
         {/if}
         {#if estimate && estimate.lineage === "none" && estimate.record_stays}
           <p class="fee-note" style="color: #fbbf24;">⚠ Its lineage record does not travel in this transfer. It is saved as a file in your Downloads folder (or your home folder) for you to send to the recipient; the finished send names the file.</p>

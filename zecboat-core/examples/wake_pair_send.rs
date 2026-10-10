@@ -56,6 +56,7 @@ fn main() -> anyhow::Result<()> {
         genesis: zecboat_core::wake::genesis_ref_from_local_manifest(asset_id),
         acknowledge_unproven: env::var("WAKE_ALLOW_UNPROVEN").map(|v| v == "1").unwrap_or(false),
         abandon_lineage: false,
+        carrier: None,
     };
     // Collect any lading the carrier's line or transaction holds for this copy first,
     // as the wallet does when it lists its assets.

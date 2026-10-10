@@ -144,7 +144,7 @@ pub struct Unit {
     pub genesis_cmx: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuditReport {
     pub ik: String,
     pub name: String,
@@ -204,14 +204,24 @@ pub fn issued_outputs(outs: Vec<Out>, flows: &[Flow]) -> Vec<Out> {
     outs.into_iter().filter(|o| issued.contains(o.txid.as_str())).collect()
 }
 
-/// Check 14. Returns (violations, unaccountable). Both must be empty to pass.
+/// Check 14. Returns (violations, unaccountable). Both must be empty to pass. A flow that
+/// spent none of the account's notes is not the issuer's statement, whatever it decrypts as:
+/// the published OVK lets anyone craft an output that reads "outgoing", and such a flow used
+/// to fail the audit for everyone, forever (gate eighth pass, Issue B). The same stranger rule
+/// as `issued_outputs`; such flows are reported in `notes`, which never fails the check.
 pub fn value_accounting(flows: &[Flow]) -> (Vec<String>, Vec<String>) {
-    let (mut bad, mut unknown) = (vec![], vec![]);
+    let (bad, unknown, _) = value_accounting_with_notes(flows);
+    (bad, unknown)
+}
+
+/// Check 14 with its informational notes (stranger flows that read as outgoing).
+pub fn value_accounting_with_notes(flows: &[Flow]) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let (mut bad, mut unknown, mut notes) = (vec![], vec![], vec![]);
     for f in flows {
         let short = &f.txid[..f.txid.len().min(16)];
         if f.spent_known == 0 {
             if f.has_outgoing {
-                unknown.push(format!("{short}…: sends value but none of its inputs were seen (birthday after the funding?)"));
+                notes.push(format!("{short}…: reads as outgoing but spent none of the account's notes: not the issuer's statement (a stranger can craft this), not counted"));
             }
             continue;
         }
@@ -227,7 +237,7 @@ pub fn value_accounting(flows: &[Flow]) -> (Vec<String>, Vec<String>) {
             unknown.push(format!("{short}…: more out than the inputs seen ({} zat); some inputs predate the birthday", accounted - spent));
         }
     }
-    (bad, unknown)
+    (bad, unknown, notes)
 }
 
 /// The 14 checks and the registration cross-checks, over decrypted outputs. Pure: no network.
@@ -339,9 +349,9 @@ pub fn run_checks(reg: &Registration, ufvk: &str, outs: &[Out], flows: &[Flow]) 
         && by_unit.iter().all(|(_, o, id, _)| manifest_cmx.iter().any(|(mid, mc)| mid == id && *mc == hex::encode(o.cmx.unwrap_or([0; 32]))));
     add(13, "manifest's per-unit commitment equals the chain's, for every unit", manifest_ok, None);
 
-    let (bad, unknown) = value_accounting(flows);
+    let (bad, unknown, notes) = value_accounting_with_notes(flows);
     let spending = flows.iter().filter(|f| f.spent_known > 0).count();
-    let detail = bad.iter().chain(unknown.iter()).cloned().collect::<Vec<_>>().join("; ");
+    let detail = bad.iter().chain(unknown.iter()).chain(notes.iter()).cloned().collect::<Vec<_>>().join("; ");
     add(14, "value accounting: every zatoshi spent went to readable outputs or the fee",
         bad.is_empty() && unknown.is_empty(),
         Some(if detail.is_empty() { format!("{spending} spending transaction(s)") } else { detail }));
@@ -716,7 +726,10 @@ mod tests {
 
     #[test]
     fn unseen_inputs_and_transparent_inputs_are_unaccountable_not_passed() {
-        assert_eq!(value_accounting(&[flow(0, 245_000, Some(55_000), true)]).1.len(), 1);
+        // A flow that spent none of the account's notes is a stranger's, whatever it decrypts
+        // as: noted, never a failure (gate eighth pass, Issue B).
+        let (b, u, n) = value_accounting_with_notes(&[flow(0, 245_000, Some(55_000), true)]);
+        assert!(b.is_empty() && u.is_empty() && n.len() == 1, "{b:?} {u:?} {n:?}");
         assert_eq!(value_accounting(&[flow(100_000, 150_000, Some(5_000), false)]).1.len(), 1);
         assert_eq!(value_accounting(&[flow(100_000, 90_000, None, false)]).1.len(), 1);
     }

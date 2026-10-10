@@ -270,7 +270,7 @@ pub struct SendEstimate {
     pub record_stays: bool,
 }
 
-pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Option<&crate::wake::GenesisRef>) -> Result<SendEstimate> {
+pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Option<&crate::wake::GenesisRef>, carrier_choice: Option<&str>) -> Result<SendEstimate> {
     // One packed hop: circuit byte, three instance fields, anchor height, proof length, proof.
     const HOP: usize = 1 + 96 + 4 + 2 + 4960;
     const CHUNK: usize = 512 - 9;
@@ -290,12 +290,22 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Optio
     // announces a knot and its fee that the send then does not make (audit 2026-10-08, M).
     let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(conn)?);
     let conn_ref = conn;
-    let rank = |c: &crate::zmap::CarrierRef| -> u8 { crate::wake::carrier_send_rank(conn_ref, asset_id, c, genesis) };
+    // The user's own choice of copy outranks the planner (gate eighth pass, Issue A).
+    let choice = carrier_choice.and_then(crate::wake::parse_carrier_choice);
+    let rank = |c: &crate::zmap::CarrierRef| -> u8 {
+        crate::wake::rank_with_choice(choice.as_ref(), c, |c| crate::wake::carrier_send_rank(conn_ref, asset_id, c, genesis))
+    };
     let plan = crate::zmap::plan_asset_send_preferring(&holdings, asset_id, &rank)?;
     let copies = holdings.iter().find(|h| h.asset_id == asset_id).map(|h| h.carriers.len()).unwrap_or(0);
+    if let Some((t, i)) = &choice {
+        let found = plan.carrier.output_index() as u32 == *i && hex::encode(plan.carrier.txid().as_ref()).eq_ignore_ascii_case(t);
+        if !found {
+            return Err(anyhow!("the copy named ({t}#{i}) is not one this wallet holds of this asset"));
+        }
+    }
     // The send's own refusal, so the screen never names a copy the send then declines (gate
     // second pass, suggestion 2).
-    if copies > 1 {
+    if copies > 1 && choice.is_none() {
         let ranks: Vec<u8> = holdings.iter().filter(|h| h.asset_id == asset_id).flat_map(|h| h.carriers.iter()).map(|c| rank(c)).collect();
         let top = ranks.iter().copied().max().unwrap_or(0);
         if let Err(why) = crate::wake::send_decision(top, ranks.iter().filter(|r| **r == top).count(), genesis.is_some()) {

@@ -33,8 +33,8 @@ async fn get_transparent_balance() -> Result<f64, String> {
 // `FEE_CHANGED:<fee>:` error for the screen to show and ask again (review 2026-10-09).
 // `abandon_lineage`: the user chose, under its own warning, to send a unit whose memo commits
 // to a lineage this wallet never collected (`WAKE_UNCOLLECTED:` error otherwise).
-async fn send_transaction(address: String, amount: f64, memo: String, asset_id: Option<String>, acknowledge_unproven: Option<bool>, max_fee_zat: Option<u64>, abandon_lineage: Option<bool>) -> Result<String, String> {
-    zecboat_core::send_transaction_with_wake(&address, amount, &memo, asset_id.as_deref(), acknowledge_unproven.unwrap_or(false), max_fee_zat, abandon_lineage.unwrap_or(false))
+async fn send_transaction(address: String, amount: f64, memo: String, asset_id: Option<String>, acknowledge_unproven: Option<bool>, max_fee_zat: Option<u64>, abandon_lineage: Option<bool>, carrier: Option<String>) -> Result<String, String> {
+    zecboat_core::send_transaction_with_wake(&address, amount, &memo, asset_id.as_deref(), acknowledge_unproven.unwrap_or(false), max_fee_zat, abandon_lineage.unwrap_or(false), carrier.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
@@ -54,9 +54,9 @@ async fn fetch_consignments() -> Result<serde_json::Value, String> {
     serde_json::to_value(r).map_err(|e| e.to_string())
 }
 
-// ── lineage delivery (0.7.1) ─────────────────────────────────────────────────────────────
-// A sent lading used to be delivered once, to one address, with a failure visible only on the
-// console. These make it something the user can see, retry, redirect, and carry by hand.
+// ── lineage records (0.7.1) ──────────────────────────────────────────────────────────────
+// A sent record travels in the transfer; one that does not is saved as a sealed file and can be
+// saved again here, and a file received by any channel can be opened.
 
 #[tauri::command]
 // Every lading this wallet made for a send, with whether it travelled in the transfer.
@@ -103,8 +103,8 @@ async fn asset_carrier_states(asset_id: String) -> Result<serde_json::Value, Str
 }
 
 #[tauri::command]
-async fn asset_send_estimate(asset_id: String) -> Result<serde_json::Value, String> {
-    let r = zecboat_core::asset_send_estimate(asset_id).await.map_err(|e| e.to_string())?;
+async fn asset_send_estimate(asset_id: String, carrier: Option<String>) -> Result<serde_json::Value, String> {
+    let r = zecboat_core::asset_send_estimate(asset_id, carrier).await.map_err(|e| e.to_string())?;
     serde_json::to_value(r).map_err(|e| e.to_string())
 }
 

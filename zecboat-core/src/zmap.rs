@@ -474,6 +474,15 @@ pub fn holdings_from_rows(rows: impl IntoIterator<Item = OutputRow>) -> Vec<Zmap
             .and_modify(|h| {
                 h.quantity += 1;
                 h.carriers.push(carrier.clone());
+                // The display fields come from a v1 memo whenever one exists in the group: a
+                // pre-v1 memo naming a v1 id is a stranger's, and used to name the item when
+                // its row came first (gate eighth pass, Issue D).
+                if rec.ik.is_some() && h.dialect == Dialect::LegacyProse {
+                    h.name = rec.name.clone();
+                    h.symbol = rec.symbol.clone();
+                    h.image_hash = rec.image_hash.clone();
+                    h.dialect = rec.dialect;
+                }
             })
             .or_insert_with(|| ZmapHolding {
                 asset_id: rec.asset_id,
@@ -697,7 +706,8 @@ pub const CARRIER_SQL: &str = "\
                 AND s.pool = v.pool
                 AND st.mined_height IS NOT NULL)
        AND v.memo IS NOT NULL
-       AND v.value = ?1";
+       AND v.value = ?1
+     ORDER BY v.pool, v.id_within_pool_table";
 
 /// Read carrier candidates from an open connection.
 ///
@@ -977,7 +987,8 @@ pub struct Consignment {
     pub sha256: String,
     pub verified_at_height: Option<u32>,
     pub created_at: String,
-    /// Where it came from: "knotline", "memo", "dropbox", "file", "sent"; None before 2026-10-08.
+    /// Where it came from: "knotline", "memo", "file", "sent" ("dropbox" in rows a 0.7.0-draft
+    /// wallet wrote); None before 2026-10-08.
     pub source: Option<String>,
 }
 
@@ -1005,10 +1016,9 @@ pub fn ensure_consignments_table(conn: &rusqlite::Connection) -> rusqlite::Resul
     if !has_sent {
         conn.execute("ALTER TABLE ext_zecboat_zmap_consignments ADD COLUMN sent_txid BLOB", [])?;
     }
-    // 0.7.1: whether a sent lading reached a drop-box. Until now delivery was tried once and a
-    // failure was a console line; the wallet could not say which ladings never left.
-    // 2026-10-08 (audit, Knotline A): where a lading came from ("knotline", "memo", "dropbox",
-    // "file", "sent"). A sender chains a knot only to a line it rebuilt itself.
+    // 0.7.1: whether a sent lading travelled in the transfer, and the note of its hand-over.
+    // 2026-10-08 (audit, Knotline A): where a lading came from ("knotline", "memo", "file",
+    // "sent"). A sender chains a knot only to a line it rebuilt itself.
     // 2026-10-09 (review, Knotline F and H): the key and transaction a Knotline walk started
     // from, and how many knots it followed, so a sender chains only to exactly that pair and
     // starts a new line before the reader's bound.

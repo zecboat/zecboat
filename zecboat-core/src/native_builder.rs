@@ -498,6 +498,11 @@ pub fn build_and_sign_transaction(
 /// The sender, from separate notes. Fees are inputs minus outputs, so taking it from the carrier
 /// would leave the recipient a sub-carrier note and destroy the asset. The recipient receives
 /// exactly [`crate::zmap::CARRIER_ZAT`]. **A wallet holding only carriers cannot send them.**
+/// The prefix of the error a send returns when its transaction is signed and stored but could
+/// not be read back for broadcast: not a failure to retry, a transaction that goes out with the
+/// next send (gate eighth pass, Issue E).
+pub const STORED_NOT_BROADCAST_PREFIX: &str = "STORED_NOT_BROADCAST:";
+
 pub fn send_zmap_asset(
     wallet_db: &mut Db,
     usk: &UnifiedSpendingKey,
@@ -530,8 +535,21 @@ pub fn send_zmap_asset(
         // must not be the note picked while the genuine unit sits beside it. "Has a lading"
         // was the rule until 2026-10-09; a copy with a garbage lading had one (audit 2026-10-08,
         // Zecboat C; review 2026-10-09, regression Finding 2).
-        let rank = |c: &crate::zmap::CarrierRef| -> u8 { crate::wake::carrier_send_rank(&conn, asset_id, c, wake.genesis.as_ref()) };
+        // The user's own choice of copy outranks the planner: when no copy checks out, the
+        // wallet cannot tell a stranger's bare copy from a unit that simply has no lineage,
+        // and refusing for good froze the unit (gate eighth pass, Issue A). The choice is
+        // theirs; the unproven acknowledgement below then applies to that copy.
+        let choice = wake.carrier.as_deref().and_then(crate::wake::parse_carrier_choice);
+        let rank = |c: &crate::zmap::CarrierRef| -> u8 {
+            crate::wake::rank_with_choice(choice.as_ref(), c, |c| crate::wake::carrier_send_rank(&conn, asset_id, c, wake.genesis.as_ref()))
+        };
         let plan = crate::zmap::plan_asset_send_preferring(&holdings, asset_id, &rank)?;
+        if let Some((t, i)) = &choice {
+            let found = plan.carrier.output_index() as u32 == *i && hex::encode(plan.carrier.txid().as_ref()).eq_ignore_ascii_case(t);
+            if !found {
+                return Err(anyhow!("the copy named ({t}#{i}) is not one this wallet holds of {asset_id}"));
+            }
+        }
         // A lading this unit's memo commits to that another pass is still collecting is not
         // "absent": the send is refused for now rather than offered unproven, which would strip
         // the hash for good (review 2026-10-09, regression over 12-13, Issue B).
@@ -547,7 +565,7 @@ pub fn send_zmap_asset(
             // Several copies: the choice must rest on something. Below "lading checks out",
             // or with no manifest genesis in hand, a tie by txid is a guess, and a guess can
             // spend a stranger's copy (review 2026-10-09, regression over 12-15, Issues B, C).
-            if carriers.len() > 1 {
+            if carriers.len() > 1 && choice.is_none() {
                 let ranks: Vec<(u8, String)> = carriers.iter().map(|x| (rank(x), format!("{}#{}", &x.txid[..12.min(x.txid.len())], x.output_index))).collect();
                 let top = ranks.iter().map(|r| r.0).max().unwrap_or(0);
                 let decision = crate::wake::send_decision(top, ranks.iter().filter(|r| r.0 == top).count(), wake.genesis.is_some());
@@ -909,7 +927,7 @@ pub fn send_zmap_asset(
             Some(m) => m,
             None => {
                 let conn = rusqlite::Connection::open_with_flags(wallet_db_path()?, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-                crate::wake_memo::send_estimate(&conn, asset_id, wake.genesis.as_ref())
+                crate::wake_memo::send_estimate(&conn, asset_id, wake.genesis.as_ref(), wake.carrier.as_deref())
                     .map(|e| e.fee_zat)
                     .map_err(|e| anyhow!("the fee could not be estimated, so no bound could be checked: {e}"))?
             }
@@ -1161,18 +1179,32 @@ pub fn send_zmap_asset(
     // Read the signed transaction back and return its **wire encoding**, which every caller
     // hands straight to `rpc::broadcast_raw_tx` (see the P1-10 note in the git history: this
     // once returned the txid, and no asset transfer was ever broadcast).
-    let tx = wallet_db
-        .get_transaction(txid)
-        .map_err(|e| anyhow!("could not read back the signed asset transfer: {:?}", e))?
-        .ok_or_else(|| {
-            anyhow!("signed asset transfer {} is missing from the wallet database", txid)
-        })?;
-
-    let mut raw = Vec::new();
-    tx.write(&mut raw)
-        .map_err(|e| anyhow!("could not serialize the asset transfer: {:?}", e))?;
-
-    Ok(hex::encode(raw))
+    // The transaction is stored at this point and will be broadcast by the next send whatever
+    // this read-back does, so a failure here says so instead of "failed" (gate eighth pass,
+    // Issue E; the class of audit 2026-10-08, Zecboat F). Read three times before giving up.
+    let mut last: Option<anyhow::Error> = None;
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        match wallet_db.get_transaction(txid) {
+            Ok(Some(tx)) => {
+                let mut raw = Vec::new();
+                match tx.write(&mut raw) {
+                    Ok(()) => return Ok(hex::encode(raw)),
+                    Err(e) => last = Some(anyhow!("could not serialize the asset transfer: {:?}", e)),
+                }
+            }
+            Ok(None) => last = Some(anyhow!("signed asset transfer {} is missing from the wallet database", txid)),
+            Err(e) => last = Some(anyhow!("could not read back the signed asset transfer: {:?}", e)),
+        }
+    }
+    Err(anyhow!(
+        "{}{}: the transfer is signed and stored in this wallet, and will be broadcast with the next send; it could not be read back now ({})",
+        STORED_NOT_BROADCAST_PREFIX,
+        txid,
+        last.map(|e| e.to_string()).unwrap_or_default()
+    ))
 }
 
 /// What inspecting a built-but-unproven asset transfer found (ZMAP v0.5 §5.5).

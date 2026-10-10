@@ -397,6 +397,53 @@ pub struct SendOptions {
     /// this wallet never collected, abandoning that lineage for good (review 2026-10-09,
     /// regression over 12-15, Issue B). Never implied by `acknowledge_unproven`.
     pub abandon_lineage: bool,
+    /// The copy the user named, as `txid#index` (the carrier's stored txid hex and output
+    /// index, as the per-copy list shows them), when the planner cannot tell the copies apart:
+    /// a stranger's bare copy beside a unit with no lineage used to freeze the unit for good
+    /// (gate eighth pass, Issue A). The choice is the user's; the unproven acknowledgement
+    /// then applies to that copy alone.
+    pub carrier: Option<String>,
+}
+
+/// The planner's rank for one carrier when the user may have named a copy: the named copy
+/// outranks everything, every other copy ranks last, and with no choice the ordinary rank
+/// applies. One function for the send and the estimate, so they cannot drift (hardening 24).
+pub fn rank_with_choice(choice: Option<&(String, u32)>, c: &crate::zmap::CarrierRef, ordinary: impl Fn(&crate::zmap::CarrierRef) -> u8) -> u8 {
+    match choice {
+        Some((t, i)) if c.txid.eq_ignore_ascii_case(t) && c.output_index as u32 == *i => u8::MAX,
+        Some(_) => 0,
+        None => ordinary(c),
+    }
+}
+
+#[cfg(test)]
+mod choice_tests {
+    use super::{parse_carrier_choice, rank_with_choice};
+
+    #[test]
+    fn a_named_copy_outranks_the_planner_and_only_that_copy() {
+        let mk = |txid: &str, i: i64| crate::zmap::CarrierRef {
+            pool: 0, pool_name: String::new(), note_id: 0, txid: txid.into(), txid_bytes: [0u8; 32], output_index: i, memo: vec![], consignment_hash: None,
+        };
+        let a = mk(&"aa".repeat(32), 1);
+        let b = mk(&"bb".repeat(32), 0);
+        let choice = parse_carrier_choice(&format!("{}#1", "AA".repeat(32)));
+        assert_eq!(choice, Some(("aa".repeat(32), 1)));
+        assert_eq!(rank_with_choice(choice.as_ref(), &a, |_| 2), u8::MAX);
+        assert_eq!(rank_with_choice(choice.as_ref(), &b, |_| 6), 0, "even the genesis unit, when the user named the other");
+        assert_eq!(rank_with_choice(None, &b, |_| 6), 6);
+        assert!(parse_carrier_choice("zz#1").is_none() && parse_carrier_choice(&"aa".repeat(32)).is_none());
+    }
+}
+
+/// Parse a user's copy choice, `txid#index`, as the per-copy list shows it.
+pub fn parse_carrier_choice(s: &str) -> Option<(String, u32)> {
+    let (t, i) = s.trim().rsplit_once('#')?;
+    let t = t.to_ascii_lowercase();
+    if t.len() != 64 || !t.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((t, i.parse().ok()?))
 }
 
 /// The refusal a send returns when the chosen copy's memo commits to a lading the wallet does
@@ -969,14 +1016,14 @@ pub fn import_sealed(db_path: &str, sealed: &[u8]) -> Result<Imported> {
 
 /// What sending `asset_id` now would carry and cost. Collects a waiting lading first, as the
 /// send itself does, so the estimate and the send agree.
-pub async fn asset_send_estimate(asset_id: String) -> Result<crate::wake_memo::SendEstimate> {
+pub async fn asset_send_estimate(asset_id: String, carrier: Option<String>) -> Result<crate::wake_memo::SendEstimate> {
     let db_path = crate::paths::as_string::wallet_db_path()?;
     // The manifest's genesis, so the estimate ranks the copies as the send will.
     let genesis = genesis_outpoint(&asset_id).await;
     tokio::task::spawn_blocking(move || {
         let _ = fetch_missing_consignments_scoped(&db_path, FetchScope::for_send(&asset_id));
         let conn = Connection::open(&db_path)?;
-        crate::wake_memo::send_estimate(&conn, &asset_id, genesis.as_ref())
+        crate::wake_memo::send_estimate(&conn, &asset_id, genesis.as_ref(), carrier.as_deref())
     })
     .await
     .map_err(|e| anyhow!("did not finish: {e}"))?
@@ -1377,11 +1424,14 @@ fn verify_carrier(
             }
         }
         let r = verify_chain(&consignment.json, expected, &note.note.rho(), &o, MIN_DEPTH);
+        // The hint came from the signed manifest. A source that calls it wrong contradicts the
+        // manifest, and asking again without the hint would hand that source the transaction
+        // by id, with no cover, on its say-so (gate eighth pass, sub-pass note): the answer is
+        // "could not be checked", naming the contradiction.
         match &r {
             Err(zmap_wake::WakeFailure::Oracle(m)) if zmap_wake::oracle::is_wrong_hint(m) => {
-                let o2 = chain();
-                let r2 = verify_chain(&consignment.json, expected, &note.note.rho(), &o2, MIN_DEPTH);
-                (o2, r2)
+                let r2 = Err(zmap_wake::WakeFailure::Oracle(format!("{} contradicts the manifest's block for the genesis transaction ({m})", o.described())));
+                (o, r2)
             }
             _ => (o, r),
         }

@@ -40,6 +40,10 @@ first public release of everything listed under 0.7.0, with that fixed.
   be sent by any means; **Open a lineage file…** takes one in. A finished send of an item shows
   the same mark under the transaction id. Before, delivery was tried once and a failure was a
   line on the console.
+- **You choose the copy when the wallet cannot.** If someone sends you a bare copy of a unit
+  you hold and neither carries a lineage the wallet can check, the send no longer refuses for
+  good: the confirmation lists the copies with each one's lineage state and you name the one
+  to send.
 - **No drop-box at all.** The lineage travels in the transfer (the Knotline); a record can
   also be saved as a file and sent by any means. The optional drop-box route of the 0.7.0
   draft (an address you could name in Settings) is gone: nothing in the middle, nothing that
@@ -68,7 +72,9 @@ over those fixes. The gate for this release was: no Critical or High anywhere, n
 the verifier or in the path by which a lineage record is stored, chosen and sent, and every
 claimed fix confirmed by a later pass. The gate was met at the fourth pass and held at the
 fifth; the sixth and seventh each found one Medium in the issuance badge's decision for an
-asset no manifest lists, fixed in hardening 21 and 22. The reports, the trust model and the open questions for a human auditor are in the
+asset no manifest lists, fixed in hardening 21 and 22; the eighth found two, older ones, in
+the send of a unit that has no lineage and in the registry audit's value check, fixed in
+hardening 23. The reports, the trust model and the open questions for a human auditor are in the
 `zmap-wake` repository (`docs/REVIEW_PACKAGE.md`, `docs/TRUST_MODEL.md`).
 
 **This is not an external audit.** No cryptographer outside the project has read the WAKE

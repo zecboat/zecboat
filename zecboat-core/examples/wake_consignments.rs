@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<()> {
             // What the confirmation screen would quote for sending this item now.
             let asset_id = args.get(2).ok_or_else(|| anyhow::anyhow!("estimate <asset_id>"))?;
             let conn = rusqlite::Connection::open(&db_path)?;
-            println!("{}", serde_json::to_string(&zecboat_core::wake_memo::send_estimate(&conn, asset_id, None)?)?);
+            println!("{}", serde_json::to_string(&zecboat_core::wake_memo::send_estimate(&conn, asset_id, None, None)?)?);
         }
         Some("list") => {
             let conn = rusqlite::Connection::open(&db_path)?;
