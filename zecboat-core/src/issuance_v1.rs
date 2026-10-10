@@ -224,8 +224,8 @@ fn key_standing(ik: &str, audits: &[(String, crate::collection_audit::AuditRepor
 
 /// The badge for an asset no held manifest lists, from the keys its memos claim (see
 /// [`claimed_iks`]): red "not issued by" when a claimed key's manifests are exhaustive and do
-/// not list it; red "check failed" when the key's newest audit failed (gate seventh pass,
-/// Finding C); amber when the key is registered but not checked through; `None` (the caller
+/// not list it; amber naming the check when the key's newest audit failed (gate seventh pass,
+/// Finding C; eighth pass, Issue B); amber when the key is registered but not checked through; `None` (the caller
 /// says "unknown") otherwise. Pure: the order of these answers is the finding (gate sixth
 /// pass, Finding 1), so it is tested as a whole.
 pub fn unlisted_verdict(memo_iks: &[String], audits: &[(String, crate::collection_audit::AuditReport)], registered: &[RegisteredKey], seed_shas: &[String]) -> Option<BadgeState> {

@@ -2587,12 +2587,12 @@ fn zec_to_zatoshis(amount: f64) -> Result<u64> {
 }
 
 pub async fn send_transaction(address: &str, amount: f64, memo: &str, asset_id: Option<&str>) -> Result<String> {
-    send_transaction_with_wake(address, amount, memo, asset_id, false, None, false, None).await
+    send_transaction_with_wake(address, amount, memo, asset_id, false, None, None, None).await
 }
 
 /// [`send_transaction`] with the Wake acknowledgement (chapter 8): when `acknowledge_unproven`
 /// is false and the unit has no lading, the send is refused with [`crate::wake::UNPROVEN_PREFIX`].
-pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, asset_id: Option<&str>, acknowledge_unproven: bool, max_fee_zat: Option<u64>, abandon_lineage: bool, carrier: Option<&str>) -> Result<String> {
+pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, asset_id: Option<&str>, acknowledge_unproven: bool, max_fee_zat: Option<u64>, abandon_lineage: Option<&str>, carrier: Option<&str>) -> Result<String> {
     // 1. Validate and convert to zatoshis — on the value path only.
     //
     // A ZSA transfer moves a carrier note whose value is fixed at CARRIER_ZAT and
@@ -2703,7 +2703,7 @@ pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, 
             None => None,
         },
         acknowledge_unproven,
-        abandon_lineage,
+        abandon_lineage: abandon_lineage.map(|s| s.to_string()),
         carrier: carrier.map(|s| s.to_string()),
     };
     let (raw_tx_hex, proposed_inputs) = {

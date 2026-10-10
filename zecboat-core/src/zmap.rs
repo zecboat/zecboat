@@ -144,6 +144,11 @@ pub struct ZmapHolding {
     pub metadata_uri: Option<String>,
     pub image_hash: Option<String>,
     pub dialect: Dialect,
+    /// True when the display fields come from an identity-v1 memo, one whose `ik` and `desc`
+    /// derive the asset id (`parse_memo` accepts no other v1 memo). Such a memo's fields win
+    /// over any memo without `ik`, whatever arrived first (final gate, Issue B).
+    #[serde(default)]
+    pub v1: bool,
     /// Number of unspent carrier notes. **Not assumed to be 1.**
     pub quantity: u64,
     pub carriers: Vec<CarrierRef>,
@@ -474,14 +479,16 @@ pub fn holdings_from_rows(rows: impl IntoIterator<Item = OutputRow>) -> Vec<Zmap
             .and_modify(|h| {
                 h.quantity += 1;
                 h.carriers.push(carrier.clone());
-                // The display fields come from a v1 memo whenever one exists in the group: a
-                // pre-v1 memo naming a v1 id is a stranger's, and used to name the item when
-                // its row came first (gate eighth pass, Issue D).
-                if rec.ik.is_some() && h.dialect == Dialect::LegacyProse {
+                // The display fields come from a v1 memo whenever one exists in the group,
+                // whatever dialect or order the first row had: a memo without `ik` naming a v1
+                // id is a stranger's, and used to name the item and fail its artwork mark when
+                // its row came first (gate eighth pass, Issue D; final gate, Issue B).
+                if rec.ik.is_some() && !h.v1 {
                     h.name = rec.name.clone();
                     h.symbol = rec.symbol.clone();
                     h.image_hash = rec.image_hash.clone();
                     h.dialect = rec.dialect;
+                    h.v1 = true;
                 }
             })
             .or_insert_with(|| ZmapHolding {
@@ -492,6 +499,7 @@ pub fn holdings_from_rows(rows: impl IntoIterator<Item = OutputRow>) -> Vec<Zmap
                 metadata_uri: rec.metadata_uri,
                 image_hash: rec.image_hash,
                 dialect: rec.dialect,
+                v1: rec.ik.is_some(),
                 quantity: 1,
                 carriers: vec![carrier],
                 lineage: Vec::new(),
@@ -908,6 +916,7 @@ pub fn attach_lineage(holdings: &mut Vec<ZmapHolding>, rows: Vec<LineageRow>) {
                 metadata_uri: None,
                 image_hash: None,
                 dialect: Dialect::Json,
+                v1: false,
                 quantity: 0,
                 carriers: Vec::new(),
                 lineage: vec![r],
@@ -1796,6 +1805,30 @@ mod tests {
     /// Real memo from `FULL_NOMAD_MANIFEST.txt`, asset #042.
     const NOMAD_042: &str = "ZecBoat Cyber-Nomad #042. Image Hash: \
         67c356eea320c36142de2344239cd447f9b93e72a357e767912cd4eb859de5d4. Backing: 10,000 Zats.";
+
+    /// A stranger's JSON memo without `ik`, received first, used to name a genuine v1 unit and
+    /// supply the image hash its artwork is checked against (final gate, Issue B).
+    #[test]
+    fn a_v1_memo_names_the_item_whatever_arrived_first() {
+        let ik = [7u8; 32];
+        let desc = format!("zmap-desc-v1|Lagos Post Card|1|Lagos Post Card #001|LPC|{}", "11".repeat(32));
+        let id = crate::issuance_v1::derive_asset_id(&ik, &desc);
+        let decoy = format!(r#"{{"asset_id":"{id}","name":"SCAM: resend to u1evil","symbol":"XXX","image_hash":"{}"}}"#, "ab".repeat(32));
+        let genuine = format!(r#"{{"asset_id":"{id}","ik":"{}","desc":"{desc}"}}"#, hex::encode(ik));
+        let mk = |note_id: i64, memo: &str| OutputRow { pool: POOL_IRONWOOD, note_id, txid: [note_id as u8; 32], output_index: 0, value: CARRIER_ZAT as i64, memo: Some(memo.as_bytes().to_vec()) };
+        for order in [vec![mk(1, &decoy), mk(2, &genuine)], vec![mk(1, &genuine), mk(2, &decoy)]] {
+            let h = holdings_from_rows(order);
+            assert_eq!(h.len(), 1);
+            assert_eq!(h[0].quantity, 2);
+            assert_eq!(h[0].name, "Lagos Post Card #001");
+            assert_eq!(h[0].image_hash.as_deref(), Some("11".repeat(32).as_str()));
+            assert!(h[0].v1);
+        }
+        // With no v1 memo at all, the first row's fields stand, as before.
+        let h = holdings_from_rows(vec![mk(1, &decoy)]);
+        assert_eq!(h[0].name, "SCAM: resend to u1evil");
+        assert!(!h[0].v1);
+    }
 
     fn row(value: i64, memo: Option<&str>) -> OutputRow {
         OutputRow {

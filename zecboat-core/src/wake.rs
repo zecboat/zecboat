@@ -393,16 +393,28 @@ pub struct SendOptions {
     pub genesis: Option<GenesisRef>,
     /// The user acknowledged that the unit arrives unproven if no lading can be made.
     pub acknowledge_unproven: bool,
-    /// The user chose, under its own warning, to send a unit whose memo commits to a lading
-    /// this wallet never collected, abandoning that lineage for good (review 2026-10-09,
-    /// regression over 12-15, Issue B). Never implied by `acknowledge_unproven`.
-    pub abandon_lineage: bool,
+    /// The lading hash the user chose, under its own warning, to abandon for good: a unit
+    /// whose memo commits to a lading this wallet never collected is sent without it only when
+    /// this equals that memo's hash (review 2026-10-09, regression over 12-15, Issue B). Bound
+    /// to the hash, never a bare yes: a tick given for one unit used to abandon whatever was
+    /// sent next from the same dialog (final gate, Issue A). Never implied by
+    /// `acknowledge_unproven`.
+    pub abandon_lineage: Option<String>,
     /// The copy the user named, as `txid#index` (the carrier's stored txid hex and output
     /// index, as the per-copy list shows them), when the planner cannot tell the copies apart:
     /// a stranger's bare copy beside a unit with no lineage used to freeze the unit for good
     /// (gate eighth pass, Issue A). The choice is the user's; the unproven acknowledgement
     /// then applies to that copy alone.
     pub carrier: Option<String>,
+}
+
+/// Whether a consent to abandon applies to the carrier being sent: only when the user's
+/// consent names exactly the hash that carrier's memo commits to (final gate, Issue A).
+pub fn abandon_applies(consent: Option<&str>, committed: Option<&str>) -> bool {
+    match (consent, committed) {
+        (Some(c), Some(h)) => c.trim().eq_ignore_ascii_case(h.trim()) && h.len() == 64,
+        _ => false,
+    }
 }
 
 /// The planner's rank for one carrier when the user may have named a copy: the named copy
@@ -419,6 +431,16 @@ pub fn rank_with_choice(choice: Option<&(String, u32)>, c: &crate::zmap::Carrier
 #[cfg(test)]
 mod choice_tests {
     use super::{parse_carrier_choice, rank_with_choice};
+
+    #[test]
+    fn an_abandon_consent_applies_only_to_the_hash_it_names() {
+        let h = "ab".repeat(32);
+        assert!(super::abandon_applies(Some(&h), Some(&h)));
+        assert!(super::abandon_applies(Some(&h.to_ascii_uppercase()), Some(&h)));
+        assert!(!super::abandon_applies(Some(&h), Some(&"cd".repeat(32))), "another unit's hash");
+        assert!(!super::abandon_applies(Some(&h), None), "a unit that commits to nothing needs no consent, and gets none");
+        assert!(!super::abandon_applies(None, Some(&h)));
+    }
 
     #[test]
     fn a_named_copy_outranks_the_planner_and_only_that_copy() {
@@ -501,11 +523,13 @@ pub fn prepare_send_lading<P: zcash_protocol::consensus::Parameters>(
             // Never extend a lading this wallet has not checked: the proofs, the chain rule and
             // the note's ρ are verified here, with no oracle, before a hop is proved on top. A
             // lading that fails is refused, whoever stored it (review 2026-10-09, regression
-            // Finding 1: a decoy's garbage used to be extended and committed onward).
-            let (l, _) = zmap_wake::verify_local(&c.json, None, &note.note.rho()).map_err(|f| {
-                anyhow!("the lading held for this carrier fails its own checks ({f:?}); refusing to extend it")
-            })?;
-            l
+            // Finding 1: a decoy's garbage used to be extended and committed onward). Nor one
+            // whose genesis is not the manifest's: a copy the user named could otherwise be
+            // proved onward over a lading already known to be Broken (final gate, Low-2).
+            if let Some((failure, detail)) = offline_verdict(&c.json, None, &note.note.rho(), genesis) {
+                return Err(anyhow!("the lading held for this copy is Broken ({failure}: {detail}); it is not extended"));
+            }
+            Lading::parse(&c.json).map_err(|e| anyhow!("stored lading unreadable: {e}"))?
         }
         None => match genesis {
             Some(g) if g.is_outpoint(&note_txid_hex, note.action_index) => Lading::new(&note_txid_hex, note.action_index),
@@ -1165,8 +1189,16 @@ pub fn wake_rank(s: &WakeState) -> u8 {
 /// One carrier's lineage state, for the per-copy view and for choosing which copy to spend.
 #[derive(Clone, Debug, Serialize)]
 pub struct CarrierState {
+    /// The carrier's txid as the wallet stores it (internal byte order): the key a choice
+    /// names (`txid#index`).
     pub txid: String,
+    /// The same txid as History and explorers show it (display order), for a human to match
+    /// (final gate, Issue C).
+    pub txid_display: String,
     pub output_index: u32,
+    /// True for the copy this wallet received first (lowest note id in its pool); the genuine
+    /// unit usually, since a stranger's copy follows a purchase.
+    pub received_first: bool,
     pub state: WakeState,
 }
 
@@ -1179,13 +1211,16 @@ pub fn holding_carrier_states(db_path: &str, asset_id: &str, genesis: Option<&Ge
     let holdings = crate::zmap::holdings_from_rows(crate::zmap::read_carrier_rows(&conn)?);
     let Some(h) = holdings.iter().find(|h| h.asset_id == asset_id) else { return Ok(Vec::new()) };
     let mut carriers: Vec<&crate::zmap::CarrierRef> = h.carriers.iter().collect();
-    carriers.sort_by_key(|c| (c.txid.clone(), c.output_index));
+    carriers.sort_by_key(|c| (c.pool, c.note_id));
+    let first = carriers.first().map(|c| (c.pool, c.note_id));
     carriers
         .into_iter()
         .map(|c| {
             Ok(CarrierState {
                 txid: c.txid.clone(),
+                txid_display: hex::encode(reversed(c.txid_bytes)),
                 output_index: c.output_index as u32,
+                received_first: first == Some((c.pool, c.note_id)),
                 state: verify_carrier(&conn, asset_id, c, genesis)?,
             })
         })
@@ -1401,7 +1436,8 @@ fn verify_carrier(
     // wrong hint fails a fetch (Knotline C), a lading with a false genesis label read "could
     // not be checked" instead of Broken, and a lading anchored later than its genesis block
     // could never be checked through a provider (gate second pass, Issue B). Should a hint
-    // still prove wrong, the question is asked once more without one.
+    // still prove wrong, the source contradicts the manifest and the answer is "could not be
+    // checked"; it is not asked again without the hint (gate eighth pass).
     // No manifest names a genesis for this asset: the chain can only answer "unverified",
     // and asking it would hand a provider the transaction the lading's author named, with no
     // cover (gate fifth pass, Finding 6). Said without asking; the checks that need no oracle

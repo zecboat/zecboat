@@ -725,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn unseen_inputs_and_transparent_inputs_are_unaccountable_not_passed() {
+    fn a_strangers_flow_is_noted_and_transparent_inputs_are_unaccountable() {
         // A flow that spent none of the account's notes is a stranger's, whatever it decrypts
         // as: noted, never a failure (gate eighth pass, Issue B).
         let (b, u, n) = value_accounting_with_notes(&[flow(0, 245_000, Some(55_000), true)]);

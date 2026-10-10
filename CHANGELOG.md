@@ -74,7 +74,8 @@ claimed fix confirmed by a later pass. The gate was met at the fourth pass and h
 fifth; the sixth and seventh each found one Medium in the issuance badge's decision for an
 asset no manifest lists, fixed in hardening 21 and 22; the eighth found two, older ones, in
 the send of a unit that has no lineage and in the registry audit's value check, fixed in
-hardening 23. The reports, the trust model and the open questions for a human auditor are in the
+hardening 23; a final pass over the whole found three in the send dialog and the item view,
+none in any verdict, fixed in hardening 24. The reports, the trust model and the open questions for a human auditor are in the
 `zmap-wake` repository (`docs/REVIEW_PACKAGE.md`, `docs/TRUST_MODEL.md`).
 
 **This is not an external audit.** No cryptographer outside the project has read the WAKE

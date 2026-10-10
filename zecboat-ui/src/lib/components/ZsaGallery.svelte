@@ -28,7 +28,7 @@
   // Every copy of the asset this wallet holds, each judged on its own, when there is more
   // than one: the badge above is the best of them, and a copy someone sent with a broken
   // lineage must be visible beside a genuine unit, not hidden under it (review 2026-10-09).
-  type CarrierState = { txid: string; output_index: number; state: Wake };
+  type CarrierState = { txid: string; txid_display: string; output_index: number; received_first: boolean; state: Wake };
   let copies = $state<CarrierState[] | null>(null);
   // On demand: a line is walked automatically only for a collection this wallet knows; for
   // any other the holder asks (review 2026-10-09, Knotline A).
@@ -399,7 +399,7 @@
               <details class="verify-details">
                 <summary>each copy</summary>
                 {#each copies as c}
-                  <span class="check-line mono">{c.txid.slice(0, 12)}… #{c.output_index}: {c.state.state}{c.state.state === 'broken' ? ` (${c.state.failure})` : ''}</span>
+                  <span class="check-line mono" title={c.txid_display}>{c.txid_display.slice(0, 16)}… #{c.output_index}: {c.state.state}{c.state.state === 'broken' ? ` (${c.state.failure})` : ''}{c.received_first ? ' · received first' : ''}</span>
                 {/each}
                 <span class="check-line caveat">A send spends the copy that checks out best; a broken copy is one someone sent you with a lineage that failed, and it never speaks for the others.</span>
               </details>

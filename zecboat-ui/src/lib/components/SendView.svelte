@@ -133,7 +133,7 @@
   let estimateError = $state<string | null>(null);
   // When the wallet cannot tell the copies of a unit apart, the user names the one to send
   // (gate eighth pass, Issue A: a stranger's bare copy used to freeze a unit with no lineage).
-  type CopyState = { txid: string; output_index: number; state: { state: string; failure?: string } };
+  type CopyState = { txid: string; txid_display: string; output_index: number; received_first: boolean; state: { state: string; failure?: string } };
   let copies = $state<CopyState[] | null>(null);
   let chosenCopy = $state<string | null>(null);
 
@@ -157,6 +157,7 @@
 
   function chooseCopy(key: string) {
     chosenCopy = key;
+    resetReviewState();
     requestEstimate();
   }
   const zec = (z: number) => (z / 100_000_000).toFixed(8);
@@ -223,11 +224,24 @@
     }
   }
 
+  // Every consent and notice belongs to one review: a new review, a cancel, or a change of copy
+  // clears them all, so a tick given for one unit never rides into the next send (final gate,
+  // Issue A and Low-1).
+  function resetReviewState() {
+    unprovenNotice = null;
+    acknowledgeUnproven = false;
+    feeNotice = null;
+    acceptedFeeZat = null;
+    uncollectedNotice = null;
+    abandonLineage = false;
+  }
+
   function handleReview(e: Event) {
     e.preventDefault();
     if (remainingChars < 0) return;
     copies = null;
     chosenCopy = null;
+    resetReviewState();
     requestEstimate();
     showConfirmation = true;
     txResult = null;
@@ -235,8 +249,7 @@
 
   function cancelSend() {
     showConfirmation = false;
-    unprovenNotice = null;
-    acknowledgeUnproven = false;
+    resetReviewState();
   }
 
   async function confirmAndSend() {
@@ -266,7 +279,8 @@
           acknowledgeUnproven: assetId ? acknowledgeUnproven : undefined,
           // The fee this screen showed; a higher real fee comes back as a question, below.
           maxFeeZat: assetId ? (acceptedFeeZat ?? estimate?.fee_zat ?? undefined) : undefined,
-          abandonLineage: assetId ? abandonLineage : undefined,
+          // The consent names the record it was given for, never a bare yes (final gate, Issue A).
+          abandonLineage: assetId && abandonLineage && uncollectedNotice ? uncollectedNotice.hash : undefined,
           carrier: assetId ? (chosenCopy ?? undefined) : undefined
         });
         
@@ -440,12 +454,12 @@
           <!-- The wallet cannot tell these copies apart; the choice is the user's, by outpoint,
                with each copy's own lineage state beside it. -->
           <div class="fee-note">
-            Choose the copy to send:
+            Choose the copy to send. Transaction ids are shown as History and explorers show them:
             {#each copies as c}
               {@const key = `${c.txid}#${c.output_index}`}
               <label style="display:block; cursor:pointer;">
                 <input type="radio" name="copy" value={key} checked={chosenCopy === key} onchange={() => chooseCopy(key)} />
-                <span class="mono">{c.txid.slice(0, 12)}… #{c.output_index}</span> · {c.state.state}{c.state.state === 'broken' ? ` (${c.state.failure})` : ''}
+                <span class="mono" title={c.txid_display}>{c.txid_display.slice(0, 16)}… #{c.output_index}</span> · {c.state.state}{c.state.state === 'broken' ? ` (${c.state.failure})` : ''}{c.received_first ? ' · received first' : ''}
               </label>
             {/each}
           </div>
@@ -487,7 +501,7 @@
                amount and message fields do not apply and are not sent (review 2026-10-09). -->
           <div class="detail-row amount-row">
             <span class="label">Sends:</span>
-            <span class="value amount-value">1 unit (its 0.00010000 ZEC carrier note and its memo){#if estimate && estimate.copies > 1}: copy {estimate.carrier} of the {estimate.copies} this wallet holds, the one whose lineage checks out best{/if}</span>
+            <span class="value amount-value">1 unit (its 0.00010000 ZEC carrier note and its memo){#if estimate && estimate.copies > 1}: copy {estimate.carrier} of the {estimate.copies} this wallet holds, {chosenCopy ? 'the one you named' : 'the one whose lineage checks out best'}{/if}</span>
           </div>
           {#if chainSource}
             <div class="detail-row">

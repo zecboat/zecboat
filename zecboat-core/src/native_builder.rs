@@ -549,6 +549,16 @@ pub fn send_zmap_asset(
             if !found {
                 return Err(anyhow!("the copy named ({t}#{i}) is not one this wallet holds of {asset_id}"));
             }
+            // The choice was made because no copy checked out. If one does by now (its lineage
+            // was collected meanwhile), the choice is stale: review again (final gate, I-5).
+            let checks_out_now = holdings
+                .iter()
+                .filter(|h| h.asset_id == asset_id)
+                .flat_map(|h| h.carriers.iter())
+                .any(|c| !(c.txid.eq_ignore_ascii_case(t) && c.output_index as u32 == *i) && crate::wake::carrier_send_rank(&conn, asset_id, c, wake.genesis.as_ref()) >= 5);
+            if checks_out_now {
+                return Err(anyhow!("another copy of {asset_id} now checks out against the manifest; review the send again without naming a copy"));
+            }
         }
         // A lading this unit's memo commits to that another pass is still collecting is not
         // "absent": the send is refused for now rather than offered unproven, which would strip
@@ -651,7 +661,7 @@ pub fn send_zmap_asset(
     if wake_lading.is_none() && ironwood_carrier {
         let committed = crate::zmap::parse_memo(&plan.memo).and_then(|r| r.consignment_hash);
         if let Some(h) = committed {
-            if !wake.abandon_lineage {
+            if !crate::wake::abandon_applies(wake.abandon_lineage.as_deref(), Some(&h)) {
                 return Err(anyhow!(
                     "{}{h}: this unit's memo commits to a lineage record this wallet has not collected; collect it (the item's \
                      'Collect its lineage now'), or abandon that lineage for good",
