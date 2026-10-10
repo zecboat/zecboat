@@ -70,8 +70,11 @@ admits its gaps.
   and must not be read as one.
 - Sending ZSA assets is refused when the wallet holds a carrier at risk. That is deliberate
   fail-closed behaviour, not a completed feature.
-- No hardware wallet support. The earlier YubiKey integration was a mock and was removed rather than
-  left to imply protection it never provided.
+- No hardware signing. A YubiKey can seal the wallet's identity file (the unlock), so a copied
+  wallet folder is useless without the key; spending is still signed in software, and the wallet
+  says so where the option is turned on. The option needs `age-plugin-yubikey`, built on your
+  machine by `packaging/install_yubikey.sh` (shipped in the Debian zip); without it the option
+  does not appear.
 
 **Use it with funds you can afford to lose, and write down your seed phrase.**
 

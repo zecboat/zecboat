@@ -141,6 +141,9 @@ info "t-address means naming that address to the node, which tells it the addres
 info "is yours — the one thing shielded scanning never does. If you hand one out:"
 info "  ZECBOAT_TRANSPARENT_SCAN=1 $BIN"
 info ""
+info "YubiKey protection for a NEW wallet needs one more program, built on this machine:"
+info "  bash install_yubikey.sh"
+info ""
 info "Remove it:         sudo apt remove $PKG"
 info "Remove everything: bash uninstall_zecboat_deb.sh --yes --wallet"
 

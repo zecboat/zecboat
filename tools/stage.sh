@@ -59,7 +59,7 @@ mkdir -p "$S/artifacts"
 ZIPDIR="$S/.zipwork/zecboat-$V-debian"
 mkdir -p "$ZIPDIR"
 cp "$DEB" "$ZIPDIR/"
-for sc in install.sh install_depends.sh uninstall_zecboat_deb.sh; do
+for sc in install.sh install_depends.sh install_yubikey.sh uninstall_zecboat_deb.sh; do
   [ -f "$SRC_REPO/packaging/$sc" ] || die "missing packaging script: $sc"
   cp "$SRC_REPO/packaging/$sc" "$ZIPDIR/"; chmod +x "$ZIPDIR/$sc"
 done
