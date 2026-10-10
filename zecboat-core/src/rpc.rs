@@ -1361,7 +1361,7 @@ async fn sync_pass_with(db_path: &str, polite: bool) -> Result<SyncStep> {
         // Trial decryption of a 2,000-block batch is CPU work for seconds to minutes. Run inline
         // it held an async worker thread, so a second scan on the same runtime (the registry's,
         // or a collection audit's) starved the wallet's own sync: "last batch 754 s ago" with
-        // twelve blocks to scan (fresh wallet on el5353, 2026-10-10). block_in_place hands the
+        // twelve blocks to scan (a fresh wallet on the build machine, 2026-10-10). block_in_place hands the
         // thread to the blocking pool for the duration; the runtime is multi-threaded.
         let scanned = tokio::task::block_in_place(|| {
             zcash_client_backend::data_api::chain::scan_cached_blocks(
