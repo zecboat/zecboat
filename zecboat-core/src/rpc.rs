@@ -3836,6 +3836,54 @@ pub(crate) async fn registry_fetch(url: &str, max_bytes: usize) -> Result<(Strin
 /// Artwork is bounded at this size: a photograph as JPEG is a few hundred kilobytes.
 const MAX_ARTWORK_BYTES: usize = 8 * 1024 * 1024;
 
+/// Where verified artwork is kept, beside the wallet: one file per image hash.
+fn artwork_cache_dir() -> Result<std::path::PathBuf> {
+    let dir = crate::paths::app_data_dir()?.join("artwork");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// The artwork of `asset_id` from the local cache, as a data URI, or `None`. No network. The
+/// file is re-hashed against the hash the memo commits to; a file that does not match is
+/// removed and nothing is returned, so a tile never shows bytes that did not pass check 6.
+pub async fn cached_artwork(asset_id: String) -> Result<Option<Value>> {
+    if asset_id.len() != 64 || !asset_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(None);
+    }
+    let db_path = crate::paths::as_string::wallet_db_path()?;
+    let expected = match crate::db::WalletPool::new(&db_path) {
+        Ok(pool) => pool.get_zmap_holdings().await.ok().and_then(|hs| hs.into_iter().find(|h| h.asset_id == asset_id)).and_then(|h| h.image_hash),
+        Err(_) => None,
+    }
+    .unwrap_or_else(|| asset_id.clone())
+    .to_ascii_lowercase();
+    if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(None);
+    }
+    let path = artwork_cache_dir()?.join(format!("{expected}.img"));
+    let Ok(bytes) = std::fs::read(&path) else { return Ok(None) };
+    if bytes.len() > MAX_ARTWORK_BYTES || !crate::zmap::verify_image(&bytes, &expected)? {
+        let _ = std::fs::remove_file(&path);
+        return Ok(None);
+    }
+    let mime = if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "image/jpeg"
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "image/png"
+    } else if bytes.starts_with(b"GIF8") {
+        "image/gif"
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        return Ok(None);
+    };
+    use base64::Engine;
+    Ok(Some(serde_json::json!({
+        "asset_id": asset_id,
+        "image": format!("data:{};base64,{}", mime, base64::engine::general_purpose::STANDARD.encode(&bytes)),
+    })))
+}
+
 pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
     if asset_id.len() != 64 || !asset_id.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(anyhow::anyhow!(
@@ -3951,6 +3999,14 @@ pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
     // Only hand back renderable bytes when they are the bytes that passed. A caller cannot then
     // display unverified artwork by accident.
     let data_uri = if verified {
+        // Keep the verified bytes beside the wallet, named by their hash, so the item list can
+        // show them again with no request at all: the list is re-created on every visit, and
+        // "the tile shows its picture once the item has been opened this session" meant the
+        // picture vanished each time the holder came back (owner, 2026-10-10). Content-named,
+        // so a read re-hashes the file and never trusts a name.
+        if let Ok(dir) = artwork_cache_dir() {
+            let _ = std::fs::write(dir.join(format!("{}.img", expected.to_ascii_lowercase())), &bytes);
+        }
         use base64::Engine;
         Some(format!(
             "data:{};base64,{}",

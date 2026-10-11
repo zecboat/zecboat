@@ -108,11 +108,16 @@
       console.error("Failed to load ZSAs:", e);
       return;
     }
-    // No artwork request on load. Fetching every held asset's artwork from zecboat.com each
+    // No artwork REQUEST on load. Fetching every held asset's artwork from zecboat.com each
     // time the list opened told the site the holder's whole set of items, with their address,
-    // on every visit, unsolicited items included (audit 2026-10-08, Zecboat B / ZMAP J). A
-    // card shows its artwork once the item has been opened in this session; opening is the
-    // user's own, explicit request for that one item.
+    // on every visit, unsolicited items included (audit 2026-10-08, Zecboat B / ZMAP J). What
+    // the list shows on load comes from the local cache alone: bytes that passed check 6 when
+    // the item was opened once, re-hashed on read. Nothing leaves the machine here.
+    for (const a of assets) {
+      invoke<{ image: string } | null>("cached_artwork", { assetId: a.asset_id })
+        .then((c) => { if (c?.image) cardImages[a.asset_id] = c.image; })
+        .catch(() => {});
+    }
   });
 
   // Asked of the backend rather than hardcoded, so ZECBOAT_REGISTRY reaches the UI too.

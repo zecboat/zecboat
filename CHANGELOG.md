@@ -40,6 +40,9 @@ first public release of everything listed under 0.7.0, with that fixed.
   be sent by any means; **Open a lineage file…** takes one in. A finished send of an item shows
   the same mark under the transaction id. Before, delivery was tried once and a failure was a
   line on the console.
+- **Tiles keep their artwork.** Artwork that passed its hash check when an item was opened is
+  kept beside the wallet and shown on the item's tile from then on, with no request to the
+  site; the one fetch per item, on open, is still the only fetch.
 - **A new wallet starts at the tip, or says why it cannot.** The setup wizard's node screen
   gains "My own node, elsewhere" for a zainod on another machine, so a wallet meant never to
   touch a public node never does. If the node you chose does not answer, the wallet refuses to
