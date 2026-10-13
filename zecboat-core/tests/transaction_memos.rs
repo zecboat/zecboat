@@ -25,7 +25,7 @@ use std::sync::Mutex;
 static ENV: Mutex<()> = Mutex::new(());
 const BIRTHDAY: u32 = 3_400_000;
 
-/// The real memo captain sent user2, 360 bytes including padding.
+/// The real memo one test wallet sent another, 360 bytes including padding.
 const SENT_TO_ME: &str = "https://zecboat.com\nZcash Desktop Wallet Application for debian.";
 
 struct Sandbox {

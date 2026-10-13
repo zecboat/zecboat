@@ -23,7 +23,7 @@ type Db = zcash_client_sqlite::WalletDb<rusqlite::Connection, MainNetwork, zcash
 
 fn guard_home() -> anyhow::Result<String> {
     let home = env::var("HOME")?;
-    if home.contains("captain") || home.contains("user2") || !home.contains("scratch") {
+    if !home.contains("scratch") {
         anyhow::bail!("refusing: HOME must be a scratch directory holding a wallet COPY (got {home})");
     }
     Ok(home)

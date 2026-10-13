@@ -111,7 +111,7 @@ zcash_note_encryption = "0.4"
 # build.rs and proto/ compiled a second copy of the lightwalletd protos. rpc.rs
 # now aliases zcash_client_backend::proto::service instead, so there is nothing
 # left to generate. Both were archived to
-# zebd/zecboat_archive_20260810/removed_proto/.
+# a folder outside this repository (removed_proto, 2026-08-10).
 
 [features]
 # Reads ZECBOAT_WAKE_MANIFEST and ZECBOAT_PINNED_V1, which let a throwaway collection under test

@@ -46,7 +46,7 @@
   // WAKE-v1 §11: no implementation may report "verified" on the strength of a wake proof until
   // the circuit's external review. Until then a passing lineage shows AMBER, "awaiting external
   // review". Flip to true when the review is published with no open soundness issue
-  // (~/zebd/wake_audit/01_plan/wake_review_timeline.md). The issuer badge does not depend on it.
+  // (the review timeline, kept outside this repository). The issuer badge does not depend on it.
   const WAKE_REVIEWED = false;
   type Verification = {
     verified: boolean; expected_hash: string; actual_hash: string;

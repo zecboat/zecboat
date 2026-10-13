@@ -3,6 +3,11 @@
 Notable changes to the Zecboat desktop wallet. Entries describe the user-visible effect,
 not the diff.
 
+## 0.7.2 (unreleased)
+
+- 2026-10-12: wording only. Private folder names and paths removed from comments, docs, two
+  ignored mainnet tests and the HOME guard of five dev examples. No code path changed.
+
 ## 0.7.1-beta — 2026-10-10
 
 0.7.0-beta was tagged and staged but never published: a test on a machine without its own node

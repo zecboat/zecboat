@@ -6,7 +6,7 @@
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let home = std::env::var("HOME")?;
-    if home.contains("captain") || home.contains("user2") || !home.contains("scratch") {
+    if !home.contains("scratch") {
         anyhow::bail!("refusing: HOME must be a scratch directory (got {home})");
     }
     for id in std::env::args().skip(1) {

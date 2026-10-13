@@ -31,7 +31,7 @@
 //! doing so. Two live wallets on the maintainer's machine depend on it:
 //!
 //! ```text
-//! ~/captain/launch.sh    sets HOME=~/captain   -> the wallet holding real funds
+//! ~/<live>/launch.sh     sets HOME=~/<live>    -> the wallet holding real funds (a folder name of your choosing)
 //! ~/user2/launch-user2.sh sets HOME=~/user2    -> an independent second wallet
 //! ~/zecboat_video/launch_demo_wallet.sh        -> an isolated demo wallet
 //! ```
@@ -176,7 +176,7 @@ mod tests {
     }
 
     /// HOME is the isolation mechanism: a different HOME must give a different
-    /// wallet. If this test ever fails, `~/captain` has stopped isolating funds.
+    /// wallet. If this test ever fails, a dedicated HOME has stopped isolating funds.
     ///
     /// The fixtures are under /tmp deliberately. `release-gate.sh` scans shipped .rs
     /// files for a `/home/<user>/` shape and cannot tell a placeholder from a real
@@ -187,7 +187,7 @@ mod tests {
         let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("HOME", "/tmp/zbtest-other");
         let a = wallet_db_path().unwrap();
-        std::env::set_var("HOME", "/tmp/zbtest/captain");
+        std::env::set_var("HOME", "/tmp/zbtest/live");
         let b = wallet_db_path().unwrap();
         assert_ne!(a, b, "HOME no longer selects the wallet — isolation is broken");
     }

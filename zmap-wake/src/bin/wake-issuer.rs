@@ -99,8 +99,8 @@ fn main() {
 
 /// Prove `WAKE_GENESIS` for a mint output from a copy of the wallet that RECEIVED it.
 ///
-/// That is the mint wallet only when the issuer minted to itself. Happy Birthday's
-/// mint sent nine outputs to the treasury and one to captain; only those wallets hold
+/// That is the mint wallet only when the issuer minted to itself. A mint that sends
+/// nine outputs to a treasury and one to a collector leaves only those wallets holding
 /// the note openings and the `nk` a genesis proof needs (`ZMAP-v0.5.md` §12.3, corrected
 /// 2026-09-25). The issuer publishes `genesis[]`; the first holder proves.
 fn cmd_genesis(args: &Args) -> Result<()> {

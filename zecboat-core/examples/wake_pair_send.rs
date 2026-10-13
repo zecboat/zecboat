@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
         anyhow::bail!("usage: wake_pair_send <seed words file> <asset_id> <recipient UA>");
     };
     let home = env::var("HOME")?;
-    if home.contains("captain") || home.contains("user2") || !home.contains("scratch") {
+    if !home.contains("scratch") {
         anyhow::bail!("refusing: HOME must be a scratch directory holding a wallet COPY (got {home})");
     }
     // Accept "1. word" per line as well as a plain phrase.

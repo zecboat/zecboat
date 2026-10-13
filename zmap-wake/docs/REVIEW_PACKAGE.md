@@ -53,7 +53,7 @@ Recompute: `cargo test --test audit_dump -- --ignored --nocapture`.
 ## The mainnet test vector: policy
 
 `WAKE-v1.md` §11 item 5 asks for one real hop, lading and note ρ given, verifiable by anyone
-with a node. Such a lading exists for Happy Birthday #010 (`../../wallet_copies/`, not in any
+with a node. Such a lading exists for Happy Birthday #010 (kept with the maintainers, not in any
 repository). **It will not be published.** A lading discloses which transactions carried the
 unit to whoever holds it (§9); publishing one puts those links in public, which §7.3 forbids,
 and #010 is a real asset held by real wallets.

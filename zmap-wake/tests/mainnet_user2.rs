@@ -3,7 +3,7 @@
 //! Ignored by default. Run by hand, never against a live wallet:
 //!
 //! ```sh
-//! WAKE_WALLET_COPY=$HOME/zebd/ZMAP_v0.5/wallet_copies/user2_wallet.db \
+//! WAKE_WALLET_COPY=$WAKE_COPIES_DIR/user2_wallet.db \
 //! WAKE_TXID=3ba90bd4a6b90aeeff33e77db530a7a0586803e24b4a09666c1c2e2480ec07f1 \
 //! cargo test --test mainnet_user2 -- --ignored --nocapture
 //! ```
@@ -154,7 +154,7 @@ fn real_hop_from_user2_wallet_copy() {
     // anchor height the oracle needs). Not a full lading: no genesis proof yet. Not published.
     let entry = ProofEntry::from_proof(&proof, mined_height);
     let out = serde_json::json!({
-        "note": "one WAKE_HOP for user2's note; wallet_copies/ is not published",
+        "note": "one WAKE_HOP for user2's note; wallet copies are not published",
         "txid": txid_hex,
         "action_index": row.action_index,
         "entry": entry,

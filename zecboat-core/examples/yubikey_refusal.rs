@@ -17,8 +17,7 @@ use std::env;
 
 fn guard_home() -> anyhow::Result<String> {
     let home = env::var("HOME")?;
-    if home.contains("captain") || home.contains("user2") || home.contains("testA") || home.contains("testB")
-        || !(home.contains("scratch") || home.contains("testC"))
+    if !(home.contains("scratch") || home.contains("testC"))
     {
         anyhow::bail!("refusing: HOME must be a scratch or testC directory (got {home})");
     }

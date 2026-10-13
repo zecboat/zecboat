@@ -2,8 +2,8 @@
 //!
 //! A Wake proof needs the note's authentication path at `anchor_j`. The
 //! production rule is to prove before spending, while the wallet still holds
-//! the live witness. For a note already spent (the retroactive captain→user2
-//! proof, chapter 7) the path must be rebuilt at a past height. Upstream
+//! the live witness. For a note already spent (a retroactive proof, as in
+//! chapter 7) the path must be rebuilt at a past height. Upstream
 //! `zcash_client_sqlite 0.22.0-rc.4` can do that from the wallet's shard store:
 //! `WalletDb::generate_ironwood_witnesses_at_historical_height`
 //! (`lib.rs:3377`), the same call Zcash Coin Voting makes

@@ -46,7 +46,7 @@ Expected: `VERIFIED: 1 proof(s), trust FullNode, genesis cmx fa0474e16a392f4c…
 with `N ≥ 100`. Before block 3,496,171 the correct answer is `AnchorTooShallow`.
 
 Run on 2026-09-26 against zebrad at tip 3,496,910: `VERIFIED: 1 proof(s), trust FullNode, genesis cmx
-fa0474e16a392f4c…, shallowest anchor 839 deep` (log: `wallet_copies/wake_test_004_verify.log`).
+fa0474e16a392f4c…, shallowest anchor 839 deep` (log kept with the maintainers).
 
 What the verifier checks (`WAKE-v1.md` §8): the lading hash; W1, the genesis `cmx_0` equals the
 node's `cmx` at output 4 of the mint transaction; W2, the anchor is the Ironwood tree root at

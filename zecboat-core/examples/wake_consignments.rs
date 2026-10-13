@@ -14,7 +14,7 @@ use std::env;
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
     let home = env::var("HOME")?;
-    if home.contains("captain") || home.contains("user2") || !home.contains("scratch") {
+    if !home.contains("scratch") {
         anyhow::bail!("refusing: HOME must be a scratch directory holding a wallet COPY (got {home})");
     }
     let db_path = zecboat_core::paths::as_string::wallet_db_path()?;

@@ -1,6 +1,6 @@
 # zmap-wake, in-tree copy
 
-Copied 2026-09-26 from `~/zebd/ZMAP_v0.5/zmap-wake` (the exploratory Wake project, chapters
+Copied 2026-09-26 from the exploratory Wake project tree, outside this repository (chapters
 3–7 and 9–10 of `wake_chapters.md`) for chapter 8, "the wallet carries it". `zecboat-core`
 depends on it by path (`../zmap-wake`). The exploratory directory stays the place where the
 circuit, its negative tests and the review package are maintained; changes go there first and

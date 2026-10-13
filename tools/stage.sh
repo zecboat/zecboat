@@ -14,15 +14,17 @@
 # byte came from, and refuses if anything is missing, stale, or fails the gate.
 #
 # Usage: stage.sh <version>          e.g. stage.sh 0.6.3-beta
+# Paths come from ZB_SRC_REPO, ZB_STAGE_ROOT, ZB_RELEASE_KEY and ZB_RELEASE_PUB; the
+# defaults below are placeholders, not the maintainers' folders.
 set -uo pipefail
 
 V="${1:?usage: stage.sh <version>}"
-SRC_REPO="${ZB_SRC_REPO:-$HOME/zebd/zecboat_github_release/wallet}"
+SRC_REPO="${ZB_SRC_REPO:-$HOME/zecboat-release/wallet}"
 BUILD="$SRC_REPO/zecboat-ui/src-tauri/target/release/bundle"
-STAGE_ROOT="$HOME"/zecd/zecboat_staging
+STAGE_ROOT="${ZB_STAGE_ROOT:-$HOME/zecboat-staging}"
 GATE="$SRC_REPO/tools/release-gate.sh"   # the clean tree owns the gate, not a working directory
-KEY="$HOME"/zebd/zecboat_keys/release_signing/release_signing_key.pem
-PUB="$HOME"/zebd/zecboat_keys/release_signing/release_public_key.hex
+KEY="${ZB_RELEASE_KEY:-$HOME/zecboat-release-keys/release_signing_key.pem}"
+PUB="${ZB_RELEASE_PUB:-$HOME/zecboat-release-keys/release_public_key.hex}"
 S="$STAGE_ROOT/$V"
 VER="${V%-*}"
 

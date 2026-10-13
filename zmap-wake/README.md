@@ -41,11 +41,11 @@ while unused. Never enable it in a build that proves or verifies for real.
 `tests/mainnet_user2.rs` proves a real hop from a wallet copy against a local zebrad:
 
 ```sh
-WAKE_WALLET_COPY=$HOME/zebd/ZMAP_v0.5/wallet_copies/user2_wallet.db \
+WAKE_WALLET_COPY=$WAKE_COPIES_DIR/user2_wallet.db \
 WAKE_TXID=<txid> cargo test --test mainnet_user2 -- --ignored --nocapture
 ```
 
-Wallet copies live in `../wallet_copies/` (not published, not in any repo). Copy `wallet.db`
+Wallet copies are never published and never committed; `WAKE_COPIES_DIR` points at them. Copy `wallet.db`
 with the wallet closed, or `sqlite3 wallet.db ".backup copy.db"`. Never point anything here
 at a live wallet; the crate refuses any path containing `.AppVault`.
 
