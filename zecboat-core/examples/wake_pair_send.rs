@@ -36,7 +36,7 @@ fn main() -> anyhow::Result<()> {
         &db_path,
         MainNetwork,
         zcash_client_sqlite::util::SystemClock,
-        rand::rngs::OsRng,
+        zmap_wake::rng::OsRng,
     )?;
     // Expiry from the node's tip, not the (possibly stale) copy's view: WAKE_ZEBRAD, default local.
     let expiry = {

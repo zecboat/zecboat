@@ -261,10 +261,10 @@ impl LightwalletdOracle {
                                 }
                             }
                         }
-                        others.shuffle(&mut rand::rngs::OsRng);
+                        others.shuffle(&mut crate::rng::OsRng);
                         others.truncate(MAX_COVER - 1);
                         ask.extend(others);
-                        ask.shuffle(&mut rand::rngs::OsRng);
+                        ask.shuffle(&mut crate::rng::OsRng);
                     }
                     if std::env::var_os("ZECBOAT_WAKE_TRACE").is_some() {
                         match hint {

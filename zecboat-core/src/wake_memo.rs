@@ -233,11 +233,13 @@ fn knotline_outputs(conn: &rusqlite::Connection, carrier_txid_internal: &[u8; 32
         _ => return Ok((Vec::new(), format!("no knot: {n} hops is more than a line is started with ({MAX_JOIN_HOPS}); the lading travels as a file"))),
     };
     let mut key = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
+    rand::Rng::fill_bytes(&mut zmap_wake::rng::OsRng, &mut key);
     let (_, addr) = log::knot_keys(&key);
-    let ua = zcash_keys::address::UnifiedAddress::from_receivers(Some(addr), None, None)
-        .ok_or_else(|| anyhow!("could not form the knot's address"))?
-        .encode(&zcash_protocol::consensus::MainNetwork);
+    // NU7 key crate: `from_receivers` also takes the ZIP 316 r2 expiry fields; none here, and
+    // the string is re-encoded as `u1…` like every other address the wallet hands out.
+    let ua = zcash_keys::address::UnifiedAddress::from_receivers(Some(addr), None, None, None, None)
+        .ok_or_else(|| anyhow!("could not form the knot's address"))?;
+    let ua = crate::addr::encode_u1(&ua);
     let mut out = vec![(ExtraTo::Recipient, log::key_memo(&key))];
     for m in log::chunks(log::KNOT_TAG, &log::pack_knot(&record)?)? {
         out.push((ExtraTo::Address(ua.clone()), m));

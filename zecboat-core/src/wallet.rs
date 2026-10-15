@@ -84,7 +84,7 @@ pub fn batch_send_transaction(
     use zcash_client_sqlite::WalletDb;
     use zcash_client_sqlite::util::SystemClock;
     use zcash_protocol::consensus::MainNetwork;
-    use rand::rngs::OsRng;
+    use zmap_wake::rng::OsRng;
     use zcash_client_backend::data_api::{WalletRead, InputSource};
     use zcash_client_backend::data_api::wallet::TargetHeight;
     use zcash_protocol::ShieldedPool;
@@ -284,7 +284,7 @@ pub fn send_transaction(
     use zcash_client_sqlite::WalletDb;
     use zcash_client_sqlite::util::SystemClock;
     use zcash_protocol::consensus::MainNetwork;
-    use rand::rngs::OsRng;
+    use zmap_wake::rng::OsRng;
     use zcash_client_backend::data_api::{WalletRead, InputSource};
     use zcash_client_backend::data_api::wallet::TargetHeight;
     use zcash_protocol::ShieldedPool;

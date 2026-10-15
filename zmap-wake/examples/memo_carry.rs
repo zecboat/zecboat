@@ -26,8 +26,8 @@ use orchard::keys::{FullViewingKey, PreparedIncomingViewingKey, Scope, SpendingK
 use orchard::note::Rho;
 use orchard::note_encryption::IronwoodDomain;
 use orchard::value::NoteValue;
-use rand::rngs::OsRng;
-use rand::RngCore;
+use zmap_wake::rng::OsRng;
+use rand::Rng;
 use std::path::Path;
 use zcash_note_encryption::try_note_decryption;
 use zcash_protocol::consensus::Network;

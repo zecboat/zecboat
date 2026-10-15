@@ -73,14 +73,14 @@
 
 use anyhow::{anyhow, Result};
 
-use rand::rngs::OsRng;
+use zmap_wake::rng::OsRng;
 
 use zcash_client_backend::data_api::wallet::input_selection::GreedyInputSelector;
 use zcash_client_backend::data_api::wallet::{
     create_pczt_from_proposal, create_proposed_transactions, extract_and_store_transaction_from_pczt,
     propose_transfer, ConfirmationsPolicy, SpendingKeys,
 };
-use zcash_client_backend::data_api::{WalletRead, WalletWrite};
+use zcash_client_backend::data_api::{OutputLockStore, WalletRead};
 use zcash_client_backend::fees::standard::SingleOutputChangeStrategy;
 use zcash_client_backend::fees::{DustOutputPolicy, StandardFeeRule};
 use zcash_client_backend::wallet::OvkPolicy;
@@ -177,7 +177,7 @@ fn lock_zmap_carriers(wallet_db: &mut Db, target_height: BlockHeight) -> Result<
     // Far enough ahead that a lock cannot lapse between builds in normal operation. Locks are
     // advisory and owner-scoped, so an over-long expiry costs nothing: only this wallet's own
     // asset-send path may spend through them.
-    let expiry = target_height + CARRIER_LOCK_BLOCKS;
+    let expiry = target_height + crate::block_time::carrier_lock_blocks(target_height);
 
     // Every carrier that exists must end up locked. Counting them first is the only way to
     // notice a partial success — `lock_outputs` returning fewer rows than it was handed is
@@ -249,7 +249,7 @@ fn lock_zmap_carriers(wallet_db: &mut Db, target_height: BlockHeight) -> Result<
 }
 
 /// How far ahead carrier locks are set. ~35 days at 75-second blocks.
-const CARRIER_LOCK_BLOCKS: u32 = 40_000;
+// The lock length lives in `block_time::CARRIER_LOCK_SECS` (about 35 days at either spacing).
 
 /// The wallet this crate operates on. Kept in one place so the lock path and the spend path can
 /// never diverge onto different databases — a bug the previous guard was explicitly written to
@@ -369,12 +369,14 @@ fn build_and_sign_request(
     let txids = create_proposed_transactions::<_, _, std::convert::Infallible, _, std::convert::Infallible, _>(
         wallet_db,
         &network,
+        &zcash_client_sqlite::util::SystemClock,
+        &mut OsRng,
         &prover,
         &prover,
         &spending_keys,
         OvkPolicy::Sender,
         &proposal,
-        None, // default expiry
+        Some(crate::block_time::send_expiry(target_height.into())), // 50 minutes at either block spacing
     )
     .map_err(|e| anyhow!("transaction creation failed: {:?}", e))?;
 
@@ -915,6 +917,8 @@ pub fn send_zmap_asset(
         .compute_balance(
             &network,
             target_height,
+            anchor_height,
+            &wallet_db.pool_migration_params(),
             &[] as &[std::convert::Infallible],
             &[] as &[TxOut],
             &sapling_fees::EmptyBundleView,
@@ -1007,10 +1011,12 @@ pub fn send_zmap_asset(
         let candidate = create_pczt_from_proposal::<_, _, std::convert::Infallible, _, std::convert::Infallible, _>(
             wallet_db,
             &network,
+            &zcash_client_sqlite::util::SystemClock,
+            &mut OsRng,
             account_id,
             OvkPolicy::Sender,
             &proposal,
-            expiry_height,
+            Some(expiry_height.unwrap_or_else(|| crate::block_time::send_expiry(target_height.into()))),
             zcash_primitives::transaction::builder::BundlePadding::DEFAULT,
         )
         .map_err(|e| anyhow!("could not build the asset transfer: {:?}", e))?;
@@ -1066,12 +1072,12 @@ pub fn send_zmap_asset(
     }
     if prover.requires_ironwood_proof() {
         prover = prover
-            .create_ironwood_proof(pk)
+            .create_ironwood_proof(OsRng, pk)
             .map_err(|e| anyhow!("could not prove the Ironwood bundle: {:?}", e))?;
     }
     if prover.requires_orchard_proof() {
         prover = prover
-            .create_orchard_proof(pk)
+            .create_orchard_proof(OsRng, pk)
             .map_err(|e| anyhow!("could not prove the Orchard bundle: {:?}", e))?;
     }
     let pczt = prover.finish();
@@ -1092,16 +1098,18 @@ pub fn send_zmap_asset(
     let mut signer = pczt::roles::signer::Signer::new(pczt)
         .map_err(|e| anyhow!("could not start signing the asset transfer: {:?}", e))?;
     for i in ironwood_unsigned {
-        signer.sign_ironwood(i, &ask).map_err(|e| anyhow!("could not sign Ironwood spend {i}: {:?}", e))?;
+        signer.sign_ironwood(OsRng, i, &ask).map_err(|e| anyhow!("could not sign Ironwood spend {i}: {:?}", e))?;
     }
     for i in orchard_unsigned {
-        signer.sign_orchard(i, &ask).map_err(|e| anyhow!("could not sign Orchard spend {i}: {:?}", e))?;
+        signer.sign_orchard(OsRng, i, &ask).map_err(|e| anyhow!("could not sign Orchard spend {i}: {:?}", e))?;
     }
     let pczt = signer.finish();
 
     let vk = orchard_verifying_key();
     let txid = extract_and_store_transaction_from_pczt::<_, std::convert::Infallible>(
         wallet_db,
+        &zcash_client_sqlite::util::SystemClock,
+        &mut OsRng,
         pczt,
         None,
         Some(vk),

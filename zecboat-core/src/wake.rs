@@ -31,7 +31,7 @@ use zmap_wake::oracle_lightwalletd::LightwalletdOracle;
 use zmap_wake::wallet_notes::{received_notes_in_tx_conn, witness_at, ReceivedNote};
 use zmap_wake::{prove_genesis, prove_hop, verify_chain, WakeFailure};
 
-type Db<P> = zcash_client_sqlite::WalletDb<Connection, P, zcash_client_sqlite::util::SystemClock, rand::rngs::OsRng>;
+type Db<P> = zcash_client_sqlite::WalletDb<Connection, P, zcash_client_sqlite::util::SystemClock, zmap_wake::rng::OsRng>;
 
 /// Where this wallet asks the chain its lineage and issuance questions (0.7.1).
 ///
@@ -562,7 +562,7 @@ pub fn seal_for(recipient_ua: &str, bytes: &[u8]) -> Result<Vec<u8>> {
             .ok_or_else(|| anyhow!("the recipient's unified address has no Orchard receiver"))?,
         _ => return Err(anyhow!("a lading can only be sealed to a unified address")),
     };
-    let sealed = zmap_wake::seal::seal(&addr, bytes, &mut rand::rngs::OsRng)?;
+    let sealed = zmap_wake::seal::seal(&addr, bytes, &mut zmap_wake::rng::OsRng)?;
     Ok(sealed.to_bytes())
 }
 

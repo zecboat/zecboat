@@ -96,7 +96,7 @@ fn print_summary_for_db_in_env() {
     use zcash_client_sqlite::WalletDb;
     use zcash_client_sqlite::util::SystemClock;
     use zcash_protocol::consensus::MainNetwork;
-    use rand::rngs::OsRng;
+    use zmap_wake::rng::OsRng;
 
     let Ok(db) = std::env::var("ZECBOAT_DIAG_DB") else {
         eprintln!("ZECBOAT_DIAG_DB not set; nothing to print");

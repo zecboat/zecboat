@@ -16,7 +16,7 @@ fn main() -> Result<()> {
     }
     let db_path = zecboat_core::paths::as_string::wallet_db_path()?;
     let conn = rusqlite::Connection::open(&db_path)?;
-    let wallet_db = zcash_client_sqlite::WalletDb::for_path(&db_path, zcash_protocol::consensus::MainNetwork, zcash_client_sqlite::util::SystemClock, rand::rngs::OsRng)?;
+    let wallet_db = zcash_client_sqlite::WalletDb::for_path(&db_path, zcash_protocol::consensus::MainNetwork, zcash_client_sqlite::util::SystemClock, zmap_wake::rng::OsRng)?;
     let holdings = zecboat_core::zmap::holdings_from_rows(zecboat_core::zmap::read_carrier_rows(&conn)?);
     let plan = zecboat_core::zmap::plan_asset_send(&holdings, &asset_id)?;
     let chain = zecboat_core::wake::chain();
@@ -49,7 +49,7 @@ fn main() -> Result<()> {
     // What the recipient would do, on the plain memos: key, record, rebuild, compare.
     let key = log::key_from_memos(to_recipient.iter().copied()).ok_or_else(|| anyhow!("no key memo among the recipient's outputs"))?;
     let (_, addr) = log::knot_keys(&key);
-    let want_ua = zcash_keys::address::UnifiedAddress::from_receivers(Some(addr), None, None).unwrap().encode(&zcash_protocol::consensus::MainNetwork);
+    let want_ua = zcash_keys::address::UnifiedAddress::from_receivers(Some(addr), None, None, None, None).map(|ua| zecboat_core::addr::encode_u1(&ua)).unwrap();
     println!("record address is the one derived from the key: {}", to_record.iter().all(|(a, _)| **a == want_ua));
     let packed = log::from_memos(to_record.iter().map(|(_, m)| *m), log::KNOT_TAG).ok_or_else(|| anyhow!("record chunks do not reassemble"))?;
     let record = log::unpack_knot(&packed)?;

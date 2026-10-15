@@ -228,7 +228,7 @@ pub fn spent_in(wallet_path: &Path, row_id: i64) -> Result<Vec<([u8; 32], Option
 /// shards against the tree state `ts` (normally the state at `n.mined_height`
 /// or any later height the oracle can vouch for).
 pub fn witness_at<P: zcash_protocol::consensus::Parameters>(
-    db: &zcash_client_sqlite::WalletDb<rusqlite::Connection, P, zcash_client_sqlite::util::SystemClock, rand::rngs::OsRng>,
+    db: &zcash_client_sqlite::WalletDb<rusqlite::Connection, P, zcash_client_sqlite::util::SystemClock, crate::rng::OsRng>,
     n: &ReceivedNote,
     ts: &IronwoodTreeState,
 ) -> Result<Witness> {

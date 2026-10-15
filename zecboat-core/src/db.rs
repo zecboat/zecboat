@@ -307,14 +307,14 @@ impl WalletPool {
                     LEFT JOIN v_received_output_spends s ON v.id_within_pool_table = s.received_output_id AND v.pool = s.pool
                     WHERE (v.address_id = a.id OR (v.address_id IS NULL AND v.account_id = a.account_id AND v.is_change = 1)) AND s.transaction_id IS NULL AND v.value > 10000 AND v.pool IN (2, 3, 4)) as balance,
                    (SELECT COUNT(*) FROM v_received_outputs v2 WHERE v2.address_id = a.id) as received_count
-                 FROM addresses a WHERE a.address LIKE 'u1%' ORDER BY a.id"
+                 FROM addresses a WHERE a.address LIKE 'u1%' OR a.address LIKE 'zu1%' OR a.address LIKE 'tu1%' ORDER BY a.id"
             )?;
             let mut rows = stmt.query([])?;
             let mut addresses = Vec::new();
             
             let mut first = true;
             while let Some(row) = rows.next()? {
-                let addr: String = row.get(0)?;
+                let addr: String = crate::addr::as_u1(&row.get::<_, String>(0)?);
                 let balance_zats: i64 = row.get(1)?;
                 let received: i64 = row.get(2)?;
                 let balance = (balance_zats as f64) / 100_000_000.0;

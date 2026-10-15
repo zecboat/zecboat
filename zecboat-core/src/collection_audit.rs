@@ -412,7 +412,7 @@ async fn ensure_account(db_path: &str, ufvk: &zcash_keys::keys::UnifiedFullViewi
     use zcash_protocol::consensus::MainNetwork;
 
     let has_account = {
-        let mut db = WalletDb::for_path(db_path, MainNetwork, SystemClock, rand::rngs::OsRng).map_err(|e| anyhow!("{e:?}"))?;
+        let mut db = WalletDb::for_path(db_path, MainNetwork, SystemClock, zmap_wake::rng::OsRng).map_err(|e| anyhow!("{e:?}"))?;
         zcash_client_sqlite::wallet::init::init_wallet_db(&mut db, None).map_err(|e| anyhow!("{e:?}"))?;
         !db.get_account_ids().map_err(|e| anyhow!("{e:?}"))?.is_empty()
     };
@@ -426,7 +426,7 @@ async fn ensure_account(db_path: &str, ufvk: &zcash_keys::keys::UnifiedFullViewi
         .map_err(|e| anyhow!("cannot read the tree state at {}: {e}", birthday - 1))?
         .into_inner();
     let cs: ChainState = ts.to_chain_state().map_err(|e| anyhow!("malformed tree state: {e:?}"))?;
-    let mut db = WalletDb::for_path(db_path, MainNetwork, SystemClock, rand::rngs::OsRng).map_err(|e| anyhow!("{e:?}"))?;
+    let mut db = WalletDb::for_path(db_path, MainNetwork, SystemClock, zmap_wake::rng::OsRng).map_err(|e| anyhow!("{e:?}"))?;
     db.import_account_ufvk("collection audit", ufvk, &AccountBirthday::from_parts(cs, None), AccountPurpose::ViewOnly, None)
         .map_err(|e| anyhow!("could not import the collection's viewing key: {e:?}"))?;
     Ok(())
@@ -634,13 +634,16 @@ pub fn pick_listing(reports: impl IntoIterator<Item = AuditReport>, asset_id: &s
     (!newer_failure).then_some(best)
 }
 
-/// Blocks after which a passed audit is due for a re-check (≈ 8.7 days at 75-second blocks).
-/// The badge stays, with the height it was verified to; a stale one says so.
-pub const AUDIT_STALE_BLOCKS: u32 = 10_000;
+/// Blocks after which a passed audit is due for a re-check: about 8.7 days at the spacing in
+/// force at `tip` (`block_time::AUDIT_STALE_SECS`). The badge stays, with the height it was
+/// verified to; a stale one says so.
+pub fn audit_stale_blocks(tip: u32) -> u32 {
+    crate::block_time::audit_stale_blocks(zcash_protocol::consensus::BlockHeight::from_u32(tip))
+}
 
-/// Whether `report` is older than [`AUDIT_STALE_BLOCKS`] relative to `tip`.
+/// Whether `report` is older than [`audit_stale_blocks`] relative to `tip`.
 pub fn listing_is_stale(report: &AuditReport, tip: u32) -> bool {
-    tip.saturating_sub(report.audited_to) > AUDIT_STALE_BLOCKS
+    tip.saturating_sub(report.audited_to) > audit_stale_blocks(tip)
 }
 
 /// Seconds since the Unix epoch, as text; the UI formats it.
@@ -960,7 +963,8 @@ mod tests {
         assert!(pick_listing(vec![old_pass.clone(), new_fail.clone()], &id).is_none());
         let newer_pass = at(report(true, None, true, &id), 3_000);
         assert_eq!(pick_listing(vec![old_pass.clone(), new_fail, newer_pass], &id).map(|a| a.audited_to), Some(3_000));
-        assert!(!listing_is_stale(&old_pass, 1_000 + AUDIT_STALE_BLOCKS));
-        assert!(listing_is_stale(&old_pass, 1_001 + AUDIT_STALE_BLOCKS));
+        let stale = audit_stale_blocks(1_000);
+        assert!(!listing_is_stale(&old_pass, 1_000 + stale));
+        assert!(listing_is_stale(&old_pass, 1_001 + stale));
     }
 }

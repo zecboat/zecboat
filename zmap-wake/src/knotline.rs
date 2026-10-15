@@ -354,7 +354,7 @@ mod tests {
     use orchard::builder::{Builder, BundleType};
     use orchard::bundle::BundleVersion;
     use orchard::value::NoteValue;
-    use rand::rngs::OsRng;
+    use crate::rng::OsRng;
     use std::collections::HashMap;
 
     fn hop(j: usize) -> ProofEntry {

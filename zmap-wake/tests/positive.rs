@@ -7,7 +7,7 @@ use halo2_proofs::dev::{CircuitCost, MockProver};
 use orchard::keys::{FullViewingKey, SpendingKey};
 use orchard::note::NoteVersion;
 use pasta_curves::vesta;
-use rand::rngs::OsRng;
+use zmap_wake::rng::OsRng;
 use zmap_wake::circuit::{Circuit, INSTANCE_LEN};
 use zmap_wake::prove::instance_for;
 use zmap_wake::testing::{carrier, fixture};

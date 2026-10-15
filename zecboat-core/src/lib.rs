@@ -1,3 +1,5 @@
+pub mod addr;
+pub mod block_time;
 pub mod issuance;
 
 /// A test-only environment override (`ZECBOAT_WAKE_MANIFEST`, `ZECBOAT_PINNED_V1`). Read only
