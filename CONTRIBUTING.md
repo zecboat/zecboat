@@ -1,6 +1,6 @@
 # Contributing to Zecboat
 
-Thank you for looking. This is a small project handling real money, so the guidelines below lean
+Thank you for looking. This is a small project handling real funds, so the guidelines below lean
 towards caution rather than velocity.
 
 ---
@@ -108,7 +108,7 @@ without our code or permission: <https://zecboat.com/protocol>
 
 If you implement it and something is wrong or underspecified, **that is a defect in the
 specification** — please report it. Two things there are mandatory rather than advisory, because
-skipping either loses people money or misleads them:
+skipping either loses people funds or misleads them:
 
 - **Protect asset carriers from ordinary spends** (§5.4). A wallet that does not will destroy one.
 - **Never report a note as genuine on an artwork check alone** (§12.1). A forgery passes it.

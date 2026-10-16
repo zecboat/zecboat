@@ -73,7 +73,7 @@
             <span class="meta">
               {formatDateShort(tx.block_time)} · {confirmationsLabel(tx)}
               {#if tx.pool} · {tx.pool}{/if}
-              {#if tx.assets.length && tx.type === "send" && tx.fee != null} · fee {tx.fee.toFixed(4)} ZEC{/if}
+              {#if tx.type === "send" && tx.fee != null} · fee {tx.fee.toFixed(4)} ZEC{/if}
             </span>
             {#if tx.memo}<span class="memo">{tx.memo}</span>{/if}
           </span>

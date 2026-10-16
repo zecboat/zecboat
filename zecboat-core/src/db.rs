@@ -219,7 +219,10 @@ impl WalletPool {
                 txs.push(serde_json::json!({
                     "id": display_txid,
                     "type": tx_type,
-                    "amount": (delta.abs() as f64) / 100_000_000.0,
+                    // 0.7.2 (stranger test 2026-10-12, item 4): the balance delta of a send is
+                    // the amount plus the fee, and History showed "Sent 0.0006" for a 0.0005
+                    // send. The amount is what the recipient got; the fee is its own field.
+                    "amount": ((delta.abs() - if delta < 0 { fee_zat.unwrap_or(0).max(0) } else { 0 }) as f64) / 100_000_000.0,
                     "fee": fee_zat.map(|f| f as f64 / 100_000_000.0),
                     // Raw epoch seconds, so the interface can render local time.
                     // The old code returned SQLite's UTC string, which no timezone

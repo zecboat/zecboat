@@ -184,6 +184,22 @@
     isTestingNode = true;
     nodeFeedback = { type: 'info', message: `Connecting to ${target}...` };
 
+    // 0.7.2 (stranger test 2026-10-12, item 1): the new URL was applied before the probe and
+    // never undone when the probe failed, so a typo left the engine on a dead address until
+    // the next restart while Settings still showed the old node. Remember what the engine
+    // is on now, and put it back on any failure.
+    let previous: string | null = null;
+    try {
+      previous = await invoke<string>("get_provider_url");
+    } catch {
+      previous = null;
+    }
+    const restore = async () => {
+      if (previous && previous !== target) {
+        try { await invoke("set_provider_url", { url: previous }); } catch { /* reported below */ }
+      }
+    };
+
     try {
       await invoke("set_provider_url", { url: target });
 
@@ -194,12 +210,14 @@
       const status = JSON.parse(raw);
 
       if (!status.targetHeight || status.status === "Disconnected") {
+        await restore();
+        const kept = previous && previous !== target ? ` Kept ${previous}.` : "";
         nodeFeedback = {
           type: 'error',
           message: `No response from ${target}`,
-          detail: selectedPreset === "local"
+          detail: (selectedPreset === "local"
             ? "Is the node running and reachable at that address? Check zebrad and zainod, or try a public lightwalletd."
-            : "The node did not answer a GetLightdInfo request. Check the address and that the host is up."
+            : "The node did not answer a GetLightdInfo request. Check the address and that the host is up.") + kept
         };
         return;
       }
@@ -211,7 +229,9 @@
         detail: `Node at block ${status.targetHeight.toLocaleString()} · wallet at ${Number(status.blockHeight).toLocaleString()} (${status.status})`
       };
     } catch (e: any) {
-      nodeFeedback = { type: 'error', message: `Failed to connect: ${e}` };
+      await restore();
+      const kept = previous && previous !== target ? ` Kept ${previous}.` : "";
+      nodeFeedback = { type: 'error', message: `Failed to connect: ${e}`, detail: kept.trim() || undefined };
     } finally {
       isTestingNode = false;
     }
@@ -312,10 +332,9 @@
       // Creating a wallet belongs on the unlock screen, where it now asks for a
       // password twice and walks the seed backup and verification. There is no
       // reason to offer it again behind a login the user has already passed.
-      if (action === 'Create New Account') {
-        const res: string = await invoke("create_new_account");
-        actionFeedback = { type: 'success', message: res };
-      } else if (action === 'Backup Wallet') {
+      // 0.7.2: the "Create New Account" control is gone from this screen as well; the backend
+      // command stays refused.
+      if (action === 'Backup Wallet') {
         const res: string = await invoke("backup_wallet");
         actionFeedback = { type: 'success', message: res };
       } else if (action === 'Remove YubiKey') {
@@ -559,7 +578,6 @@
       </div>
     {:else}
       <div class="action-grid">
-        <button class="btn action-btn" onclick={() => handleAction('Create New Account')}>👥 Create New Account</button>
         <button class="btn action-btn" onclick={() => handleAction('Backup Wallet')}>💾 Backup Wallet</button>
         <button class="btn action-btn" onclick={() => handleAction('Restore Backup')}>🔄 Restore Backup</button>
         <button class="btn action-btn" onclick={() => handleAction('Rescan from Height')}>🔍 Rescan from Height</button>

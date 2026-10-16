@@ -66,6 +66,55 @@ async fn wallet_with_one_unpositioned_note(tag: &str) -> Sandbox {
     sb
 }
 
+/// 0.7.2 (captain, 2026-10-14): the duplicate record above, but in a transaction that IS mined,
+/// at a height the wallet has already scanned, and with no nullifier: the scanner never found
+/// this note, so no rescan will place it. It must leave every bucket, not move to another one.
+async fn wallet_with_one_phantom_row_in_a_scanned_block(tag: &str) -> Sandbox {
+    let sb = Sandbox::new(tag);
+    zecboat_core::initialize_new_wallet("pw".into(), false, Some(BIRTHDAY)).await.expect("create");
+    let conn = rusqlite::Connection::open(sb.wallet_db()).unwrap();
+    let height = BIRTHDAY + 10;
+    conn.execute(
+        // sapling_tree is the legacy serialized CommitmentTree the summary still reads:
+        // an empty one is left None, right None, no parents = three zero bytes.
+        "INSERT INTO blocks (height, hash, time, sapling_tree, sapling_commitment_tree_size, orchard_commitment_tree_size, ironwood_commitment_tree_size)
+         VALUES (?1, ?2, 0, ?3, 0, 0, 0)",
+        rusqlite::params![height, vec![0x11u8; 32], vec![0u8; 3]],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO transactions (txid, min_observed_height, block, mined_height) VALUES (?1, ?2, ?3, ?3)",
+        rusqlite::params![vec![0x5bu8; 32], BIRTHDAY, height],
+    ).unwrap();
+    let tx_id = conn.last_insert_rowid();
+    let account_id: i64 = conn.query_row("SELECT id FROM accounts LIMIT 1", [], |r| r.get(0)).unwrap();
+    conn.execute(
+        "INSERT INTO orchard_received_notes
+           (transaction_id, action_index, account_id, diversifier, value, rho, rseed, nf, is_change,
+            memo, commitment_tree_position, recipient_key_scope, witness_stabilized, note_version)
+         VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, NULL, 1, NULL, NULL, 1, 0, 2)",
+        rusqlite::params![tx_id, account_id, vec![1u8; 11], ORPHAN_ZAT, vec![2u8; 32], vec![3u8; 32]],
+    ).unwrap();
+    sb
+}
+
+#[tokio::test]
+async fn a_phantom_row_in_a_scanned_block_is_in_no_bucket_and_asks_for_no_rescan() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let _sb = wallet_with_one_phantom_row_in_a_scanned_block("phantom").await;
+    let b = zecboat_core::get_balance_breakdown().await.expect("breakdown");
+    assert_eq!(b.unpositioned_zat, 0, "a row no scan can place must not ask for a rescan");
+    assert_eq!(b.unpositioned_notes, 0);
+    assert_eq!(b.unpositioned_from_height, None);
+    assert_eq!(b.awaiting_scan_zat, 0, "and it must not reappear as awaiting scan");
+    assert_eq!(b.spendable_zat, 0);
+    assert_eq!(
+        b.spendable_zat + b.locked_zat + b.pending_change_zat + b.awaiting_scan_zat + b.unpositioned_zat + b.uneconomic_zat,
+        b.shielded_total_zat,
+        "the buckets must still add up to the total"
+    );
+    assert_eq!(b.shielded_total_zat, 0, "the phantom's value is not in the total either");
+}
+
 /// The send screen's "available" figure comes from fee_readiness, which summed every
 /// unspent output. A note with no tree position cannot be selected for any transaction,
 /// so counting it tells the user they can pay a fee they cannot pay.

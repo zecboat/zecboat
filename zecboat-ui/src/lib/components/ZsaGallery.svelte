@@ -39,7 +39,11 @@
     collecting = true; collectNote = null;
     try {
       const r: any = await invoke("collect_lineage", { assetId: selectedAssetId });
-      collectNote = r.fetched > 0 ? "Collected. Re-open the item to see its lineage." : (r.failed?.length ? `Could not collect: ${r.failed.join("; ")}` : "Nothing to collect yet.");
+      // 0.7.2 (SEND_TESTS_0.7.1 Test 3, item S3): a pass that found the lading already stored
+      // reported "Nothing to collect yet", which reads as a failure. The report says so; say it.
+      collectNote = r.fetched > 0 ? "Collected. Re-open the item to see its lineage."
+        : (r.already_held ?? 0) > 0 ? "Already collected. Re-open the item to see its lineage."
+        : (r.failed?.length ? `Could not collect: ${r.failed.join("; ")}` : "Nothing to collect yet: no lineage record for this item is on the chain or in a file this wallet has seen.");
     } catch (e: any) { collectNote = String(e); } finally { collecting = false; }
   }
   let isCheckingLineage = $state(false);
@@ -346,7 +350,7 @@
                 <span class="check-line">✓ every proof verifies under the pinned Wake keys</span>
                 <span class="check-line">✓ each note's ρ is the previous note's nullifier (consensus-bound)</span>
                 <span class="check-line">✓ every anchor is a tree root on your node ({wake.asked}), shallowest {wake.min_anchor_depth.toLocaleString()} blocks deep</span>
-                <span class="check-line">✓ the genesis output {wake.genesis_txid.slice(0, 16)}… #{wake.genesis_action_index} is the one the {wake.genesis_source === 'local_manifest' ? 'local test manifest' : wake.genesis_source === 'registry' ? 'Zecboat Registry (audited, from the chain)' : "issuer's pinned manifest"} names</span>
+                <span class="check-line">✓ the genesis output {wake.genesis_txid.slice(0, 16)}… action #{wake.genesis_action_index} is the one the {wake.genesis_source === 'local_manifest' ? 'local test manifest' : wake.genesis_source === 'registry' ? 'Zecboat Registry (audited, from the chain)' : "issuer's pinned manifest"} names</span>
                 <span class="check-line mono">lading sha256 {wake.consignment_hash.slice(0, 16)}…</span>
                 <span class="check-line caveat">Wake is a draft circuit without external review (WAKE-v1 §11). This badge is exploratory.</span>
               </details>
@@ -363,7 +367,7 @@
                 <span class="check-line">✓ every proof verifies under the pinned Wake keys, on this machine</span>
                 <span class="check-line">✓ each note's ρ is the previous note's nullifier (consensus-bound)</span>
                 <span class="check-line">✓ every anchor is a tree root according to {wake.asked}, shallowest {wake.min_anchor_depth.toLocaleString()} blocks deep</span>
-                <span class="check-line">✓ the genesis output {wake.genesis_txid.slice(0, 16)}… #{wake.genesis_action_index} is the one the {wake.genesis_source === 'local_manifest' ? 'local test manifest' : wake.genesis_source === 'registry' ? 'Zecboat Registry' : "issuer's manifest"} names, and it is on chain according to the same source</span>
+                <span class="check-line">✓ the genesis output {wake.genesis_txid.slice(0, 16)}… action #{wake.genesis_action_index} is the one the {wake.genesis_source === 'local_manifest' ? 'local test manifest' : wake.genesis_source === 'registry' ? 'Zecboat Registry' : "issuer's manifest"} names, and it is on chain according to the same source</span>
                 <span class="check-line mono">lading sha256 {wake.consignment_hash.slice(0, 16)}…</span>
                 <span class="check-line caveat">The chain's answers here are your provider's word, the same trust your balance rests on. With your own node running on this machine, the wallet checks them itself.</span>
                 {#if !WAKE_REVIEWED}<span class="check-line caveat">Wake is a draft circuit without external review (WAKE-v1 §11). This badge is exploratory.</span>{/if}

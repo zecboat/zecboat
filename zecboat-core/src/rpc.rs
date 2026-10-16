@@ -1534,10 +1534,10 @@ pub static PROVIDER_URL: Lazy<Mutex<String>> = Lazy::new(|| {
 
 /// Base URL of the asset registry — where artwork and metadata are fetched from.
 ///
-/// Overridable with `ZECBOAT_REGISTRY`. It was hardcoded to `https://zecboat.com`, which is correct
-/// for the production domain and wrong everywhere else: during development the registry lives at
-/// `https://ocean.zecboat.com`, and `zecboat.com/collection/...` currently answers 301, so a fresh
-/// install shows no artwork at all and gives no clue why.
+/// Overridable with `ZECBOAT_REGISTRY`; the default `https://zecboat.com` serves every published
+/// collection's artwork, so a fresh install needs nothing set (0.7.2; the development host this
+/// comment once named is gone). The variable chooses the artwork host only: the on-chain Zecboat
+/// Registry, lineage and verification never read it.
 ///
 /// Anyone running their own registry points here too, which is the more important reason: a wallet
 /// that can only fetch assets from one company's host is not much of an open format.
@@ -2408,12 +2408,18 @@ pub async fn get_balance_breakdown() -> Result<BalanceBreakdown> {
     // selection requires a position to build a witness. Change of a transaction that expired
     // without being mined is not a note at all (the backend already excludes it), so it is left
     // out here too; until 2026-10-02 it was shown as "needs a rescan", which no rescan can fix.
+    // 0.7.2 (captain, 2026-10-14): a row with NO nullifier in a transaction that is mined at a
+    // height the wallet has already scanned is not a note the scanner ever found; it is a
+    // duplicate record an earlier version wrote at build time under the wrong pool (the real
+    // Ironwood change was spent long ago). A rescan writes nothing for it, so it is not
+    // "needs a rescan" either. An unmined transaction's rows keep their place: nothing has
+    // been scanned that could have found them yet.
     // (Was:) note
     // selection requires a position to build a witness (it is the first thing
     // select_spendable_notes filters on), so these can never be inputs. The backend counts
     // them in `value_pending_spendability`; they are taken out of that bucket here so
     // "awaiting scan" only holds what a scan will actually resolve.
-    let (unpositioned, unpositioned_notes, from_height, transparent) = {
+    let (unpositioned, unpositioned_notes, from_height, transparent, phantom) = {
         let conn = rusqlite::Connection::open_with_flags(
             &db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -2424,18 +2430,24 @@ pub async fn get_balance_breakdown() -> Result<BalanceBreakdown> {
                JOIN transactions t ON t.id_tx = n.transaction_id
               WHERE n.commitment_tree_position IS NULL
                 AND (t.mined_height IS NOT NULL OR t.expiry_height IS NULL OR t.expiry_height = 0 OR t.expiry_height > ?1)
+                AND NOT (n.nf IS NULL AND t.mined_height IS NOT NULL
+                         AND t.mined_height <= (SELECT COALESCE(MAX(height), 0) FROM blocks))
                 AND NOT EXISTS (SELECT 1 FROM sapling_received_note_spends s WHERE s.sapling_received_note_id = n.id)
              UNION ALL
              SELECT n.value, t.mined_height FROM orchard_received_notes n
                JOIN transactions t ON t.id_tx = n.transaction_id
               WHERE n.commitment_tree_position IS NULL
                 AND (t.mined_height IS NOT NULL OR t.expiry_height IS NULL OR t.expiry_height = 0 OR t.expiry_height > ?1)
+                AND NOT (n.nf IS NULL AND t.mined_height IS NOT NULL
+                         AND t.mined_height <= (SELECT COALESCE(MAX(height), 0) FROM blocks))
                 AND NOT EXISTS (SELECT 1 FROM orchard_received_note_spends s WHERE s.orchard_received_note_id = n.id)
              UNION ALL
              SELECT n.value, t.mined_height FROM ironwood_received_notes n
                JOIN transactions t ON t.id_tx = n.transaction_id
               WHERE n.commitment_tree_position IS NULL
                 AND (t.mined_height IS NOT NULL OR t.expiry_height IS NULL OR t.expiry_height = 0 OR t.expiry_height > ?1)
+                AND NOT (n.nf IS NULL AND t.mined_height IS NOT NULL
+                         AND t.mined_height <= (SELECT COALESCE(MAX(height), 0) FROM blocks))
                 AND NOT EXISTS (SELECT 1 FROM ironwood_received_note_spends s WHERE s.ironwood_received_note_id = n.id)",
         )?;
         let rows: Vec<(i64, Option<u32>)> = stmt
@@ -2443,6 +2455,31 @@ pub async fn get_balance_breakdown() -> Result<BalanceBreakdown> {
             .collect::<std::result::Result<_, _>>()?;
         let value: u64 = rows.iter().map(|(v, _)| (*v).max(0) as u64).sum();
         let from = rows.iter().filter_map(|(_, h)| *h).min();
+        // The rows the clause above set aside. The backend's own summary still counts them
+        // (they sit in its tables), so they are taken out of every bucket below, or the
+        // figure would move from "needs a rescan" to "awaiting scan" instead of going away.
+        let phantom: u64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(v), 0) FROM (
+                    SELECT n.value AS v FROM sapling_received_notes n JOIN transactions t ON t.id_tx = n.transaction_id
+                     WHERE n.commitment_tree_position IS NULL AND n.nf IS NULL AND t.mined_height IS NOT NULL
+                       AND t.mined_height <= (SELECT COALESCE(MAX(height), 0) FROM blocks)
+                       AND NOT EXISTS (SELECT 1 FROM sapling_received_note_spends s WHERE s.sapling_received_note_id = n.id)
+                    UNION ALL
+                    SELECT n.value FROM orchard_received_notes n JOIN transactions t ON t.id_tx = n.transaction_id
+                     WHERE n.commitment_tree_position IS NULL AND n.nf IS NULL AND t.mined_height IS NOT NULL
+                       AND t.mined_height <= (SELECT COALESCE(MAX(height), 0) FROM blocks)
+                       AND NOT EXISTS (SELECT 1 FROM orchard_received_note_spends s WHERE s.orchard_received_note_id = n.id)
+                    UNION ALL
+                    SELECT n.value FROM ironwood_received_notes n JOIN transactions t ON t.id_tx = n.transaction_id
+                     WHERE n.commitment_tree_position IS NULL AND n.nf IS NULL AND t.mined_height IS NOT NULL
+                       AND t.mined_height <= (SELECT COALESCE(MAX(height), 0) FROM blocks)
+                       AND NOT EXISTS (SELECT 1 FROM ironwood_received_note_spends s WHERE s.ironwood_received_note_id = n.id))",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|v| v.max(0) as u64)
+            .unwrap_or(0);
         let transparent: u64 = conn
             .query_row(
                 "SELECT COALESCE(SUM(value_zat), 0) FROM transparent_received_outputs
@@ -2452,12 +2489,24 @@ pub async fn get_balance_breakdown() -> Result<BalanceBreakdown> {
             )
             .map(|v| v.max(0) as u64)
             .unwrap_or(0);
-        (value, rows.len() as u64, from, transparent)
+        (value, rows.len() as u64, from, transparent, phantom)
     };
 
     // Rows that exist outside any summary (a wallet that has not scanned yet) still count
     // toward the total, or the invariant breaks.
-    let shielded_total = shielded_total.max(
+    // The backend's summary files each phantom row under one of its buckets by the same
+    // rules as a real note (change below the confirmation count as pending change, otherwise
+    // pending spendability or spendable). Take the value back out of those buckets in that
+    // order of likelihood until it is accounted for; the total loses it in any case.
+    let mut take = phantom;
+    let mut draw = |bucket: &mut u64| { let d = (*bucket).min(take); *bucket -= d; take -= d; };
+    let mut pending_spendability = pending_spendability;
+    let mut pending_change = pending_change;
+    let mut spendable = spendable;
+    let mut locked = locked;
+    let mut uneconomic = uneconomic;
+    draw(&mut pending_spendability); draw(&mut pending_change); draw(&mut spendable); draw(&mut locked); draw(&mut uneconomic);
+    let shielded_total = shielded_total.saturating_sub(phantom).max(
         spendable + locked + pending_change + pending_spendability + uneconomic,
     ).max(unpositioned + spendable + locked + pending_change + uneconomic);
     let awaiting_scan = pending_spendability.saturating_sub(unpositioned);
@@ -2623,7 +2672,7 @@ pub async fn batch_send_transaction(outputs: Vec<(String, f64, String)>) -> Resu
     // API, and the sync engine confirms it from the chain.
     let _ = proposed_inputs;
 
-    Ok(format!("Batch Transaction broadcasted successfully! TxID: {}", tx_id))
+    Ok(format!("Sent. Transaction {}", tx_id))
 }
 
 /// Convert a ZEC amount to zatoshis, rejecting anything that is not a sane value.
@@ -2830,7 +2879,7 @@ pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, 
     // chain, which is the only source that cannot be wrong.
     let _ = proposed_inputs;
 
-    Ok(format!("Transaction broadcasted successfully! TxID: {}", tx_id))
+    Ok(format!("Sent. Transaction {}", tx_id))
 }
 
 pub async fn get_addresses() -> Result<Vec<Value>> {

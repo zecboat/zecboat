@@ -167,11 +167,16 @@ else
   warn "graphical session — it will not run over a plain SSH connection."
 fi
 
-say "Done"
+# 0.7.2 (stranger test 2026-10-12, item 9): install.sh runs this script first, and the
+# "Done · Next: bash install.sh" below then appeared in the middle of install.sh's own run.
+# install.sh sets ZB_FROM_INSTALL=1; the closing hint is for a hand run only.
+say "${ZB_FROM_INSTALL:+Dependencies}${ZB_FROM_INSTALL:-Done}"
 if [[ "$MISSING" -eq 0 ]]; then
   info "Everything Zecboat needs is present."
 elif [[ "$CHECK_ONLY" -eq 1 ]]; then
   info "Items above are missing. Rerun without --check to install them."
+elif [[ -n "${ZB_FROM_INSTALL:-}" ]]; then
+  info "Dependencies handled."
 else
   info "Dependencies handled. Next:  bash install.sh"
 fi

@@ -8,6 +8,41 @@ not the diff.
 - 2026-10-12: wording only. Private folder names and paths removed from comments, docs, two
   ignored mainnet tests and the HOME guard of five dev examples. No code path changed.
 
+### Fixed (2026-10-15, from the 0.7.1 stranger test and send tests)
+
+- **Switching to a node that does not answer no longer strands the wallet.** Settings applied
+  the new address before testing it, so a typo left the sync engine on a dead node until a
+  restart while the screen still showed the old one. The previous node is kept, and the message
+  says so.
+- **Send is disabled while spendable ZEC is below the fee**, and the warning says how much more
+  is needed. The button used to stay enabled and the send was refused later.
+- **"No witness is available for position …" now names the fix.** The wallet cannot prove a
+  spend of a note whose place in the commitment tree it cannot rebuild at the note's own block;
+  the message says which block to rescan from (Settings → Wallet Management → Rescan from
+  Height) and that nothing was sent.
+- **A record that no rescan can place is no longer shown as "Needs a rescan".** A duplicate row
+  an earlier version wrote under the wrong pool, in a block the wallet has already scanned,
+  asked for a rescan that could do nothing (captain, 0.0498 ZEC). It is left out of every
+  balance bucket, the total included.
+- **History shows a send's amount and its fee apart.** "Sent 0.0006" for a 0.0005 send with a
+  0.0001 fee now reads −0.0005 · fee 0.0001.
+- **The send result is a sentence:** "Sent. Transaction 7e99acb8…", with one copy button for
+  the id, instead of "Success! Operation ID: Transaction broadcasted successfully! TxID: …".
+- **"Already collected"** when a lineage record was already held, instead of "Nothing to
+  collect yet", which read as a failure.
+- **The Send screen shows the asset field only for a shielded-asset send**, labelled "Asset to
+  send (asset id)". With type ZEC it was still shown as "Sending Address (Source)", and an asset
+  id pasted there was silently ignored: the send moved plain ZEC and the unit stayed.
+- **Settings no longer offers "Create New Account"**; the command behind it stays refused.
+- **Genesis lines say "action #10"** rather than "#10", which read as a unit number; the
+  Collections progress lines keep their spaces ("block 3,502,987 of …").
+- **Install scripts:** `uninstall_zecboat_deb.sh` removes `~/.local/share/com.zcash.zecboat`
+  (window data, saved node choice); `install_depends.sh` run by `install.sh` no longer prints
+  "Next: bash install.sh" mid-run; `install.sh` hands apt a world-readable copy of the package,
+  so the "download is performed unsandboxed" warning is gone.
+- **Docs:** README and `launch.sh` no longer name a dead artwork host; the artwork default is
+  zecboat.com and nothing needs setting. CONTRIBUTING and README say funds, not money.
+
 ### NU7 (merged from branch `nu7`, 2026-10-15; crate bump of 2026-10-02)
 
 Zcash NU7 activates on mainnet around 5 November 2026 (height set on 20 October; ZIP 259):

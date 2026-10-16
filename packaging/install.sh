@@ -94,7 +94,7 @@ fi
 # --- dependencies -----------------------------------------------------------
 if [[ "$DO_DEPS" -eq 1 ]]; then
   [[ -x ./install_depends.sh ]] || die "install_depends.sh is missing — copy it alongside this script"
-  bash ./install_depends.sh || die "dependency setup failed"
+  ZB_FROM_INSTALL=1 bash ./install_depends.sh || die "dependency setup failed"
 else
   say "Dependencies — SKIPPED (--no-deps)"
   warn "If the Sapling parameters are absent the wallet will sync fine and then"
@@ -124,9 +124,16 @@ fi
 # --- install ----------------------------------------------------------------
 say "Installing"
 info "this needs sudo"
-sudo apt install -y "./$DEB" || die "apt install failed — read the message above.
+# 0.7.2 (item 9): apt's download helper runs as the _apt user and cannot read a package
+# inside a home directory ("Download is performed unsandboxed as root"), which showed as a
+# warning on every install. A world-readable copy in a fresh temp directory avoids it; the
+# copy is removed afterwards and the verified file in this folder is untouched.
+TMPD="$(mktemp -d /tmp/zecboat-install.XXXXXX)"
+cp -- "$DEB" "$TMPD/$DEB" && chmod 755 "$TMPD" && chmod 644 "$TMPD/$DEB"
+sudo apt install -y "$TMPD/$DEB" || { rm -rf -- "$TMPD"; die "apt install failed — read the message above.
     An unmet dependency here is a real finding: the package names something this
-    Debian version calls by another name. Note which, and report it."
+    Debian version calls by another name. Note which, and report it."; }
+rm -rf -- "$TMPD"
 info "installed: package '$PKG', binary /usr/bin/$BIN"
 
 # --- how to run -------------------------------------------------------------

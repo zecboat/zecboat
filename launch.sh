@@ -108,31 +108,27 @@ fi
 #                     zec.rocks verified 2026-08-26.
 #
 #   ZECBOAT_REGISTRY  where asset artwork is fetched from, as
-#                     <registry>/collection/<asset_id>.png. The compiled default
-#                     is https://zecboat.com, whose /collection/* answers 301, so
-#                     every thumbnail fails and falls back to the placeholder
-#                     logo. That is exactly what happened on 2026-08-31.
+#                     <registry>/collection/<asset_id>.jpg (or .png). The compiled
+#                     default is https://zecboat.com, which serves every published
+#                     collection's artwork (2026-10-15); leave it unset. It chooses
+#                     the artwork host only: the on-chain Zecboat Registry, lineage
+#                     and verification never use it.
 #
 # Both are overridable: export either before running this script and the value
-# you set is kept. Remove the ZECBOAT_REGISTRY default once zecboat.com/collection
-# resolves — at that point the compiled-in default is correct again.
+# you set is kept.
 
 export ZECBOAT_PROVIDER="${ZECBOAT_PROVIDER:-https://zec.rocks:443}"
-# ZECBOAT_REGISTRY is deliberately NOT set here.
-#
-# It used to default to https://ocean.zecboat.com, which does not respond — so the
-# launcher printed a registry line that looked configured while every artwork
-# thumbnail silently failed. Announcing a dead host is worse than announcing
-# nothing: it sends you looking for the fault in the wallet.
-#
-# Set it yourself if you have a registry:  export ZECBOAT_REGISTRY=https://your.host
+# ZECBOAT_REGISTRY is deliberately NOT set here: the compiled default is right, and an
+# announced host that does not answer (ocean.zecboat.com, until 2026-10) sent people
+# looking for the fault in the wallet. Set it only if you host the artwork yourself:
+#   export ZECBOAT_REGISTRY=https://your.host
 
 # Transparent-address scanning is OFF unless asked for. See transparent_scan_enabled()
 # in zecboat-core/src/rpc.rs — GetTaddressTxids names the address to the server, which
 # is the one query that undoes what shielded scanning protects.
 info "provider: $ZECBOAT_PROVIDER"
 info "transparent scan: ${ZECBOAT_TRANSPARENT_SCAN:+ON (addresses are sent to the node by name)}${ZECBOAT_TRANSPARENT_SCAN:-off}"
-info "registry: ${ZECBOAT_REGISTRY:-not set — asset artwork will not load}"
+info "registry: ${ZECBOAT_REGISTRY:-default https://zecboat.com (artwork only)}"
 
 # --- run the app ------------------------------------------------------------
 

@@ -191,18 +191,19 @@ node -e "require('./node_modules/@tauri-apps/cli/main.js').run(['build','--no-bu
 
 ```sh
 export ZECBOAT_PROVIDER=https://zec.rocks:443
-export ZECBOAT_REGISTRY=https://ocean.zecboat.com
 
 ./zecboat-ui/src-tauri/target/release/zecboat-ui
 ```
 
-Or use `./launch.sh`, which sets both and runs a preflight check.
+Or use `./launch.sh`, which sets it and runs a preflight check. Nothing else needs setting:
+artwork comes from `https://zecboat.com` unless `ZECBOAT_REGISTRY` says otherwise, and the
+Zecboat Registry itself is read from the chain, never from a server.
 
 ### `ZECBOAT_PROVIDER` — which node to sync from
 
 > **The node you choose matters.** Zecboat holds funds in the Ironwood (NU6.3) pool. A lightwalletd
 > that does not serve Ironwood will show you **a zero balance for funds that are really there** —
-> which looks exactly like losing your money, and is not.
+> which looks exactly like losing your funds, and is not.
 
 Nothing is lost in that case; the server simply cannot see into that pool. Switch to one that
 supports Ironwood and the balance returns.
@@ -210,10 +211,13 @@ supports Ironwood and the balance returns.
 Running your own `zebrad` + `zainod` is the private option, and the only arrangement where nobody
 else sees which blocks you request.
 
-### `ZECBOAT_REGISTRY` — where asset artwork is fetched from
+### `ZECBOAT_REGISTRY` — where asset artwork is fetched from (optional)
 
-Assets are content-addressed: an asset's identifier is the SHA-256 of its artwork, fetched as
-`<registry>/collection/<asset_id>.png`. The wallet re-hashes what it downloads and compares.
+Default `https://zecboat.com`; leave it unset. Artwork is fetched as
+`<registry>/collection/<asset_id>.jpg` (or `.png`) and re-hashed against the hash the asset's
+memo commits to, so a wrong or missing picture is shown as not verified, never as the asset. This
+variable chooses the artwork host only: the on-chain Zecboat Registry, lineage and verification
+never use it.
 
 ---
 
@@ -311,7 +315,7 @@ That is a limitation of the explorer, not a defect in the transaction.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports about things that lose money are the most
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports about things that lose funds are the most
 valuable contribution.
 
 ## Licence

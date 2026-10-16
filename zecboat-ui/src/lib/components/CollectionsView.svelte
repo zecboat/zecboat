@@ -227,7 +227,7 @@
 
   {#if scanning}
     <div class="banner" title="The registry is read from the chain through {view?.node ?? 'your chain source'}; nothing comes from zecboat.com.">
-      ⟳ Reading the Zecboat Registry from the chain: block {scanAt.toLocaleString()}{#if scanTip > scanAt} of {scanTip.toLocaleString()} · {(scanTip - scanAt).toLocaleString()} to go{/if}
+      ⟳ Reading the Zecboat Registry from the chain: block {scanAt.toLocaleString()}{#if scanTip > scanAt}&nbsp;of {scanTip.toLocaleString()} · {(scanTip - scanAt).toLocaleString()} to go{/if}
     </div>
   {/if}
 
@@ -273,7 +273,7 @@
           {:else if a}
             check failed
           {:else if auditing === k}
-            checking… block {auditAt.toLocaleString()}{#if scanTip > auditAt} of {scanTip.toLocaleString()} · {(scanTip - auditAt).toLocaleString()} to go{/if}{#if auditFrom > 0 && scanTip > auditFrom} (reads {(scanTip - auditFrom).toLocaleString()} blocks of this collection's history from your chain source){/if}
+            checking… block {auditAt.toLocaleString()}{#if scanTip > auditAt}&nbsp;of {scanTip.toLocaleString()} · {(scanTip - auditAt).toLocaleString()} to go{/if}{#if auditFrom > 0 && scanTip > auditFrom}&nbsp;(reads {(scanTip - auditFrom).toLocaleString()} blocks of this collection's history from your chain source){/if}
           {:else}
             not checked
           {/if}
@@ -303,7 +303,7 @@
               {#if a.units.length}
                 <div class="units">
                   {#each a.units as u (u.asset_id)}
-                    <span class="unit" class:mine={held[r.ik.toLowerCase()]?.asset_ids.includes(u.asset_id)} title={`${u.name}\nid ${u.asset_id}\nborn ${u.genesis_txid} #${u.genesis_action}\nartwork ${u.image_sha256}`}>#{u.unit}</span>
+                    <span class="unit" class:mine={held[r.ik.toLowerCase()]?.asset_ids.includes(u.asset_id)} title={`${u.name}\nid ${u.asset_id}\nborn ${u.genesis_txid} action #${u.genesis_action}\nartwork ${u.image_sha256}`}>#{u.unit}</span>
                   {/each}
                 </div>
               {/if}

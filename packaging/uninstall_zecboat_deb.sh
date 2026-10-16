@@ -221,6 +221,14 @@ if [[ "$PARAMS" -eq 1 && -d "$HOME/.zcash-params" ]]; then
   rm -rf -- "$HOME/.zcash-params" && info "removed $HOME/.zcash-params"
 fi
 
+# 0.7.2 (stranger test 2026-10-12, item 8): the app's WebKit data and the saved node choice
+# live in ~/.local/share/com.zcash.zecboat and were left behind by every uninstall. No key
+# material is in there (the wallet is ~/.AppVault, handled above), so it goes with the package.
+WEBDATA="$HOME/.local/share/com.zcash.zecboat"
+if [[ -d "$WEBDATA" ]]; then
+  rm -rf -- "$WEBDATA" && info "removed $WEBDATA (window data, saved node choice)"
+fi
+
 # --- what is left -----------------------------------------------------------
 say "Left in place"
 [[ "$WALLET" -eq 0 ]] && warn "wallets — apt does NOT remove them. Rerun with --wallet to delete."

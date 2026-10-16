@@ -2,6 +2,7 @@
   import LineageDelivery from "./LineageDelivery.svelte";
   import CopyButton from "./CopyButton.svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import type { Tx } from "$lib/tx";
   
   let { 
     initialAssetType = "ZEC", 
@@ -17,6 +18,10 @@
 
   let assetType = $state(initialAssetType);
   let fromAddress = $state("");
+  $effect(() => {
+    // 0.7.2: an asset id entered for a ZSA send must not linger behind a ZEC send.
+    if (assetType === "ZEC" && fromAddress) fromAddress = "";
+  });
   let toAddress = $state(initialToAddress);
   let amount = $state(initialAmount);
   let memo = $state(initialMemo);
@@ -166,14 +171,39 @@
   let txResult = $state<{success: boolean, message: string, txid?: string} | null>(null);
 
   /**
-   * The backend returns a human sentence like
-   *   Success! Operation ID: Transaction broadcasted successfully! TxID: "4de944..."
-   * A copy button should hand over the bare 64-hex txid, not the sentence around it --
+   * The backend returns a sentence like "Sent. Transaction 4de944…" (0.7.2; it used to be
+   * "Transaction broadcasted successfully! TxID: …"). A copy button should hand over the bare 64-hex txid, not the sentence around it --
    * that is the part someone pastes into an explorer or a forum post.
    */
   function extractTxid(msg: string): string | undefined {
     return msg.match(/\b[0-9a-fA-F]{64}\b/)?.[0];
   }
+
+  /**
+   * 0.7.2 (owner, 2026-10-15: "will this update when it's mined?"): the result line is a
+   * one-time message and History is where the state lives, but a sender stays on this
+   * screen. Ask History every 20 seconds, for up to 30 minutes, for the one transaction
+   * just sent, and change the line when it has a block. Nothing is polled unless a send
+   * succeeded; a new send or leaving the screen stops the watch.
+   */
+  let blockWatch: ReturnType<typeof setInterval> | null = null;
+  function stopBlockWatch() { if (blockWatch) { clearInterval(blockWatch); blockWatch = null; } }
+  function watchForBlock(txid: string) {
+    stopBlockWatch();
+    const started = Date.now();
+    blockWatch = setInterval(async () => {
+      if (Date.now() - started > 30 * 60 * 1000 || txResult?.txid !== txid) { stopBlockWatch(); return; }
+      try {
+        const txs = await invoke<Tx[]>("get_transactions");
+        const mine = txs.find((t) => t.id === txid);
+        if (mine?.height != null) {
+          txResult = { ...txResult!, message: `Mined in block ${mine.height.toLocaleString()}. Transaction ${txid.slice(0, 8)}…` };
+          stopBlockWatch();
+        }
+      } catch { /* the next tick tries again; History still shows it */ }
+    }, 20_000);
+  }
+  $effect(() => () => stopBlockWatch());
   let paymentUri = $state("");
 
   const MAX_MEMO_CHARS = 512;
@@ -284,11 +314,16 @@
           carrier: assetId ? (chosenCopy ?? undefined) : undefined
         });
         
+        // 0.7.2 (stranger test, item 5): the backend's sentence ("Transaction broadcasted
+        // successfully! TxID: …") was shown behind "Success! Operation ID:", three labels for
+        // one fact. Say what happened; the id has its own copy button below.
+        const sentTxid = extractTxid(opid);
         txResult = {
           success: true,
-          message: `Success! Operation ID: ${opid}`,
-          txid: extractTxid(opid)
+          message: sentTxid ? `Sent. Transaction ${sentTxid.slice(0, 8)}… is on its way to the network.` : opid,
+          txid: sentTxid
         };
+        if (sentTxid) watchForBlock(sentTxid);
       }
       
       toAddress = "";
@@ -330,6 +365,11 @@
       // unreadable; leaving it raw is how "InsufficientFunds" gets reported against a healthy
       // balance with no explanation of why.
       const insufficient = raw.includes("InsufficientFunds");
+      // 0.7.2 (SEND_TESTS_0.7.1 Test 2, item S1): "No witness is available for position P at
+      // height H" is the shard store unable to rebuild the note's path at its own block, which a
+      // rescan from just before that block repairs (BCN26, 2026-10-11). Name the block.
+      const witness = raw.match(/No witness is available for position \d+ at height (\d+)/);
+      const rescanFrom = witness ? Math.max(0, Number(witness[1]) - 2) : null;
       txResult = {
         success: false,
         message: insufficient
@@ -337,6 +377,11 @@
             `notes of exactly 0.00010000 ZEC, and the fee cannot be taken from one without ` +
             `destroying the asset — so it must come from other funds. Add a small amount of ` +
             `ZEC and try again.  (${raw})`
+          : rescanFrom !== null
+          ? `This wallet cannot rebuild the note's place in the commitment tree at the block it was ` +
+            `received in, so it cannot prove the spend yet. A rescan from block ${rescanFrom.toLocaleString()} ` +
+            `repairs that: Settings → Wallet Management → Rescan from Height, then try again. ` +
+            `Nothing was sent.  (${raw})`
           : `Error: ${raw}`
       };
       showConfirmation = false;
@@ -384,13 +429,17 @@
         </select>
       </div>
 
-      <div class="form-group slide-in">
-        <label for="from-address">Sending Address (Source)</label>
-        <input id="from-address" type="text" placeholder="Select your source address..." bind:value={fromAddress} required={assetType === "ZSA"} />
-        {#if assetType === "ZSA"}
-          <p class="hint">ZSA transfers require specifying the exact source address or asset ID.</p>
-        {/if}
-      </div>
+      <!-- 0.7.2 (SEND_TESTS_0.7.1 Test 2, item S4): with type ZEC this field was still shown as
+           "Sending Address (Source)", and an asset id pasted there was silently ignored: the send
+           moved plain ZEC and the unit stayed. For ZEC the wallet chooses the notes, so there is
+           nothing to enter; the field exists only for a shielded asset, and says what it is. -->
+      {#if assetType === "ZSA"}
+        <div class="form-group slide-in">
+          <label for="from-address">Asset to send (asset id)</label>
+          <input id="from-address" type="text" placeholder="The 64-character asset id, or pick the item in Shielded Assets" bind:value={fromAddress} required />
+          <p class="hint">A shielded-asset send names the unit by its asset id. To send plain ZEC, choose ZEC above.</p>
+        </div>
+      {/if}
       
       <div class="form-group">
         <div class="label-row">
@@ -481,8 +530,10 @@
           </p>
         {/if}
         {#if estimate && fee.spendable_zat < estimate.fee_zat}
+          <!-- 0.7.2 (SEND_TESTS_0.7.1 Test 1b, item S2): the button stayed enabled here and the
+               send was refused later by the builder. Say how much is missing and keep Send off. -->
           <p class="fee-note" style="color: #fbbf24;">
-            ⚠ Spendable ZEC {zec(fee.spendable_zat)} is less than this fee.
+            ⚠ Spendable ZEC {zec(fee.spendable_zat)} is less than this fee: {zec(estimate.fee_zat - fee.spendable_zat)} ZEC more is needed before this can be sent.
           </p>
         {/if}
       {/if}
@@ -575,7 +626,7 @@
           </div>
         {/if}
         <button class="btn secondary" onclick={cancelSend} disabled={isSending}>Cancel</button>
-        <button class="btn primary" onclick={() => { if (feeNotice) { acceptedFeeZat = feeNotice.fee_zat; feeNotice = null; } confirmAndSend(); }} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven) || (!!uncollectedNotice && !abandonLineage) || (yubikeyWallet && !yubikeyPresent) || (assetType === "ZSA" && !estimate)}>
+        <button class="btn primary" onclick={() => { if (feeNotice) { acceptedFeeZat = feeNotice.fee_zat; feeNotice = null; } confirmAndSend(); }} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven) || (!!uncollectedNotice && !abandonLineage) || (yubikeyWallet && !yubikeyPresent) || (assetType === "ZSA" && !estimate) || (!!estimate && !!fee && fee.spendable_zat < estimate.fee_zat)}>
           {#if isSending && yubiMsg}
             <span>👉 {yubiMsg}</span>
           {:else if isSending}
@@ -593,8 +644,7 @@
       <div>{txResult.message}</div>
       {#if txResult.txid}
         <div class="result-actions">
-          <CopyButton value={txResult.txid} label="Copy TxID" title="Copy the transaction id" />
-          <CopyButton value={txResult.message} label="Copy full output" compact title="Copy the whole message" />
+          <CopyButton value={txResult.txid} label="Copy transaction id" title="Copy the 64-character transaction id" />
         </div>
       {/if}
       {#if txResult.success && txResult.txid}
