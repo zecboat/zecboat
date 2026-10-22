@@ -13,6 +13,9 @@ not the diff.
   that block, send expiry, the carrier lock and the audit re-check follow 25-second blocks
   instead of 75-second ones; before it nothing changes. A test pins the height and its
   branch id. No wallet file, key or screen changed.
+- **The amber "Update before 5 November" notice is gone.** It said a build does not follow
+  NU7; this one does. It returns, with a new date and version, only if a later upgrade is
+  scheduled before the build that follows it ships.
 
 - 2026-10-12: wording only. Private folder names and paths removed from comments, docs, two
   ignored mainnet tests and the HOME guard of five dev examples. No code path changed.
@@ -65,7 +68,7 @@ not the diff.
 
 ### NU7 (merged from branch `nu7`, 2026-10-15; crate bump of 2026-10-02)
 
-Zcash NU7 activates on mainnet around 5 November 2026 (height set on 20 October; ZIP 259):
+Zcash NU7 activates on mainnet at height 3,543,405, about 6 November 2026 (ZIP 259):
 new consensus branch ID `0x77190AD9`, 25-second blocks, v4 transactions retired. A wallet
 without it cannot sign a transaction any node accepts after the activation block.
 

@@ -3815,14 +3815,12 @@ pub async fn wallet_about() -> Result<Value> {
         "registry": registry_base(),
         "pinned_issuers": crate::issuance::pinned_issuers(),
         "release_key": "e23a2fed8f8134005ba47a3d800509678ef913d65dbe8e39d2cffc778219ed0d",
-        // The next network upgrade this build does not follow. NU7 (ZIP 259) activates on
-        // mainnet on 5 November 2026; from that block this build cannot sync or send. The UI
-        // shows one line until a build that follows it ships; a build that does sets `null`.
-        "upgrade_notice": {
-            "name": "NU7",
-            "date": "5 November 2026",
-            "update_to": "0.7.2",
-        },
+        // The next network upgrade this build does not follow, or null. 0.7.2 follows NU7
+        // (ZIP 259; mainnet height 3,543,405 from the final protocol crate, about 6 November
+        // 2026), and no later upgrade is scheduled, so there is no notice. 0.7.0 and 0.7.1
+        // carried {"name": "NU7", "date": "5 November 2026", "update_to": "0.7.2"} here, and
+        // the UI showed it as the amber "Update before …" pill and the About line.
+        "upgrade_notice": serde_json::Value::Null,
         "does_not": [
             "Mint. Issuance is a separate application with separate keys — a wallet that can mint is a wallet that can forge.",
             "Prove how many of an asset exist. No ZMAP asset can; see ZMAP-v0.3 §13.",
