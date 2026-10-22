@@ -14,13 +14,13 @@ halo2_proofs   = { version = "=0.4.0", features = ["batch"] }
 halo2_gadgets  = "=0.6.0"
 pasta_curves   = "=0.6.0"
 sinsemilla     = "=0.2.0"
-zcash_client_sqlite  = { version = "=0.23.0-pre.0", features = ["orchard"] }
+zcash_client_sqlite  = { version = "=0.23.0", features = ["orchard"] }
 # The sqlite crate implements the backend's WalletWrite; an unpinned backend resolves to
 # 0.24.0 final, whose trait differs (lock_outputs et al.), and the build fails. Pin both.
-zcash_client_backend = { version = "=0.25.0-pre.0", features = ["orchard"] }
-zcash_primitives     = "=0.31.0-pre.0"
-zcash_protocol       = "=0.11.0-pre.0"
-zcash_keys           = { version = "=0.17.0-pre.0", features = ["orchard"] }
+zcash_client_backend = { version = "=0.25.0", features = ["orchard"] }
+zcash_primitives     = "=0.31.0"
+zcash_protocol       = "=0.11.0"
+zcash_keys           = { version = "=0.17.0", features = ["orchard"] }
 incrementalmerkletree = "=0.9.0"
 rusqlite       = { version = "=0.37.0", features = ["bundled"] }
 rand           = "0.10"

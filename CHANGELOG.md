@@ -5,6 +5,15 @@ not the diff.
 
 ## 0.7.2 (unreleased)
 
+### NU7 (2026-10-22)
+
+- **The wallet knows the NU7 mainnet activation height, 3,543,405 (about 6 November 2026).**
+  The Zcash libraries moved from their pre-release line to the final 0.11 / 0.23 / 0.25 /
+  0.31 releases published on 21 October, which carry the height Zebra 7.0.0 announced. From
+  that block, send expiry, the carrier lock and the audit re-check follow 25-second blocks
+  instead of 75-second ones; before it nothing changes. A test pins the height and its
+  branch id. No wallet file, key or screen changed.
+
 - 2026-10-12: wording only. Private folder names and paths removed from comments, docs, two
   ignored mainnet tests and the HOME guard of five dev examples. No code path changed.
 

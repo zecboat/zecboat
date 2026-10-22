@@ -597,7 +597,7 @@ pub fn send_zmap_asset(
     // are public, so every knot and key memo they sent would be readable by anyone. Checked
     // against the registry's listed accounts (review 2026-10-09, Knotline G).
     {
-        let mine = usk.to_unified_full_viewing_key().encode(&zcash_protocol::consensus::MainNetwork);
+        let mine = crate::addr::encode_uview1(&usk.to_unified_full_viewing_key());
         // Fail closed for the pinned collections (their keys are built in); the registry's
         // listing adds the rest when it can be read (review 2026-10-09, regression over 12-15,
         // Issue G: the check used to be skipped when the registry could not be read).
@@ -911,21 +911,25 @@ pub fn send_zmap_asset(
     let mut ironwood_out = vec![amount];
     ironwood_out.extend(std::iter::repeat(Zatoshis::ZERO).take(record_memos.len()));
 
-    // SingleOutputChangeStrategy carries no account metadata (`AccountMetaT = ()`), so there is
-    // nothing to fetch here — a metadata query would be work whose result is discarded.
+    // The final client crate's SingleOutputChangeStrategy reads the account's change receivers
+    // (`AccountMetaT = ChangeReceivers`, from its viewing key) to decide where change may go;
+    // until the 0.25 pre-release it carried no metadata at all.
+    let change_receivers = wallet_db
+        .get_change_receivers(account_id)
+        .map_err(|e| anyhow!("could not read the account's change receivers: {:?}", e))?;
     let balance = change_strategy
         .compute_balance(
             &network,
             target_height,
             anchor_height,
-            &wallet_db.pool_migration_params(),
+            &wallet_db.pool_migration_params(&network),
             &[] as &[std::convert::Infallible],
             &[] as &[TxOut],
             &sapling_fees::EmptyBundleView,
             &(BundleVersion::orchard_v2(), &orchard_in[..], &[] as &[Zatoshis]),
             &(BundleVersion::orchard_v2(), &ironwood_in[..], &ironwood_out[..]),
             None,
-            &(),
+            &change_receivers,
         )
         .map_err(|e| anyhow!("could not balance the asset transfer: {:?}", e))?;
     // The fee the screen showed is the estimate the caller passes down; the one paid is this.

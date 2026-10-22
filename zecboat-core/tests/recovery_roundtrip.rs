@@ -22,7 +22,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use zcash_protocol::consensus::MainNetwork;
 
 const BIRTHDAY: u32 = 3_400_000; // explicit, so nothing here asks a node for the tip
 
@@ -173,8 +172,10 @@ async fn the_key_a_send_signs_with_is_the_key_the_wallet_scans_with() {
     for (label, phrase) in [("wizard words", words.clone()), ("exported phrase", exported_phrase().await)] {
         let usk = zecboat_core::wallet::spending_key_from_phrase(&phrase)
             .unwrap_or_else(|e| panic!("{label}: the spend path refused the wallet's own phrase: {e}"));
-        let signs_with = usk.to_unified_full_viewing_key().encode(&MainNetwork);
-        assert_eq!(signs_with, scans_with, "{label}: a send would sign with a key that is not this wallet's");
+        // Both as `uview1…`: the key crate's own encoding changed revision between the NU7
+        // pre-release and the final crates, and the comparison is of keys, not of encodings.
+        let signs_with = zecboat_core::addr::encode_uview1(&usk.to_unified_full_viewing_key());
+        assert_eq!(signs_with, zecboat_core::addr::as_uview1(&scans_with), "{label}: a send would sign with a key that is not this wallet's");
     }
 }
 

@@ -67,6 +67,19 @@ mod tests {
         assert_eq!(blocks_for_spacing(AUDIT_STALE_SECS, NU7_SPACING_SECS), 30_000);
     }
 
+    /// The final 0.11 protocol crate carries the mainnet height Zebra 7.0.0 published
+    /// (3,543,405); the `-pre.0` line did not, and left `spacing_at` on 75 s for ever.
+    #[test]
+    fn nu7_mainnet_height_is_the_published_one() {
+        use zcash_protocol::consensus::BranchId;
+        let nu7 = BlockHeight::from_u32(3_543_405);
+        assert_eq!(MainNetwork.activation_height(NetworkUpgrade::Nu7), Some(nu7));
+        assert_eq!(BranchId::for_height(&MainNetwork, nu7), BranchId::Nu7);
+        assert_ne!(BranchId::for_height(&MainNetwork, nu7 - 1), BranchId::Nu7);
+        assert_eq!(spacing_at(nu7 - 1), PRE_NU7_SPACING_SECS);
+        assert_eq!(spacing_at(nu7), NU7_SPACING_SECS);
+    }
+
     #[test]
     fn today_is_pre_nu7_until_the_crates_carry_a_mainnet_height() {
         let h = BlockHeight::from_u32(3_504_000);

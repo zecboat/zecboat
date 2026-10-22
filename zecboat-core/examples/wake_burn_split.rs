@@ -189,10 +189,11 @@ fn split(words: &str, asset_id: &str, to_other: &str, to_self: &str, lading_path
     let carrier_nf: [u8; 32] = carrier_typed.note().nullifier(&orchard_fvk).to_bytes();
     ironwood_in.push(carrier_typed);
     let ironwood_out = vec![amount, second];
+    let change_receivers = wallet_db.get_change_receivers(account_id).map_err(|e| anyhow::anyhow!("change receivers: {e:?}"))?;
     let balance = change_strategy
-        .compute_balance(&network, target_height, anchor_height, &wallet_db.pool_migration_params(), &[] as &[std::convert::Infallible], &[] as &[TxOut], &sapling_fees::EmptyBundleView,
+        .compute_balance(&network, target_height, anchor_height, &wallet_db.pool_migration_params(&network), &[] as &[std::convert::Infallible], &[] as &[TxOut], &sapling_fees::EmptyBundleView,
             &(BundleVersion::orchard_v2(), &orchard_in[..], &[] as &[Zatoshis]),
-            &(BundleVersion::orchard_v2(), &ironwood_in[..], &ironwood_out[..]), None, &())
+            &(BundleVersion::orchard_v2(), &ironwood_in[..], &ironwood_out[..]), None, &change_receivers)
         .map_err(|e| anyhow::anyhow!("balance: {e:?}"))?;
     let proposal = Proposal::single_step(request, payment_pools, vec![],
         Some(ShieldedInputs::from_parts(NonEmpty::from_vec(proposal_inputs).unwrap())),

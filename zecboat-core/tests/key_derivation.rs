@@ -262,14 +262,22 @@ impl Drop for Sandbox {
 
 /// The UFVK `zcash_client_sqlite` stored when it created the account, and the
 /// first address it derived. This is the wallet the user actually gets.
-/// Whatever the key crate encodes (revision 2 since the NU7 crates), compared as revision 0:
-/// the strings this wallet shows, stores in manifests and pins (`zecboat_core::addr`).
+/// Whatever the key crate encodes (revision 2 by default in the NU7 pre-releases, revision 0
+/// where possible since the final crates), compared as revision 0: the strings this wallet
+/// shows, stores in manifests and pins (`zecboat_core::addr`).
 trait R0 {
     fn r0(self) -> String;
 }
 impl R0 for String {
     fn r0(self) -> String {
         zecboat_core::addr::as_uview1(&zecboat_core::addr::as_u1(&self))
+    }
+}
+/// The final key crate's `UnifiedFullViewingKey::encode` returns a result; a key with shielded
+/// items always encodes, so a failure here is a broken fixture.
+impl R0 for Result<String, zcash_keys::encoding::UnifiedEncodingError> {
+    fn r0(self) -> String {
+        self.expect("a unified full viewing key with shielded items always encodes").r0()
     }
 }
 
