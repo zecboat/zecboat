@@ -125,7 +125,7 @@ cd "$SRC_REPO"
   echo "| Staged | $(date -Is) |"
   echo "| rustc | $(rustc --version) |"
   echo "| node | $(node --version) |"; echo
-  echo '```'; echo 'RUSTFLAGS="--remap-path-prefix=$HOME=/build"'; echo '[profile.release] strip = true'; echo '```'
+  echo '```'; echo 'RUSTFLAGS="--remap-path-prefix=$HOME=/build --remap-path-prefix=$HOME/zebd/zecboat_github_release/wallet=/build/wallet"'; echo '[profile.release] strip = true'; echo '```'
 } > "$S/BUILD.md"
 cp CHANGELOG.md "$S/CHANGELOG-$V.md" 2>/dev/null || true
 cd "$S" && find . -type f -not -name MANIFEST.sha256 | sort | xargs sha256sum > MANIFEST.sha256
