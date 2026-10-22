@@ -66,7 +66,7 @@ async fn wallet_with_one_unpositioned_note(tag: &str) -> Sandbox {
     sb
 }
 
-/// 0.7.2 (captain, 2026-10-14): the duplicate record above, but in a transaction that IS mined,
+/// 0.7.2 (seen on a mainnet wallet, 2026-10-14): the duplicate record above, but in a transaction that IS mined,
 /// at a height the wallet has already scanned, and with no nullifier: the scanner never found
 /// this note, so no rescan will place it. It must leave every bucket, not move to another one.
 async fn wallet_with_one_phantom_row_in_a_scanned_block(tag: &str) -> Sandbox {

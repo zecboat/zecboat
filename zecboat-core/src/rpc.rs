@@ -2416,7 +2416,7 @@ pub async fn get_balance_breakdown() -> Result<BalanceBreakdown> {
     // selection requires a position to build a witness. Change of a transaction that expired
     // without being mined is not a note at all (the backend already excludes it), so it is left
     // out here too; until 2026-10-02 it was shown as "needs a rescan", which no rescan can fix.
-    // 0.7.2 (captain, 2026-10-14): a row with NO nullifier in a transaction that is mined at a
+    // 0.7.2 (seen on a mainnet wallet, 2026-10-14): a row with NO nullifier in a transaction that is mined at a
     // height the wallet has already scanned is not a note the scanner ever found; it is a
     // duplicate record an earlier version wrote at build time under the wrong pool (the real
     // Ironwood change was spent long ago). A rescan writes nothing for it, so it is not

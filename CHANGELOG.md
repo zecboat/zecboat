@@ -42,7 +42,7 @@ not the diff.
   Height) and that nothing was sent.
 - **A record that no rescan can place is no longer shown as "Needs a rescan".** A duplicate row
   an earlier version wrote under the wrong pool, in a block the wallet has already scanned,
-  asked for a rescan that could do nothing (captain, 0.0498 ZEC). It is left out of every
+  asked for a rescan that could do nothing (seen on a real wallet, 0.0498 ZEC). It is left out of every
   balance bucket, the total included.
 - **History shows a send's amount and its fee apart.** "Sent 0.0006" for a 0.0005 send with a
   0.0001 fee now reads −0.0005 · fee 0.0001.
