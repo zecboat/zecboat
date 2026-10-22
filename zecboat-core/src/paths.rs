@@ -245,6 +245,37 @@ pub fn copy_private(from: impl AsRef<std::path::Path>, to: impl AsRef<std::path:
     Ok(n)
 }
 
+/// Make an existing file owner-readable only. A missing file is not an error: the caller
+/// names what the wallet *may* have written, not what it must have.
+pub fn make_private(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+    let path = path.as_ref();
+    #[cfg(unix)]
+    {
+        if path.is_file() {
+            return std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600));
+        }
+    }
+    let _ = path;
+    Ok(())
+}
+
+/// Make a SQLite database and its sidecars (`-wal`, `-shm`, `-journal`) owner-readable only.
+///
+/// The database files are created by the SQLite library, not by [`write_private`], so they
+/// get the process umask (0644 on a stock desktop) however the directory is set. Called after
+/// every creation (new wallet, replace from seed, import, the registry view) and on each unlock,
+/// so a database made by an earlier version is tightened the first time it is opened
+/// (0.7.2, fix-list P1: Replace from seed left `wallet.db` and `registry.db` world-readable).
+pub fn make_private_db(db_path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+    let db = db_path.as_ref();
+    make_private(db)?;
+    let name = db.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    for suffix in ["-wal", "-shm", "-journal"] {
+        make_private(db.with_file_name(format!("{name}{suffix}")))?;
+    }
+    Ok(())
+}
+
 #[cfg(all(test, unix))]
 mod private_file_tests {
     use std::os::unix::fs::PermissionsExt;
@@ -263,6 +294,26 @@ mod private_file_tests {
         let c = dir.join("copy");
         super::copy_private(&f, &c).unwrap();
         assert_eq!(std::fs::metadata(&c).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A database the SQLite library created with the umask, and its sidecars, end up 0600;
+    /// a sidecar that does not exist is not an error.
+    #[test]
+    fn a_database_and_its_sidecars_are_made_owner_only() {
+        let base = std::env::temp_dir().join(format!("zecboat_perm_db_{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let db = base.join("wallet.db");
+        for name in ["wallet.db", "wallet.db-wal"] {
+            let f = base.join(name);
+            std::fs::write(&f, b"x").unwrap();
+            std::fs::set_permissions(&f, PermissionsExt::from_mode(0o644)).unwrap();
+        }
+        super::make_private_db(&db).unwrap();
+        assert_eq!(std::fs::metadata(&db).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(base.join("wallet.db-wal")).unwrap().permissions().mode() & 0o777, 0o600);
+        assert!(!base.join("wallet.db-shm").exists());
+        super::make_private_db(base.join("absent.db")).unwrap();
         let _ = std::fs::remove_dir_all(&base);
     }
 }

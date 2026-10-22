@@ -17,6 +17,17 @@ not the diff.
 - 2026-10-12: wording only. Private folder names and paths removed from comments, docs, two
   ignored mainnet tests and the HOME guard of five dev examples. No code path changed.
 
+### Fixed (2026-10-22, the last three items from the 0.7.1 stranger test)
+
+- **Wallet files are owner-only from the moment they are made.** The wallet database and the
+  registry view were created with the desktop's default permissions (readable by every user
+  on the machine) by Replace from seed, by a new wallet and by the registry's first fetch; only
+  the encrypted identity was private. They are now made private at creation, and every unlock
+  tightens a database an earlier version left open, so no step is needed.
+- **Settings → Replace from seed: the "I understand this replaces the wallet…" line sits
+  centred on its checkbox** and wraps as a block instead of hanging off the box's right edge.
+- **The "Scan from" hint says "funds that are really there".**
+
 ### Fixed (2026-10-15, from the 0.7.1 stranger test and send tests)
 
 - **Switching to a node that does not answer no longer strands the wallet.** Settings applied

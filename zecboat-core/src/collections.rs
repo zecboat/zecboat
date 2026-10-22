@@ -270,6 +270,7 @@ async fn ensure_registry_account(db_path: &str) -> Result<()> {
             .map_err(|e| anyhow!("could not open the registry database: {e:?}"))?;
         zcash_client_sqlite::wallet::init::init_wallet_db(&mut db, None)
             .map_err(|e| anyhow!("could not initialise the registry database: {e:?}"))?;
+        crate::paths::make_private_db(db_path)?;
         !db.get_account_ids().map_err(|e| anyhow!("{e:?}"))?.is_empty()
     };
     if has_account {

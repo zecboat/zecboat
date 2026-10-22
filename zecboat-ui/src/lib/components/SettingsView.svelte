@@ -526,7 +526,7 @@
           Leave this empty unless you know the block your wallet was created at. Empty scans
           from Sapling activation — slowest, and it cannot miss funds. A height set later than
           a block your funds arrived in means that block is never scanned and the wallet shows
-          zero for money that is really there.
+          zero for funds that are really there.
         </p>
         <label class="ack-line">
           <input type="checkbox" bind:checked={importAcknowledged} disabled={isImporting} />
@@ -892,16 +892,24 @@
 
   .ack-line {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 0.55rem;
     margin: 0.35rem 0 0.25rem;
     font-size: 0.9rem;
+    line-height: 1.4;
     cursor: pointer;
   }
 
   .ack-line input {
-    margin-top: 0.15rem;
+    margin: 0;
     flex-shrink: 0;
+  }
+
+  /* The sentence wraps as one block beside the box, centred on it, instead of hanging off
+     its right edge on a narrow pane (0.7.2, fix-list U1). */
+  .ack-line span {
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .btn.danger {

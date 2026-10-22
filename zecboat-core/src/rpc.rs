@@ -285,6 +285,14 @@ fn verify_wallet_passphrase(passphrase: &str) -> Result<()> {
 }
 
 pub async fn unlock_wallet(password: String, _use_yubikey: bool) -> Result<()> {
+    // Databases made by an earlier version, or by a path that forgot, are world-readable
+    // (the SQLite library uses the umask). Tighten them on every open; cheap, idempotent, and
+    // it needs no password to be right (0.7.2, fix-list P1).
+    for db in [crate::paths::wallet_db_path(), crate::paths::registry_db_path()].into_iter().flatten() {
+        if let Err(e) = crate::paths::make_private_db(&db) {
+            eprintln!("[unlock] could not make {} owner-only: {e}", db.display());
+        }
+    }
 
     // `use_yubikey` is ignored, deliberately. It used to be a caller-supplied flag, which
     // meant a caller could ask for the password path on a wallet sealed to a device — and
@@ -3137,6 +3145,7 @@ pub async fn initialize_new_wallet(password: String, use_yubikey: bool, birthday
 
     zcash_client_sqlite::wallet::init::init_wallet_db(&mut wallet_db, None)
         .map_err(|e| anyhow::anyhow!("Failed to init wallet DB: {:?}", e))?;
+    crate::paths::make_private_db(&db_path)?;
         
     // Store encrypted mnemonic
     let conn = rusqlite::Connection::open(&db_path)?;
@@ -3367,6 +3376,9 @@ pub async fn recover_wallet_from_seed(
             .map_err(|e| anyhow::anyhow!("could not open the new wallet database: {:?}", e))?;
         zcash_client_sqlite::wallet::init::init_wallet_db(&mut wallet_db, None)
             .map_err(|e| anyhow::anyhow!("could not initialise the new wallet database: {:?}", e))?;
+        // The SQLite library creates the file with the umask; the identity above went through
+        // write_private, this must too (fix-list P1).
+        crate::paths::make_private_db(&db_path)?;
 
         let conn = rusqlite::Connection::open(&db_path)?;
         conn.execute(
@@ -3509,6 +3521,7 @@ pub async fn import_wallet(seed: &str, birthday: Option<u32>) -> Result<()> {
 
     zcash_client_sqlite::wallet::init::init_wallet_db(&mut wallet_db, None)
         .map_err(|e| anyhow::anyhow!("Failed to init wallet DB: {:?}", e))?;
+    crate::paths::make_private_db(&db_path)?;
 
     // `if let Ok(conn) = ...` swallowed a failed open: the block was skipped, the account
     // below was still created, and Ok(()) returned — leaving a wallet that holds an account
