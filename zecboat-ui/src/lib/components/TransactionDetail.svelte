@@ -87,7 +87,7 @@
 
       {#if tx.assets.length}
         <div class="field">
-          <span class="k">Layer-2 assets</span>
+          <span class="k">znfts</span>
           <div class="v">
             {#each tx.assets as a}
               <div class="asset">

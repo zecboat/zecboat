@@ -303,8 +303,10 @@
         let assetId = assetType === "ZSA" ? fromAddress.trim() : null;
         const opid: string = await invoke("send_transaction", {
           address: toAddress,
-          amount: parseFloat(amount),
-          memo: memo,
+          // Unit path: the core fixes the carrier value and reproduces the unit's memo; the
+          // screen no longer collects either (S1, S2), so send the neutral values.
+          amount: assetId ? 0 : parseFloat(amount),
+          memo: assetId ? "" : memo,
           assetId: assetId || undefined,
           acknowledgeUnproven: assetId ? acknowledgeUnproven : undefined,
           // The fee this screen showed; a higher real fee comes back as a question, below.
@@ -373,9 +375,9 @@
       txResult = {
         success: false,
         message: insufficient
-          ? `Not enough ordinary ZEC to pay the network fee. Shielded assets are carried by ` +
-            `notes of exactly 0.00010000 ZEC, and the fee cannot be taken from one without ` +
-            `destroying the asset — so it must come from other funds. Add a small amount of ` +
+          ? `Not enough ordinary ZEC to pay the network fee. A znft is carried by a ` +
+            `note of exactly 0.00010000 ZEC, and the fee cannot be taken from that note without ` +
+            `destroying the unit — so it must come from other funds. Add a small amount of ` +
             `ZEC and try again.  (${raw})`
           : rescanFrom !== null
           ? `This wallet cannot rebuild the note's place in the commitment tree at the block it was ` +
@@ -404,9 +406,9 @@
         You hold {zec(fee.spendable_zat)} ZEC that can pay a fee, and a fee costs about
         {zec(fee.fee_zat)} ZEC.
         {#if fee.carrier_count > 0}
-          Your {fee.carrier_count} shielded asset{fee.carrier_count === 1 ? '' : 's'}
+          Your {fee.carrier_count} znft{fee.carrier_count === 1 ? '' : 's'}
           ({zec(fee.carrier_zat)} ZEC) cannot pay it: each is carried by a note of exactly
-          0.00010000 ZEC, and taking the fee from one would destroy the asset.
+          0.00010000 ZEC, and taking the fee from one would destroy the unit.
         {/if}
         Add a small amount of ZEC to send anything from this wallet.
       </span>
@@ -425,7 +427,7 @@
         <label for="asset-type">Asset Type</label>
         <select id="asset-type" bind:value={assetType}>
           <option value="ZEC">ZEC</option>
-          <option value="ZSA">ZSA (Shielded Asset)</option>
+          <option value="ZSA">znft (shielded object)</option>
         </select>
       </div>
 
@@ -435,9 +437,9 @@
            nothing to enter; the field exists only for a shielded asset, and says what it is. -->
       {#if assetType === "ZSA"}
         <div class="form-group slide-in">
-          <label for="from-address">Asset to send (asset id)</label>
-          <input id="from-address" type="text" placeholder="The 64-character asset id, or pick the item in Shielded Assets" bind:value={fromAddress} required />
-          <p class="hint">A shielded-asset send names the unit by its asset id. To send plain ZEC, choose ZEC above.</p>
+          <label for="from-address">znft to send (asset id)</label>
+          <input id="from-address" type="text" placeholder="The 64-character asset id, or pick the item under znfts" bind:value={fromAddress} required />
+          <p class="hint">A znft send names the unit by its asset id. To send plain ZEC, choose ZEC above.</p>
         </div>
       {/if}
       
@@ -462,25 +464,41 @@
         {/if}
       </div>
       
-      <div class="form-group">
-        <label for="amount">Amount</label>
-        <div class="amount-input-wrapper">
-          <input id="amount" type="number" step="0.00000001" placeholder="0.00" bind:value={amount} required />
-          <span class="currency-tag">{assetType}</span>
+      {#if assetType === "ZSA"}
+        <!-- 0.7.3 (S1, S2): a unit moves whole, carried by its fixed note, with the memo that
+             names it reproduced byte for byte. The core ignores any amount or message on this
+             path (send_transaction_with_wake, step 1), so until now the screen made the user
+             type a number and could let them write a message, both of which were discarded.
+             Say what is sent instead, and send nothing the core would throw away. -->
+        <div class="form-group">
+          <span class="field-label">Sends</span>
+          <p class="fixed-value">1 unit, carried by its 0.00010000 ZEC note</p>
         </div>
-      </div>
+        <div class="form-group">
+          <span class="field-label">Message</span>
+          <p class="hint">A unit travels with its own memo; a message cannot be attached.</p>
+        </div>
+      {:else}
+        <div class="form-group">
+          <label for="amount">Amount</label>
+          <div class="amount-input-wrapper">
+            <input id="amount" type="number" step="0.00000001" placeholder="0.00" bind:value={amount} required />
+            <span class="currency-tag">{assetType}</span>
+          </div>
+        </div>
 
-      <div class="form-group slide-in">
-        <div class="label-row">
-          <label for="memo">Message (Memo)</label>
-          <span class="char-counter {remainingChars < 50 ? 'warning' : ''} {remainingChars < 0 ? 'error' : ''}">
-            {remainingChars} characters left
-          </span>
+        <div class="form-group slide-in">
+          <div class="label-row">
+            <label for="memo">Message (Memo)</label>
+            <span class="char-counter {remainingChars < 50 ? 'warning' : ''} {remainingChars < 0 ? 'error' : ''}">
+              {remainingChars} characters left
+            </span>
+          </div>
+          <textarea id="memo" rows="3" placeholder="Optional shielded memo..." bind:value={memo}></textarea>
         </div>
-        <textarea id="memo" rows="3" placeholder="Optional shielded memo..." bind:value={memo}></textarea>
-      </div>
+      {/if}
       
-      <button type="submit" class="btn primary" disabled={remainingChars < 0}>
+      <button type="submit" class="btn primary" disabled={assetType !== "ZSA" && remainingChars < 0}>
         Review Transaction
       </button>
     </form>
@@ -492,9 +510,9 @@
              asks "where does the fee come from?" The recipient gets exactly the carrier;
              the fee comes from elsewhere or the asset would be destroyed. -->
         <p class="fee-note">
-          The recipient receives the asset's carrier note of exactly 0.00010000 ZEC. The
+          The recipient receives the unit's carrier note of exactly 0.00010000 ZEC. The
           network fee of {estimate ? zec(estimate.fee_zat) : `about ${zec(fee.fee_zat)}`} ZEC is paid from your other funds — never
-          from the carrier, which would destroy the asset.
+          from the carrier, which would destroy the unit.
         </p>
         {#if estimateError}
           <p class="fee-note">✗ {estimateError}</p>
@@ -729,6 +747,20 @@
     font-size: 0.8rem;
     color: var(--accent-color);
     margin: 0;
+  }
+
+  /* The unit path's two fixed fields (S1, S2): same label weight as the inputs they
+     replace, the value set in text rather than a box, so nothing invites typing. */
+  .field-label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 0.35rem;
+  }
+  .fixed-value {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
   }
 
   /* Sits inline with the "Recipient Address" label, so it reads as an optional

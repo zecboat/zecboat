@@ -150,7 +150,7 @@
         <button class="nav-item {currentView === 'Send' ? 'active' : ''}" onclick={() => setView('Send')}>Send</button>
         <button class="nav-item {currentView === 'Receive' ? 'active' : ''}" onclick={() => setView('Receive')}>Receive</button>
         <button class="nav-item {currentView === 'Transactions' ? 'active' : ''}" onclick={() => setView('Transactions')}>🧾 Transactions</button>
-        <button class="nav-item {currentView === 'Shielded Assets' ? 'active' : ''}" onclick={() => setView('Shielded Assets')}>📦 Shielded Assets</button>
+        <button class="nav-item {currentView === 'Shielded Assets' ? 'active' : ''}" onclick={() => setView('Shielded Assets')}>📦 znfts</button>
         <button class="nav-item {currentView === 'Collections' ? 'active' : ''}" onclick={() => setView('Collections')}>🔎 Collections</button>
         <button class="nav-item {currentView === 'Roster' ? 'active' : ''}" onclick={() => setView('Roster')}>👥 Roster</button>
         <button class="nav-item {currentView === 'Settings' ? 'active' : ''}" onclick={() => setView('Settings')}>⚙️ Settings</button>

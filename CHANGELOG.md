@@ -3,6 +3,25 @@
 Notable changes to the Zecboat desktop wallet. Entries describe the user-visible effect,
 not the diff.
 
+## 0.7.3-beta — unreleased
+
+### The name on the screen: znft (2026-10-27)
+
+- **The wallet now calls its units znfts, Zcash non-fungible things, and never "ZSA" or
+  "Shielded Asset".** Those are ZIP 226/227's words for a different thing: a consensus-level
+  fungible token with a quantity. A znft has no quantity and cannot be split; it is one shielded
+  note carrying one named unit, a shielded object. Changed: the Send screen's asset option
+  ("znft (shielded object)"), its hints and fee notices ("destroy the unit"), the navigation
+  entry and the gallery's empty state ("No znfts held."), the transaction detail heading, the
+  README. Internal identifiers (the `ZSA` option value, `get_zsas`, file names) are unchanged,
+  so nothing in a saved wallet, a lineage file or a memo moves.
+- **Send screen, unit path: the Amount and Message boxes are gone.** A unit moves whole,
+  carried by its fixed 0.00010000 ZEC note, with the memo that names it reproduced byte for
+  byte; the core has always discarded any amount or message on that path. Until now the screen
+  still demanded a number and accepted a message, both thrown away. It now shows "1 unit,
+  carried by its 0.00010000 ZEC note" and "A unit travels with its own memo; a message cannot
+  be attached", and sends the neutral values (0, empty) the core expects. ZEC path unchanged.
+
 ## 0.7.2-beta — unreleased
 
 ### NU7 (2026-10-22)

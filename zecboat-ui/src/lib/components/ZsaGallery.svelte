@@ -235,7 +235,7 @@
         </div>
       </div>
     {:else}
-      <div class="empty-state">No Shielded Assets found.</div>
+      <div class="empty-state">No znfts held.</div>
     {/each}
   </div>
 

@@ -1,8 +1,8 @@
 # Zecboat
 
-A desktop Zcash wallet that holds **shielded assets** as well as ZEC.
+A desktop Zcash wallet that holds **znfts** (Zcash non-fungible things) as well as ZEC.
 
-A shielded asset here is an ordinary Zcash note carrying a memo that names it. Sending one spends
+A znft here is an ordinary Zcash note carrying a memo that names it: a shielded object. Sending one spends
 that exact note and writes the same identity into the next note's memo (ZMAP §5.3: the asset id,
 the issuer key and the description it derives from, plus the hash of the unit's lineage record),
 so custody changes hands while identity does not. It is an ordinary shielded note underneath: no
@@ -27,7 +27,7 @@ are no automatic updates, and it handles real value on Zcash mainnet.
 ## What it does
 
 - Holds and sends shielded ZEC on Zcash mainnet
-- Holds, verifies and transfers shielded assets
+- Holds, verifies and transfers znfts
 - Protects assets from being spent by accident — see [Asset carriers](#asset-carriers)
 - Proves transactions locally; **spending keys never leave your machine**
 - Connects to any lightwalletd you choose, including your own node
@@ -51,7 +51,7 @@ admits its gaps.
 **Proven on Zcash mainnet:**
 
 - Sending shielded ZEC — built, proved, broadcast and mined from this codebase.
-- Transferring a ZMAP Layer-2 asset — a 10,000-zatoshi carrier with its memo intact.
+- Transferring a znft — a 10,000-zatoshi carrier with its memo intact.
 - Syncing from a public lightwalletd, and from a local zebrad + zaino stack.
 - Building from a clean checkout on a machine that had never seen this source.
 
@@ -68,7 +68,7 @@ admits its gaps.
 - **No independent security audit.** Several review passes by language models found real defects —
   including a hardcoded password that would have replaced a user's wallet — but that is not an audit
   and must not be read as one.
-- Sending ZSA assets is refused when the wallet holds a carrier at risk. That is deliberate
+- Sending a znft is refused when the wallet holds a carrier at risk. That is deliberate
   fail-closed behaviour, not a completed feature.
 - No hardware signing. A YubiKey can seal the wallet's identity file (the unlock), so a copied
   wallet folder is useless without the key; spending is still signed in software, and the wallet
@@ -310,7 +310,7 @@ That is a limitation of the explorer, not a defect in the transaction.
 
 - Guides and install instructions — <https://zecboat.com/guide>
 - The ZMAP protocol specification — <https://zecboat.com/protocol>
-- What shielded assets are, and are not, good for — <https://zecboat.com/shielded-assets>
+- What znfts are, and are not, good for — <https://zecboat.com/shielded-assets>
 - Verifying an asset's issuance — <https://zecboat.com/proof-of-issuance>
 
 ## Contributing
