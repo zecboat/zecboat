@@ -3861,6 +3861,74 @@ fn artwork_candidate_urls(base: &str, asset_id: &str) -> Vec<String> {
         .collect()
 }
 
+/// The IPFS content identifier of an image, derived from the SHA-256 the memo commits to:
+/// CIDv1, codec `raw`, multihash sha2-256, multibase base32 lower (`bafkrei…`). Exact for a file
+/// added as a single raw block (`ipfs add --cid-version 1 --raw-leaves` with a chunk size above the
+/// file size), which is how Zecboat publishes artwork from 2026-10-26 on. No network, no new field:
+/// the hash the wallet already holds **is** the address (explore, `artwork_ipfs_source.md`).
+pub fn image_cid_v1_raw(sha256_hex: &str) -> Option<String> {
+    let digest = hex::decode(sha256_hex).ok()?;
+    if digest.len() != 32 {
+        return None;
+    }
+    let mut bytes = vec![0x01u8, 0x55, 0x12, 0x20]; // cidv1, raw, sha2-256, 32 bytes
+    bytes.extend_from_slice(&digest);
+    Some(format!("b{}", base32_lower_nopad(&bytes)))
+}
+
+/// The image format the bytes say they are, by magic number, or `None`. Used before hashing a
+/// content-addressed fetch whose label is not `image/*`; the renderer's own sniff stays as is.
+fn image_magic(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if b.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("image/png")
+    } else if b.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if b.len() >= 12 && b.starts_with(b"RIFF") && &b[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// RFC 4648 base32, lower case, no padding: the multibase `b` alphabet.
+fn base32_lower_nopad(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut out = String::with_capacity((data.len() * 8 + 4) / 5);
+    let (mut buffer, mut bits) = (0u32, 0u32);
+    for &byte in data {
+        buffer = (buffer << 8) | byte as u32;
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            out.push(ALPHABET[((buffer >> bits) & 31) as usize] as char);
+        }
+    }
+    if bits > 0 {
+        out.push(ALPHABET[((buffer << (5 - bits)) & 31) as usize] as char);
+    }
+    out
+}
+
+/// After the registry's own paths: the same bytes by content address. First through the
+/// registry's `/ipfs/` gateway (zecboat.com serves what it pins; any host that pins the same
+/// identifier answers the same), then through a gateway the holder named in
+/// `ZECBOAT_IPFS_GATEWAY` (their own node on loopback, typically). Never a gateway we chose for
+/// them: a gateway learns which asset was opened and from where. The hash check that follows is
+/// unchanged, so a gateway is trusted for availability only.
+fn ipfs_candidate_urls(base: &str, image_sha256_hex: &str) -> Vec<String> {
+    let Some(cid) = image_cid_v1_raw(image_sha256_hex) else { return Vec::new() };
+    let mut v = vec![format!("{}/ipfs/{}", base, cid)];
+    if let Ok(gw) = std::env::var("ZECBOAT_IPFS_GATEWAY") {
+        let gw = gw.trim().trim_end_matches('/');
+        if !gw.is_empty() {
+            v.push(format!("{}/ipfs/{}", gw, cid));
+        }
+    }
+    v
+}
+
 /// Every request to the registry goes through one client: https only, no redirects, a
 /// timeout, and a body bound chosen by the caller. Until 2026-10-09 only the metadata fetch
 /// had these; artwork and manifests followed redirects to any host and read without bound
@@ -3870,7 +3938,9 @@ pub(crate) async fn registry_fetch(url: &str, max_bytes: usize) -> Result<(Strin
         let b = std::fs::read(path).map_err(|e| anyhow::anyhow!("{path}: {e}"))?;
         return Ok((String::new(), b));
     }
-    if !url.starts_with("https://") {
+    // https only, with one exception: a gateway on this machine's loopback (the holder's own
+    // IPFS node, `ZECBOAT_IPFS_GATEWAY=http://127.0.0.1:8080`), which no network sees.
+    if !url.starts_with("https://") && !url.starts_with("http://127.0.0.1:") && !url.starts_with("http://127.0.0.1/") {
         return Err(anyhow::anyhow!("the registry is reached over https only ({url})"));
     }
     // `no_proxy`: reqwest's default client follows HTTP(S)_PROXY/ALL_PROXY from the
@@ -3990,7 +4060,9 @@ pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
     let mut found: Option<(String, String, bytes::Bytes)> = None;
     let mut first_unverified: Option<(String, String, bytes::Bytes)> = None;
 
-    for url in artwork_candidate_urls(&registry_base(), &asset_id) {
+    let mut candidates = artwork_candidate_urls(&registry_base(), &asset_id);
+    candidates.extend(ipfs_candidate_urls(&registry_base(), &expected));
+    for url in candidates {
         let (content_type, body) = match registry_fetch(&url, MAX_ARTWORK_BYTES).await {
             Ok(r) => r,
             Err(e) => {
@@ -4002,7 +4074,13 @@ pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
         // alone proves nothing. Require an image content type before spending time hashing it,
         // and treat a non-image as "not published in this format", not as a hard failure, so the
         // next extension still gets a turn.
-        if !content_type.starts_with("image/") {
+        // A content-addressed fetch is labelled by the gateway, and a plain host serving a bare
+        // identifier says `application/octet-stream` (seen 2026-10-27 in explore's test). The
+        // label was only ever a cheap way to skip HTML error pages; for an `/ipfs/` candidate
+        // the bytes decide, as they do for rendering, and the hash check below is the security.
+        let image_label = content_type.starts_with("image/");
+        let image_bytes = url.contains("/ipfs/") && image_magic(&body).is_some();
+        if !image_label && !image_bytes {
             attempts.push(format!(
                 "{} ({})",
                 url,
@@ -4843,6 +4921,37 @@ mod tests {
         assert_eq!(urls, ["png", "jpg", "jpeg", "webp"].iter()
             .map(|e| format!("https://zecboat.com/collection/{LPC10_ID}.{e}")).collect::<Vec<_>>());
         assert!(urls.iter().all(|u| !u.contains(LPC10_IMG)));
+    }
+
+    #[test]
+    fn image_cid_is_derived_from_the_hash() {
+        // Two independent vectors: a 1024-square JPEG page (233,692 bytes) and the Cypherpunk Zero
+        // file 49.png (563,001 bytes), both computed with the multiformats layout by hand on
+        // 2026-10-26 and checked against `ipfs add --cid-version 1 --raw-leaves`.
+        assert_eq!(
+            super::image_cid_v1_raw("66da2bb6b99707ed09bddcd1777299a0acfc97079684e79278a5b6934099ecf0").as_deref(),
+            Some("bafkreidg3iv3nomxa7wqtpo42f3xfgnavt6job4wqttze6ffw2jubgpm6a")
+        );
+        assert_eq!(
+            super::image_cid_v1_raw("3437361134ceadf635ffbe0be41394b35b2e759a4e60565e10d74e780c1fc77e").as_deref(),
+            Some("bafkreibug43bcngovx3dl756bpsbhfftlmxhlgsomblf4egxjz4ayh6hpy")
+        );
+        assert!(super::image_cid_v1_raw("abc").is_none(), "not 32 bytes");
+        assert!(super::image_cid_v1_raw("zz".repeat(32).as_str()).is_none(), "not hex");
+    }
+
+    #[test]
+    fn ipfs_candidates_follow_the_registry_and_name_the_holders_gateway_last() {
+        let h = "66da2bb6b99707ed09bddcd1777299a0acfc97079684e79278a5b6934099ecf0";
+        std::env::remove_var("ZECBOAT_IPFS_GATEWAY");
+        let v = super::ipfs_candidate_urls("https://zecboat.com", h);
+        assert_eq!(v, vec!["https://zecboat.com/ipfs/bafkreidg3iv3nomxa7wqtpo42f3xfgnavt6job4wqttze6ffw2jubgpm6a".to_string()]);
+        std::env::set_var("ZECBOAT_IPFS_GATEWAY", "http://127.0.0.1:8080/");
+        let v = super::ipfs_candidate_urls("https://zecboat.com", h);
+        std::env::remove_var("ZECBOAT_IPFS_GATEWAY");
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[1], "http://127.0.0.1:8080/ipfs/bafkreidg3iv3nomxa7wqtpo42f3xfgnavt6job4wqttze6ffw2jubgpm6a");
+        assert!(super::ipfs_candidate_urls("https://zecboat.com", "nope").is_empty());
     }
 
     use super::*;
