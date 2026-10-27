@@ -19,7 +19,7 @@
   let assetType = $state(initialAssetType);
   let fromAddress = $state("");
   $effect(() => {
-    // 0.7.2: an asset id entered for a ZSA send must not linger behind a ZEC send.
+    // 0.7.2: an asset id entered for a znft send must not linger behind a ZEC send.
     if (assetType === "ZEC" && fromAddress) fromAddress = "";
   });
   let toAddress = $state(initialToAddress);
@@ -145,7 +145,7 @@
   function requestEstimate() {
     estimate = null;
     estimateError = null;
-    if (assetType === "ZSA" && fromAddress.trim()) {
+    if (assetType === "znft" && fromAddress.trim()) {
       invoke<SendEstimate>("asset_send_estimate", { assetId: fromAddress.trim(), carrier: chosenCopy ?? undefined })
         .then((e) => { estimate = e; estimateError = null; })
         .catch((e) => {
@@ -300,7 +300,7 @@
           message: `Success! Hardware Signature: ${signature}`
         };
       } else {
-        let assetId = assetType === "ZSA" ? fromAddress.trim() : null;
+        let assetId = assetType === "znft" ? fromAddress.trim() : null;
         const opid: string = await invoke("send_transaction", {
           address: toAddress,
           // Unit path: the core fixes the carrier value and reproduces the unit's memo; the
@@ -427,7 +427,7 @@
         <label for="asset-type">Asset Type</label>
         <select id="asset-type" bind:value={assetType}>
           <option value="ZEC">ZEC</option>
-          <option value="ZSA">znft (shielded object)</option>
+          <option value="znft">znft (shielded object)</option>
         </select>
       </div>
 
@@ -435,7 +435,7 @@
            "Sending Address (Source)", and an asset id pasted there was silently ignored: the send
            moved plain ZEC and the unit stayed. For ZEC the wallet chooses the notes, so there is
            nothing to enter; the field exists only for a shielded asset, and says what it is. -->
-      {#if assetType === "ZSA"}
+      {#if assetType === "znft"}
         <div class="form-group slide-in">
           <label for="from-address">znft to send (asset id)</label>
           <input id="from-address" type="text" placeholder="The 64-character asset id, or pick the item under znfts" bind:value={fromAddress} required />
@@ -464,7 +464,7 @@
         {/if}
       </div>
       
-      {#if assetType === "ZSA"}
+      {#if assetType === "znft"}
         <!-- 0.7.3 (S1, S2): a unit moves whole, carried by its fixed note, with the memo that
              names it reproduced byte for byte. The core ignores any amount or message on this
              path (send_transaction_with_wake, step 1), so until now the screen made the user
@@ -498,14 +498,14 @@
         </div>
       {/if}
       
-      <button type="submit" class="btn primary" disabled={assetType !== "ZSA" && remainingChars < 0}>
+      <button type="submit" class="btn primary" disabled={assetType !== "znft" && remainingChars < 0}>
         Review Transaction
       </button>
     </form>
   {:else}
     <div class="confirmation-screen slide-in">
       <h3>Confirm Transaction</h3>
-      {#if fee && assetType === "ZSA"}
+      {#if fee && assetType === "znft"}
         <!-- The fee source, on the confirmation screen, because this is the moment someone
              asks "where does the fee come from?" The recipient gets exactly the carrier;
              the fee comes from elsewhere or the asset would be destroyed. -->
@@ -565,7 +565,7 @@
           <span class="label">To:</span>
           <span class="value">{toAddress}</span>
         </div>
-        {#if assetType === "ZSA"}
+        {#if assetType === "znft"}
           <!-- Exactly one unit moves, carried by its 0.0001 ZEC note, with its own memo; the
                amount and message fields do not apply and are not sent (review 2026-10-09). -->
           <div class="detail-row amount-row">
@@ -644,7 +644,7 @@
           </div>
         {/if}
         <button class="btn secondary" onclick={cancelSend} disabled={isSending}>Cancel</button>
-        <button class="btn primary" onclick={() => { if (feeNotice) { acceptedFeeZat = feeNotice.fee_zat; feeNotice = null; } confirmAndSend(); }} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven) || (!!uncollectedNotice && !abandonLineage) || (yubikeyWallet && !yubikeyPresent) || (assetType === "ZSA" && !estimate) || (!!estimate && !!fee && fee.spendable_zat < estimate.fee_zat)}>
+        <button class="btn primary" onclick={() => { if (feeNotice) { acceptedFeeZat = feeNotice.fee_zat; feeNotice = null; } confirmAndSend(); }} disabled={isSending || (!!unprovenNotice && !acknowledgeUnproven) || (!!uncollectedNotice && !abandonLineage) || (yubikeyWallet && !yubikeyPresent) || (assetType === "znft" && !estimate) || (!!estimate && !!fee && fee.spendable_zat < estimate.fee_zat)}>
           {#if isSending && yubiMsg}
             <span>👉 {yubiMsg}</span>
           {:else if isSending}

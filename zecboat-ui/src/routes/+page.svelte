@@ -43,7 +43,7 @@
         const memo = parsedUrl.searchParams.get("memo") || "";
         
         sendProps = {
-          initialAssetType: "ZSA", // Or determine based on logic
+          initialAssetType: "znft",
           initialToAddress: address,
           initialAmount: amount,
           initialMemo: memo

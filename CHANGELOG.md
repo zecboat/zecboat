@@ -13,8 +13,9 @@ not the diff.
   note carrying one named unit, a shielded object. Changed: the Send screen's asset option
   ("znft (shielded object)"), its hints and fee notices ("destroy the unit"), the navigation
   entry and the gallery's empty state ("No znfts held."), the transaction detail heading, the
-  README. Internal identifiers (the `ZSA` option value, `get_zsas`, file names) are unchanged,
-  so nothing in a saved wallet, a lineage file or a memo moves.
+  README. The Send screen's option value is `znft` too, so the word ZSA is gone from the form
+  and its code; `get_zsas` and the gallery file name stay, and nothing in a saved wallet, a
+  lineage file or a memo moves.
 - **Send screen, unit path: the Amount and Message boxes are gone.** A unit moves whole,
   carried by its fixed 0.00010000 ZEC note, with the memo that names it reproduced byte for
   byte; the core has always discarded any amount or message on that path. Until now the screen
