@@ -2723,7 +2723,7 @@ pub async fn send_transaction(address: &str, amount: f64, memo: &str, asset_id: 
 pub async fn send_transaction_with_wake(address: &str, amount: f64, memo: &str, asset_id: Option<&str>, acknowledge_unproven: bool, max_fee_zat: Option<u64>, abandon_lineage: Option<&str>, carrier: Option<&str>) -> Result<String> {
     // 1. Validate and convert to zatoshis — on the value path only.
     //
-    // A ZSA transfer moves a carrier note whose value is fixed at CARRIER_ZAT and
+    // A znft transfer moves a carrier note whose value is fixed at CARRIER_ZAT and
     // whose memo is reproduced byte for byte; `send_zmap_asset` ignores both
     // arguments deliberately, because honouring a caller-supplied version of
     // either would let a caller change an asset's identity in flight.
@@ -3637,7 +3637,7 @@ pub async fn add_invoice(invoice_id: String, date: String, items: String, total_
     Ok(())
 }
 
-/// List the ZMAP Layer-2 assets this wallet holds.
+/// List the znfts (ZMAP units) this wallet holds.
 ///
 /// Detection is [`crate::zmap`]'s: a note is an asset only if its value is **exactly**
 /// [`crate::zmap::CARRIER_ZAT`] *and* its memo parses as one of the two ZMAP dialects. Holdings are
@@ -3645,7 +3645,7 @@ pub async fn add_invoice(invoice_id: String, date: String, items: String, total_
 ///
 /// `asset_id`, `name` and `amount` are kept for the existing gallery bindings; `amount` is the
 /// carrier count. The remaining fields are additive.
-pub async fn get_zsas() -> Result<Vec<Value>> {
+pub async fn get_znfts() -> Result<Vec<Value>> {
     let db_path = crate::paths::as_string::wallet_db_path()?;
     // Wake (chapter 8): collect any lading a carrier's memo commits to that this wallet does
     // not hold. Best effort; a fetch failure must not hide the holdings.
@@ -3703,7 +3703,7 @@ pub async fn get_zsas() -> Result<Vec<Value>> {
 /// fork, which listened on `:8237`, and even there it did no chain lookup — it fetched
 /// `https://zecboat.com/collection/{asset_id}.json`, exactly as this does now.
 ///
-/// The deeper reason is structural: **a node cannot see Layer-2 assets at all.** It holds no viewing
+/// The deeper reason is structural: **a node cannot see znfts at all.** It holds no viewing
 /// keys, so it cannot decrypt the memo that carries the asset's identity. No RPC extension fixes
 /// that. The wallet already holds the keys and the memo, so metadata is the only thing left to
 /// fetch, and it lives on the web.

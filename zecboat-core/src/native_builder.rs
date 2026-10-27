@@ -1,6 +1,6 @@
 //! Transaction construction — plain ZEC **and** ZMAP asset transfers.
 //!
-//! Zecboat is an L2 shielded-asset wallet and this file is where both paths are
+//! Zecboat is a znft wallet and this file is where both paths are
 //! built: ordinary Ironwood (NU6.3) value transfer, and the deliberate spend of
 //! an asset carrier. Assets ride on top of plain value, so the plain path has to
 //! be correct first.
@@ -133,7 +133,7 @@ pub(crate) fn params_not_found() -> String {
     )
 }
 
-/// The ZSA/NFT note denomination `validate_anti_burn` protects.
+/// The znft carrier denomination `validate_anti_burn` protects.
 /// Lock every ZMAP carrier note so automatic input selection cannot spend it.
 ///
 /// # Why this replaces `assert_no_zsa_notes_at_risk`

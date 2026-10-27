@@ -424,7 +424,7 @@
       </div>
 
       <div class="form-group">
-        <label for="asset-type">Asset Type</label>
+        <label for="asset-type">What to send</label>
         <select id="asset-type" bind:value={assetType}>
           <option value="ZEC">ZEC</option>
           <option value="znft">znft (shielded object)</option>
@@ -434,7 +434,7 @@
       <!-- 0.7.2 (SEND_TESTS_0.7.1 Test 2, item S4): with type ZEC this field was still shown as
            "Sending Address (Source)", and an asset id pasted there was silently ignored: the send
            moved plain ZEC and the unit stayed. For ZEC the wallet chooses the notes, so there is
-           nothing to enter; the field exists only for a shielded asset, and says what it is. -->
+           nothing to enter; the field exists only for a znft, and says what it is. -->
       {#if assetType === "znft"}
         <div class="form-group slide-in">
           <label for="from-address">znft to send (asset id)</label>

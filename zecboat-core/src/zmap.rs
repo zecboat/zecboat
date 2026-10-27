@@ -1,4 +1,4 @@
-//! ZMAP — the Zcash Memo Asset Protocol (ZRC-721) — Layer-2 shielded-asset detection.
+//! ZMAP — the Zcash Memo Asset Protocol (ZRC-721) — znft (shielded object) detection.
 //!
 //! # What a ZMAP asset actually is
 //!

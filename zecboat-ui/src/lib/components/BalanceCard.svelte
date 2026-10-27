@@ -78,7 +78,7 @@
         <div class="balance-row held"><span class="label">Received, awaiting scan</span><span class="value">{zec(b.awaiting_scan_zat)}</span></div>
       {/if}
       {#if b.locked_zat > 0}
-        <div class="balance-row held" title="Held by a pending send, or an asset carrier that ordinary sends route around."><span class="label">Locked (pending send or assets)</span><span class="value">{zec(b.locked_zat)}</span></div>
+        <div class="balance-row held" title="Held by a pending send, or a znft carrier that ordinary sends route around."><span class="label">Locked (pending send or znfts)</span><span class="value">{zec(b.locked_zat)}</span></div>
       {/if}
       {#if b.uneconomic_zat > 0}
         <div class="balance-row held" title="Worth less than the fee it would cost to spend."><span class="label">Below the fee</span><span class="value">{zec(b.uneconomic_zat)}</span></div>

@@ -43,8 +43,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "shortDescription": "Shielded Zcash wallet for Layer-2 memo assets (ZMAP)",
-    "longDescription": "Zecboat is a desktop Zcash wallet that holds, verifies and transfers ZMAP Layer-2 shielded assets. It syncs over lightwalletd gRPC and keeps spending keys encrypted on disk. It does not mint assets.",
+    "shortDescription": "Shielded Zcash wallet for znfts (ZMAP shielded objects)",
+    "longDescription": "Zecboat is a desktop Zcash wallet that holds, verifies and transfers znfts: Zcash non-fungible things, each one shielded note carrying one named unit under ZMAP. It syncs over lightwalletd gRPC and keeps spending keys encrypted on disk. It does not mint.",
     "category": "Finance",
     "licenseFile": "../../LICENSE",
     "linux": {

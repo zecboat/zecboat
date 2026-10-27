@@ -8,7 +8,7 @@
 //!       target/release/examples/wake_consignments <list|fetch|verify <asset_id>|state>
 //!
 //! `list` prints stored ladings; `fetch` collects the ladings carriers' memos commit to; `verify` runs the four-state badge for one asset; `state` prints what
-//! `get_zsas` would report. Nothing here builds or broadcasts a transaction.
+//! `get_znfts` would report. Nothing here builds or broadcasts a transaction.
 use std::env;
 
 fn main() -> anyhow::Result<()> {

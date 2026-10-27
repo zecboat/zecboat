@@ -107,9 +107,9 @@
 
   onMount(async () => {
     try {
-      assets = await invoke("get_zsas");
+      assets = await invoke("get_znfts");
     } catch (e) {
-      console.error("Failed to load ZSAs:", e);
+      console.error("Failed to load znfts:", e);
       return;
     }
     // No artwork REQUEST on load. Fetching every held asset's artwork from zecboat.com each

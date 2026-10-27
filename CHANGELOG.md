@@ -16,6 +16,11 @@ not the diff.
   README. The Send screen's option value is `znft` too, so the word ZSA is gone from the form
   and its code; `get_zsas` and the gallery file name stay, and nothing in a saved wallet, a
   lineage file or a memo moves.
+- **The rest of the old name, inside and out.** The package description (software centre,
+  launcher entry) and the balance card's "Locked" line say znft; the Send screen's type label
+  is "What to send". Inside: the gallery component is `ZnftGallery`, the view key is `znfts`,
+  the core call and bridge command are `get_znfts`, the anti-burn error names a "znft carrier",
+  and the source comments follow. No behaviour, format or stored value changes.
 - **Send screen, unit path: the Amount and Message boxes are gone.** A unit moves whole,
   carried by its fixed 0.00010000 ZEC note, with the memo that names it reproduced byte for
   byte; the core has always discarded any amount or message on that path. Until now the screen

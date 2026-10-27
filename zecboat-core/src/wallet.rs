@@ -41,7 +41,7 @@ pub fn validate_anti_burn(inputs: &[ProposedInput]) -> Result<()> {
     for input in inputs {
         if input.value_zat == 10_000 && !input.is_explicitly_selected_asset {
             return Err(anyhow!(
-                "ANTI-BURN TRIGGERED: Attempted to consume a 10,000 Zat note (potential ZSA/Cyber-Nomad) \
+                "ANTI-BURN TRIGGERED: Attempted to consume a 10,000 Zat note (potential znft carrier) \
                 as a miner fee or generic ZEC spend. TxID: {}",
                 input.txid
             ));
@@ -172,7 +172,7 @@ pub fn batch_send_transaction(
         let value = note.note_value().map_err(|e| anyhow!("could not read a note value: {e:?}"))?;
         let value_u64 = u64::from(value);
 
-        // Skip ZSA notes for generic batch spending to prevent burn
+        // Skip znft carrier notes for generic batch spending to prevent burn
         if value_u64 == 10_000 { continue; }
 
         if accumulated_value < target_value {
