@@ -276,13 +276,16 @@ pub fn send_estimate(conn: &rusqlite::Connection, asset_id: &str, genesis: Optio
     // One packed hop: circuit byte, three instance fields, anchor height, proof length, proof.
     const HOP: usize = 1 + 96 + 4 + 2 + 4960;
     const CHUNK: usize = 512 - 9;
-    let plain = |carrier: &str, copies: usize| SendEstimate { lineage: "none", proofs: 0, extra_outputs: 0, outputs: 2, fee_zat: 10_000, carrier: carrier.to_string(), copies, record_stays: false };
+    // The fee the screen quotes follows the height (crate::fee): 5,000 per action, 1,000 from
+    // ZIP 2009's height, two grace actions either way.
+    let height = crate::fee::scanned_height(conn);
+    let plain = |carrier: &str, copies: usize| SendEstimate { lineage: "none", proofs: 0, extra_outputs: 0, outputs: 2, fee_zat: crate::fee::conventional_fee_zat(height, 2), carrier: carrier.to_string(), copies, record_stays: false };
     let with = |lineage: &'static str, proofs: usize, extras: usize, carrier: &str, copies: usize| SendEstimate {
         lineage,
         proofs,
         extra_outputs: extras,
         outputs: extras + 2,
-        fee_zat: 5_000 * (extras as u64 + 2),
+        fee_zat: crate::fee::conventional_fee_zat(height, extras as u64 + 2),
         carrier: carrier.to_string(),
         copies,
         record_stays: false,

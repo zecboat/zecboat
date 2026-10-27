@@ -4221,8 +4221,8 @@ pub async fn shield_transparent() -> Result<String> {
     use zcash_proofs::prover::LocalTxProver;
     use zcash_client_backend::data_api::wallet::shield_transparent_funds;
     use zcash_client_backend::data_api::wallet::input_selection::GreedyInputSelector;
-    use zcash_client_backend::fees::standard::SingleOutputChangeStrategy;
-    use zcash_client_backend::fees::{StandardFeeRule, DustOutputPolicy};
+    use zcash_client_backend::fees::zip317::SingleOutputChangeStrategy;
+    use zcash_client_backend::fees::DustOutputPolicy;
     use zcash_protocol::ShieldedPool;
     use zcash_client_backend::data_api::wallet::{SpendingKeys, ConfirmationsPolicy};
     use zcash_client_backend::data_api::WalletRead;
@@ -4275,8 +4275,14 @@ pub async fn shield_transparent() -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("{}", crate::native_builder::params_not_found()))?;
 
     let input_selector = GreedyInputSelector::<WalletDb<rusqlite::Connection, MainNetwork, SystemClock, OsRng>>::new();
-    let change_strategy = SingleOutputChangeStrategy::<WalletDb<rusqlite::Connection, MainNetwork, SystemClock, OsRng>>::new(
-        StandardFeeRule::Zip317,
+    // The fee rule for the block this will land in (crate::fee: 5,000 per action, 1,000 from
+    // ZIP 2009's height).
+    let (target_height, _) = wallet_db
+        .get_target_and_anchor_heights(ConfirmationsPolicy::MIN.trusted())
+        .map_err(|e| anyhow::anyhow!("could not read chain heights: {:?}", e))?
+        .ok_or_else(|| anyhow::anyhow!("the wallet has not scanned any block yet"))?;
+    let change_strategy = SingleOutputChangeStrategy::<_, WalletDb<rusqlite::Connection, MainNetwork, SystemClock, OsRng>>::new(
+        crate::fee::fee_rule(u32::from(target_height)),
         None,
         // W3, 2026-08-11. This read `ShieldedProtocol::Sapling` with the comment
         // "Target pool must be Sapling under NU6.3 consensus!" — a workaround from
@@ -4305,8 +4311,9 @@ pub async fn shield_transparent() -> Result<String> {
         taddrs.push(addr);
     }
 
-    // Perform shielding
-    let shielding_fee = zcash_protocol::value::Zatoshis::from_u64(10_000).unwrap();
+    // Perform shielding. 10,000 zat is the shielding THRESHOLD (the smallest transparent
+    // balance worth a transaction), not the fee: the fee comes from the change strategy above.
+    let shielding_threshold = zcash_protocol::value::Zatoshis::from_u64(10_000).unwrap();
     let txids = shield_transparent_funds(
         &mut wallet_db,
         &MainNetwork,
@@ -4316,7 +4323,7 @@ pub async fn shield_transparent() -> Result<String> {
         &prover,
         &input_selector,
         &change_strategy,
-        shielding_fee,
+        shielding_threshold,
         &spending_keys,
         &taddrs,
         account_id,

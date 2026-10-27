@@ -81,8 +81,9 @@ use zcash_client_backend::data_api::wallet::{
     propose_transfer, ConfirmationsPolicy, SpendingKeys,
 };
 use zcash_client_backend::data_api::{OutputLockStore, WalletRead};
-use zcash_client_backend::fees::standard::SingleOutputChangeStrategy;
-use zcash_client_backend::fees::{DustOutputPolicy, StandardFeeRule};
+// The ZIP 317 strategy with the fee rule chosen per target height (crate::fee, ZIP 2009).
+use zcash_client_backend::fees::zip317::SingleOutputChangeStrategy;
+use zcash_client_backend::fees::DustOutputPolicy;
 use zcash_client_backend::wallet::OvkPolicy;
 use zcash_client_backend::zip321::{Payment, TransactionRequest};
 
@@ -337,8 +338,8 @@ fn build_and_sign_request(
     let input_selector = GreedyInputSelector::<Db>::new();
     // ───────────────────────────────────────────────────────────────────────
 
-    let change_strategy = SingleOutputChangeStrategy::<Db>::new(
-        StandardFeeRule::Zip317,
+    let change_strategy = SingleOutputChangeStrategy::<_, Db>::new(
+        crate::fee::fee_rule(u32::from(target_height)),
         None, // no change memo
         CHANGE_POOL,
         DustOutputPolicy::default(),
@@ -764,13 +765,15 @@ pub fn send_zmap_asset(
     // This is the ordinary state for anyone carrying pre-NU6.3 change: Orchard is closed
     // to new outputs, so old value sits there while carriers are Ironwood. Such a wallet
     // showed "insufficient funds" against a visibly healthy balance.
-    // Without record outputs: the long-standing 60,000. With them: the fee itself (5,000 per
-    // Action: the carrier, a change output, one per record output, and room for two fee notes)
-    // plus a small margin, instead of the 60,000 on top that refused affordable sends.
+    // Without record outputs: the long-standing 60,000. With them: the fee itself (the marginal
+    // fee per Action at the target height, crate::fee: the carrier, a change output, one per
+    // record output, and room for two fee notes) plus two actions' margin, instead of the
+    // 60,000 on top that refused affordable sends.
     let fee_headroom = Zatoshis::from_u64(if record_memos.is_empty() {
         crate::zmap::CARRIER_ZAT * 6
     } else {
-        5_000 * (record_memos.len() as u64 + 4) + 10_000
+        let h = u32::from(target_height);
+        crate::fee::conventional_fee_zat(h, record_memos.len() as u64 + 4) + 2 * crate::fee::marginal_fee_zat(h)
     })
         .map_err(|e| anyhow!("internal: bad fee headroom: {:?}", e))?;
 
@@ -860,8 +863,8 @@ pub fn send_zmap_asset(
     }
 
     // ── 5. Fee and change from the library, not from local arithmetic ──────────────────────
-    let change_strategy = SingleOutputChangeStrategy::<Db>::new(
-        StandardFeeRule::Zip317,
+    let change_strategy = SingleOutputChangeStrategy::<_, Db>::new(
+        crate::fee::fee_rule(u32::from(target_height)),
         None,
         CHANGE_POOL,
         DustOutputPolicy::default(),
@@ -970,7 +973,7 @@ pub fn send_zmap_asset(
         Some(shielded_inputs),
         anchor_height,
         balance,
-        StandardFeeRule::Zip317,
+        crate::fee::fee_rule(u32::from(target_height)),
         target_height,
         ConfirmationsPolicy::MIN,
         false,

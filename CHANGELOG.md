@@ -5,6 +5,25 @@ not the diff.
 
 ## 0.7.3-beta — unreleased
 
+### Fees follow draft ZIP 2009 (2026-10-27)
+
+- **From mainnet height 3,590,000 the marginal fee is 1,000 zatoshis per logical action, not
+  5,000.** Draft ZIP 2009 makes that change as a wallet convention (no network upgrade; nodes
+  ship the relay policy first, and Zebra 7.0.0 already answers `getstandardfee` by height).
+  The zcash crates this build uses know only the 5,000 rule, so the height-aware rule lives in
+  one new module, `fee.rs`, and every fee the wallet quotes or pays now comes from it: the
+  change strategies of the three builders and the carrier-transfer proposal, the carrier
+  headroom, the Send screen's readiness line ("a fee costs about …": 20,000 → 4,000 for four
+  actions) and the lineage estimate (two actions 10,000 → 2,000; a fourteen-action Knotline
+  70,000 → 14,000). Below the height nothing changes: the rule is the library's standard one.
+- Estimates made before a transaction has a target use the wallet's highest scanned block, or
+  0 when it has none, which picks the higher fee: the readiness check still errs toward "you
+  need a little more", never toward a surprise. Tests pin the fee on both sides of the height,
+  the builders' rule against the library's constants, and the scanned-height fallback.
+- If ZIP 2009 is withdrawn before mid-December, the constant moves out of reach (`u32::MAX`)
+  and the wallet keeps paying 5,000; nothing else changes.
+
+
 ### The wallet checks for its own next release (2026-10-27)
 
 - **One blue line, one button, one key.** On start and on the About panel the wallet fetches

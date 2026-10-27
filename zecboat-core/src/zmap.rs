@@ -2252,12 +2252,15 @@ pub struct FeeReadiness {
     pub can_pay_fee: bool,
 }
 
-/// Rough upper bound on a ZIP-317 fee for a small transfer.
+/// Rough upper bound on a ZIP-317 fee for a small transfer, at the wallet's scanned height.
 ///
-/// `max(actions - 2, 0) * 5_000 + 10_000`. A transfer with a carrier in, a carrier out and a
-/// change note lands at 4 actions -> 20,000. Quoting that rather than the 10,000 minimum means
-/// the check errs toward "you need a little more", never toward a surprise at send time.
-pub const ESTIMATED_FEE_ZAT: u64 = 20_000;
+/// Four logical actions: a carrier in, a carrier out, a change note and a fee note. 20,000
+/// below ZIP 2009's height, 4,000 from it (`crate::fee`). Quoting that rather than the
+/// two-action minimum means the check errs toward "you need a little more", never toward a
+/// surprise at send time.
+pub fn estimated_fee_zat(conn: &rusqlite::Connection) -> u64 {
+    crate::fee::conventional_fee_zat(crate::fee::scanned_height(conn), 4)
+}
 
 pub fn fee_readiness(conn: &rusqlite::Connection) -> rusqlite::Result<FeeReadiness> {
     let mut stmt = conn.prepare(
@@ -2295,8 +2298,8 @@ pub fn fee_readiness(conn: &rusqlite::Connection) -> rusqlite::Result<FeeReadine
         spendable_zat,
         carrier_count,
         carrier_zat,
-        fee_zat: ESTIMATED_FEE_ZAT,
-        can_pay_fee: spendable_zat >= ESTIMATED_FEE_ZAT,
+        fee_zat: estimated_fee_zat(conn),
+        can_pay_fee: spendable_zat >= estimated_fee_zat(conn),
     })
 
 }

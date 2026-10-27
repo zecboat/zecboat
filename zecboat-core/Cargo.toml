@@ -31,7 +31,7 @@ zcash_client_backend = { version = "=0.25.0", features = ["orchard", "transparen
 # checked and retried BEFORE proving; then proves, signs and extracts it. `serde` on the sqlite
 # crate is what lets the backend serialise the account id into the PCZT.
 pczt = { version = "0.10.0", features = ["prover", "signer"] }
-zcash_primitives = { version = "0.31.0", features = ["transparent-inputs"] }
+zcash_primitives = { version = "0.31.0", features = ["transparent-inputs", "non-standard-fees"] }  # non-standard-fees: the ZIP 2009 marginal fee (fee.rs)
 # 0.13, not 0.12: zip321 0.8 (pulled in by zcash_client_backend 0.24) builds its
 # Payment type against 0.13. Pinning 0.12 here put two incompatible ZcashAddress
 # types in the tree and `Payment::new` rejected ours.
