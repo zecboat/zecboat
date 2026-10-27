@@ -4883,6 +4883,7 @@ dependencies = [
  "blake2b_simd",
  "bytes",
  "deadpool-sqlite",
+ "ed25519-zebra",
  "hex",
  "incrementalmerkletree",
  "k256",

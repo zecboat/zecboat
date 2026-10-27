@@ -5,6 +5,28 @@ not the diff.
 
 ## 0.7.3-beta — unreleased
 
+### The wallet checks for its own next release (2026-10-27)
+
+- **One blue line, one button, one key.** On start and on the About panel the wallet fetches
+  `zecboat.com/downloads/latest.json` and its signature through the same bounded, https-only,
+  no-redirect client the registry uses, verifies the raw Ed25519 signature under the release
+  key compiled into the build (the key behind every `SHA256SUMS.sig`, shown on About), and only
+  then reads the note. A newer version shows as "0.7.3 is available" with an Install button; a
+  same or older version, an unreachable host, a bad signature or a malformed note show nothing
+  at all. The wallet keeps working either way: the site is never a dependency.
+- **Install, verified twice.** The button re-reads the signed note, downloads the `.deb` it
+  names (https only, bounded), checks its sha256 against the note, writes it under the wallet's
+  data directory (`updates/`, mode 0600) only after that check, and hands it to the system
+  installer with the user's own authentication: `pkexec apt-get install -y <file>`. The wallet
+  runs nothing it downloaded; a hash mismatch installs nothing and says so.
+- **Never:** auto-install, redirects, the GitHub mirror as an authority, a downgrade (a note
+  naming an older or equal version is ignored), any third-party service. Replaces the
+  hand-written "update before 5 November" notice of 0.7.0 and 0.7.1 with a general mechanism.
+- Release side: `stage.sh` now publishes the `.deb` beside the zip, lists it in `SHA256SUMS`,
+  and writes `latest.json` + `latest.json.sig` with the same key. Tests cover version order
+  (a pre-release sorts below its release), tampered and wrongly signed notes, downgrade
+  attempts, a tampered package, an unreachable host, and the exact installer command.
+
 ### The name on the screen: znft (2026-10-27)
 
 - **The wallet now calls its units znfts, Zec non-fungible things, and never "ZSA" or

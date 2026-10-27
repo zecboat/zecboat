@@ -3814,7 +3814,7 @@ pub async fn wallet_about() -> Result<Value> {
         "node": grpc_endpoint(),
         "registry": registry_base(),
         "pinned_issuers": crate::issuance::pinned_issuers(),
-        "release_key": "e23a2fed8f8134005ba47a3d800509678ef913d65dbe8e39d2cffc778219ed0d",
+        "release_key": crate::update::RELEASE_PUBLIC_KEY_HEX,
         // The next network upgrade this build does not follow, or null. 0.7.2 follows NU7
         // (ZIP 259; mainnet height 3,543,405 from the final protocol crate, about 6 November
         // 2026), and no later upgrade is scheduled, so there is no notice. 0.7.0 and 0.7.1

@@ -104,8 +104,29 @@ echo '```' >> "$S/GATE.md"
 
 # --- hashes, signature, provenance -------------------------------------------
 cd "$S/artifacts"
-sha256sum ./*.zip ./*.tar.gz | sed 's|\./||' > SHA256SUMS
+# The .deb is published on its own as well as inside the zip: the in-wallet update check
+# (zecboat-core/src/update.rs, 0.7.3) downloads it by the URL in the signed release note and
+# checks its sha256 against that note before handing it to the system installer.
+cp "$DEB" . || die "cannot copy the .deb beside the zip"
+sha256sum ./*.zip ./*.tar.gz ./*.deb | sed 's|\./||' > SHA256SUMS
 openssl pkeyutl -sign -inkey "$KEY" -rawin -in SHA256SUMS -out SHA256SUMS.sig || die "signing failed"
+# The signed release note the wallet's update check reads (roadmap/update_check.md): what the
+# wallet verifies is the raw Ed25519 signature over these exact bytes, under the key compiled
+# into it, so the file is written once and never reformatted afterwards.
+DEBN="$(basename "$DEB")"
+python3 - "$V" "$DEBN" "$(sha256sum "$DEBN" | cut -d' ' -f1)" > latest.json <<'PYEOF' || die "writing latest.json failed"
+import json, sys, datetime
+v, deb, deb_sha = sys.argv[1:4]
+note = {
+  "version": v,
+  "released": datetime.date.today().isoformat(),
+  "urls": {"deb": "https://zecboat.com/downloads/" + deb},
+  "sha256": {"deb": deb_sha},
+  "notes_url": "https://zecboat.com/downloads",
+}
+print(json.dumps(note, indent=2))
+PYEOF
+openssl pkeyutl -sign -inkey "$KEY" -rawin -in latest.json -out latest.json.sig || die "signing latest.json failed"
 # Private temporary names: fixed paths under /tmp could be pre-created by another user on a
 # shared host and the check made to pass or fail at will (audit 2026-10-08, Zecboat N).
 PDER="$(mktemp)"; PPEM="$(mktemp)"
@@ -113,6 +134,8 @@ python3 -c "import binascii,sys;open(sys.argv[1],'wb').write(binascii.unhexlify(
 openssl pkey -pubin -inform DER -in "$PDER" -out "$PPEM" 2>/dev/null
 openssl pkeyutl -verify -pubin -inkey "$PPEM" -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig >/dev/null 2>&1 \
   || die "signature does not verify under the published key"
+openssl pkeyutl -verify -pubin -inkey "$PPEM" -rawin -in latest.json -sigfile latest.json.sig >/dev/null 2>&1 \
+  || die "latest.json signature does not verify under the published key"
 rm -f "$PDER" "$PPEM"
 
 cd "$SRC_REPO"

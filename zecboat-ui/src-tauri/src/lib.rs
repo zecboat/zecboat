@@ -244,6 +244,20 @@ async fn wallet_about() -> Result<serde_json::Value, String> {
     zecboat_core::wallet_about().await.map_err(|e| e.to_string())
 }
 
+/// The signed release note, if it names a newer version; `None` (silence) otherwise. Any
+/// error is also silence in the UI: the wallet never depends on the site (update.rs).
+#[tauri::command]
+async fn check_update() -> Result<Option<zecboat_core::update::UpdateInfo>, String> {
+    zecboat_core::update::check_update().await.map_err(|e| e.to_string())
+}
+
+/// Download, verify against the signed note, and hand to the system installer under the
+/// user's own authentication. The version is re-read from the note, not trusted from the UI.
+#[tauri::command]
+async fn install_update(version: String) -> Result<String, String> {
+    zecboat_core::update::install_update(&version).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 // Asked BEFORE a send, so the constraint can be explained rather than hit. A carrier is
 // exactly CARRIER_ZAT and cannot pay its own fee -- a wallet holding only carriers cannot
@@ -441,7 +455,8 @@ pub fn run() {
             registry_base, get_lineage_route, set_lineage_route, get_chain_source, set_chain_source, asset_send_estimate, asset_carrier_states, collect_lineage, lineage_outgoing, lineage_export, lineage_import, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, registry_scan_running, cached_artwork, audit_progress, audits_running, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_znfts, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, wallet_uses_yubikey, lock_wallet,
             create_new_account, backup_wallet, list_backups, restore_backup, rescan_from_height, export_keys, get_viewkey, check_yubikey,
-            get_roster, add_roster_contact, delete_roster_contact, validate_address
+            get_roster, add_roster_contact, delete_roster_contact, validate_address,
+            check_update, install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
