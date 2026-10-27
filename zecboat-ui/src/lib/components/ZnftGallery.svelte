@@ -199,7 +199,7 @@
   });
 </script>
 
-<div class="zsa-gallery card">
+<div class="znft-gallery card">
   <div class="asset-grid">
     {#each assets as asset}
       {@const n = splitName(asset.name)}

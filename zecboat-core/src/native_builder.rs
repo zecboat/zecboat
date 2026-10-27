@@ -242,7 +242,7 @@ fn lock_zmap_carriers(wallet_db: &mut Db, target_height: BlockHeight) -> Result<
         ));
     }
     if lineage_expected > 0 {
-        println!("[zsa] locked {lineage_expected} lineage note(s) carrying an asset chain without its memo");
+        println!("[znft] locked {lineage_expected} lineage note(s) carrying an asset chain without its memo");
     }
 
     Ok(locked)
@@ -801,9 +801,9 @@ pub fn send_zmap_asset(
         Ok(notes) if notes.ironwood().len() + notes.orchard().len() > 0 => notes,
         same_pool_result => {
             if let Err(ref e) = same_pool_result {
-                println!("[zsa] no fee notes in {:?} ({:?}); widening to {:?}", source_pool, e, other_pool);
+                println!("[znft] no fee notes in {:?} ({:?}); widening to {:?}", source_pool, e, other_pool);
             } else {
-                println!("[zsa] no fee notes in {:?}; widening to {:?}", source_pool, other_pool);
+                println!("[znft] no fee notes in {:?}; widening to {:?}", source_pool, other_pool);
             }
             select(&[source_pool, other_pool]).map_err(|e| {
                 anyhow!(
@@ -821,7 +821,7 @@ pub fn send_zmap_asset(
     // Say which pool paid, so the next time this misbehaves the log answers it directly
     // instead of requiring the balance error to be reverse-engineered.
     println!(
-        "[zsa] fee funded from {} ironwood + {} orchard note(s); carrier pool is {:?}",
+        "[znft] fee funded from {} ironwood + {} orchard note(s); carrier pool is {:?}",
         fee_notes.ironwood().len(),
         fee_notes.orchard().len(),
         source_pool
@@ -1027,12 +1027,12 @@ pub fn send_zmap_asset(
 
         match carrier_pairing(&candidate, &carrier_nf, &recipient_raw) {
             Pairing::Paired { action_index, successor_cmx } => {
-                println!("[zsa] carrier spend and carrier output share Action {action_index} (attempt {attempt})");
+                println!("[znft] carrier spend and carrier output share Action {action_index} (attempt {attempt})");
                 paired = Some((candidate, action_index, successor_cmx));
                 break;
             }
             Pairing::Mispaired { action_index } => {
-                println!("[zsa] attempt {attempt}: carrier spend in Action {action_index} was paired with change; rebuilding");
+                println!("[znft] attempt {attempt}: carrier spend in Action {action_index} was paired with change; rebuilding");
             }
             // An Orchard-pool carrier (pre-NU6.3) is spent in the Orchard bundle and its
             // successor is an Ironwood output, so the one-Action pairing of ZMAP §5.5 cannot
@@ -1045,7 +1045,7 @@ pub fn send_zmap_asset(
                          it can only be sent unproven"
                     ));
                 }
-                println!("[zsa] Orchard-pool carrier: no Action pairing is possible across bundles; sending unproven (attempt {attempt})");
+                println!("[znft] Orchard-pool carrier: no Action pairing is possible across bundles; sending unproven (attempt {attempt})");
                 paired = Some((candidate, usize::MAX, [0u8; 32]));
                 break;
             }
