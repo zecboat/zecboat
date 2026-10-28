@@ -28,6 +28,7 @@ are no automatic updates, and it handles real value on Zcash mainnet.
 
 - Holds and sends shielded ZEC on Zcash mainnet
 - Holds, verifies and transfers znfts
+- Fetches artwork from your own IPFS gateway first when you set one (Settings → Artwork), checked against the hash each unit carries (0.7.3)
 - Checks for its own next release under the pinned release key, and installs it only after verifying the package against the signed note (0.7.3)
 - Protects assets from being spent by accident — see [Asset carriers](#asset-carriers)
 - Proves transactions locally; **spending keys never leave your machine**

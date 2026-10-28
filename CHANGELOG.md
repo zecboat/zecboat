@@ -5,6 +5,23 @@ not the diff.
 
 ## 0.7.3-beta — unreleased
 
+### Your own IPFS gateway, in Settings (2026-10-28)
+
+- **Settings → Artwork: name your own IPFS gateway, and the wallet asks it first.** A unit
+  carries its picture's SHA-256; its IPFS address is computed from that. With a gateway set, the
+  wallet fetches artwork from it before zecboat.com (then zecboat.com's files, then zecboat.com's
+  `/ipfs/` path). Without one, nothing changes. Whatever answers, the picture is shown only if it
+  matches the hash: a gateway is trusted for availability, never for content.
+- One field, one "Use my own node" button (`http://127.0.0.1:8080`), Clear. Saving first checks
+  that a gateway answers, by asking for `bafkqaaa`, the empty identity address every gateway
+  serves without fetching anything, so the check reveals nothing about your units. Accepted:
+  `https://…` anywhere, or `http://127.0.0.1:<port>` on this machine (`localhost` is written as
+  127.0.0.1). Saved like the node choice and restored at start. `ZECBOAT_IPFS_GATEWAY`, set when
+  the wallet starts, still wins, and the screen says so.
+- Until now the variable was the only way to name a gateway, and it came after zecboat.com. Two
+  tests pin the new order and the address rules.
+
+
 ### Fees follow draft ZIP 2009 (2026-10-27)
 
 - **From mainnet height 3,590,000 the marginal fee is 1,000 zatoshis per logical action, not

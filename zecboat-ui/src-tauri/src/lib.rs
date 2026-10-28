@@ -380,6 +380,24 @@ async fn set_provider_url(url: String) -> Result<(), String> {
     zecboat_core::set_provider_url(url).await.map_err(|e| e.to_string())
 }
 
+/// The holder's own IPFS gateway (Settings → Artwork). Empty clears it. Refused while
+/// ZECBOAT_IPFS_GATEWAY is set at start.
+#[tauri::command]
+async fn set_ipfs_gateway(url: String) -> Result<Option<String>, String> {
+    zecboat_core::set_ipfs_gateway(url).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_ipfs_gateway() -> Result<serde_json::Value, String> {
+    zecboat_core::get_ipfs_gateway().await.map_err(|e| e.to_string())
+}
+
+/// Does an IPFS gateway answer at this URL? Returns the normalised URL.
+#[tauri::command]
+async fn probe_ipfs_gateway(url: String) -> Result<String, String> {
+    zecboat_core::probe_ipfs_gateway(url).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn get_provider_url() -> Result<String, String> {
     zecboat_core::get_provider_url().await.map_err(|e| e.to_string())
@@ -450,7 +468,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            sync_status, yubikey_message, set_provider_url, get_provider_url, get_balance, get_balance_breakdown, get_transparent_balance, send_transaction, get_addresses,
+            sync_status, yubikey_message, set_provider_url, get_provider_url, set_ipfs_gateway, get_ipfs_gateway, probe_ipfs_gateway, get_balance, get_balance_breakdown, get_transparent_balance, send_transaction, get_addresses,
             check_pending_broadcasts, resend_pending_broadcasts, release_expired_transactions, 
             registry_base, get_lineage_route, set_lineage_route, get_chain_source, set_chain_source, asset_send_estimate, asset_carrier_states, collect_lineage, lineage_outgoing, lineage_export, lineage_import, check_initialization_status, initialize_new_wallet, generate_new_address, import_wallet, recover_wallet_from_seed, get_collections, scan_collections, registry_scan_running, cached_artwork, audit_progress, audits_running, audit_collection, get_collection_audits, get_collection_holdings, get_transactions, get_transparent_address, get_invoices, add_invoice, get_znfts, view_asset, verify_asset_image, verify_issuance, verify_lineage, fetch_consignments, fee_readiness, wallet_about,
             sign_transaction_with_hardware, shield_transparent, unlock_wallet, wallet_uses_yubikey, lock_wallet,

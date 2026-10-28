@@ -87,6 +87,14 @@
       console.error("Could not restore the saved node endpoint:", e);
     }
 
+    // 0.7.3: the holder's own IPFS gateway, asked before zecboat.com for artwork (Settings → Artwork).
+    try {
+      const gw = localStorage.getItem("zecboat.ipfsGateway");
+      if (gw) invoke("set_ipfs_gateway", { url: gw }).catch(() => {});
+    } catch (e) {
+      console.error("Could not restore the saved IPFS gateway:", e);
+    }
+
     // 0.7.1: whether lineage travels in the transfer (Knotline) is a saved choice too.
     try {
       const route = localStorage.getItem("zecboat.lineage");

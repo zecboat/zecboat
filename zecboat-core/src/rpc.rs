@@ -3911,20 +3911,81 @@ fn base32_lower_nopad(data: &[u8]) -> String {
     out
 }
 
-/// After the registry's own paths: the same bytes by content address. First through the
-/// registry's `/ipfs/` gateway (zecboat.com serves what it pins; any host that pins the same
-/// identifier answers the same), then through a gateway the holder named in
-/// `ZECBOAT_IPFS_GATEWAY` (their own node on loopback, typically). Never a gateway we chose for
-/// them: a gateway learns which asset was opened and from where. The hash check that follows is
-/// unchanged, so a gateway is trusted for availability only.
-fn ipfs_candidate_urls(base: &str, image_sha256_hex: &str) -> Vec<String> {
-    let Some(cid) = image_cid_v1_raw(image_sha256_hex) else { return Vec::new() };
-    let mut v = vec![format!("{}/ipfs/{}", base, cid)];
-    if let Ok(gw) = std::env::var("ZECBOAT_IPFS_GATEWAY") {
-        let gw = gw.trim().trim_end_matches('/');
-        if !gw.is_empty() {
-            v.push(format!("{}/ipfs/{}", gw, cid));
-        }
+/// The holder's own IPFS gateway (0.7.3, Settings → Artwork), or none. Set at start from
+/// `ZECBOAT_IPFS_GATEWAY`, which then wins over the screen (the operator already chose); otherwise
+/// the screens restore the saved choice with `set_ipfs_gateway` on load, as they do the node.
+/// Never a gateway we chose for the holder: a gateway learns which unit was opened and from where.
+static IPFS_GATEWAY: Lazy<Mutex<Option<String>>> =
+    Lazy::new(|| Mutex::new(std::env::var("ZECBOAT_IPFS_GATEWAY").ok().and_then(|v| normalise_ipfs_gateway(&v).ok().flatten())));
+
+fn ipfs_gateway_from_env() -> bool {
+    std::env::var("ZECBOAT_IPFS_GATEWAY").map(|v| !v.trim().is_empty()).unwrap_or(false)
+}
+
+/// A gateway's base URL, or `None` for empty. https anywhere, or http on this machine's loopback
+/// (the holder's own node; `localhost` is written as 127.0.0.1 so the fetch rule accepts it).
+/// A trailing `/` or `/ipfs` is dropped: the wallet appends `/ipfs/<cid>` itself.
+pub fn normalise_ipfs_gateway(input: &str) -> Result<Option<String>> {
+    let mut s = input.trim().trim_end_matches('/').to_string();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    if let Some(rest) = s.strip_prefix("http://localhost") {
+        s = format!("http://127.0.0.1{rest}");
+    }
+    if let Some(stripped) = s.strip_suffix("/ipfs") {
+        s = stripped.trim_end_matches('/').to_string();
+    }
+    let ok = s.starts_with("https://") || s.starts_with("http://127.0.0.1:") || s == "http://127.0.0.1";
+    if !ok {
+        anyhow::bail!("a gateway must be https://…, or http://127.0.0.1:<port> for a node on this machine");
+    }
+    if s.contains(char::is_whitespace) {
+        anyhow::bail!("a gateway URL has no spaces");
+    }
+    Ok(Some(s))
+}
+
+/// Save the holder's gateway (empty clears it). Refused while `ZECBOAT_IPFS_GATEWAY` is set.
+pub async fn set_ipfs_gateway(url: String) -> Result<Option<String>> {
+    if ipfs_gateway_from_env() {
+        anyhow::bail!("set by ZECBOAT_IPFS_GATEWAY when the wallet started; that setting wins");
+    }
+    let g = normalise_ipfs_gateway(&url)?;
+    *IPFS_GATEWAY.lock().unwrap() = g.clone();
+    Ok(g)
+}
+
+/// The gateway in use and whether it came from the environment.
+pub async fn get_ipfs_gateway() -> Result<Value> {
+    Ok(serde_json::json!({ "gateway": IPFS_GATEWAY.lock().unwrap().clone(), "from_env": ipfs_gateway_from_env() }))
+}
+
+/// Does a gateway answer at this URL? Asks for `bafkqaaa`, the empty identity address: every IPFS
+/// gateway serves it from the address alone, without fetching anything, so a node that only
+/// serves its own pins answers too, and nothing about the holder's units is revealed.
+pub async fn probe_ipfs_gateway(url: String) -> Result<String> {
+    let g = normalise_ipfs_gateway(&url)?.ok_or_else(|| anyhow::anyhow!("no gateway given"))?;
+    registry_fetch(&format!("{g}/ipfs/bafkqaaa"), 64)
+        .await
+        .map_err(|e| anyhow::anyhow!("no IPFS gateway answered at {g}: {e}"))?;
+    Ok(g)
+}
+
+/// Every URL to try for a unit's artwork, in order. The holder's gateway first, when one is set
+/// (0.7.3): the holder's own node, then the registry's plain files, then the registry's `/ipfs/`
+/// path. Without one: the registry's files, then its `/ipfs/` path. The address is derived from the
+/// SHA-256 the unit carries; the hash check that follows is unchanged, so every source is trusted
+/// for availability only.
+fn artwork_candidates(base: &str, asset_id: &str, image_sha256_hex: &str, gateway: Option<&str>) -> Vec<String> {
+    let cid = image_cid_v1_raw(image_sha256_hex);
+    let mut v = Vec::new();
+    if let (Some(gw), Some(cid)) = (gateway, cid.as_deref()) {
+        v.push(format!("{gw}/ipfs/{cid}"));
+    }
+    v.extend(artwork_candidate_urls(base, asset_id));
+    if let Some(cid) = cid {
+        v.push(format!("{base}/ipfs/{cid}"));
     }
     v
 }
@@ -4060,8 +4121,8 @@ pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
     let mut found: Option<(String, String, bytes::Bytes)> = None;
     let mut first_unverified: Option<(String, String, bytes::Bytes)> = None;
 
-    let mut candidates = artwork_candidate_urls(&registry_base(), &asset_id);
-    candidates.extend(ipfs_candidate_urls(&registry_base(), &expected));
+    let gateway = IPFS_GATEWAY.lock().unwrap().clone();
+    let candidates = artwork_candidates(&registry_base(), &asset_id, &expected, gateway.as_deref());
     for url in candidates {
         let (content_type, body) = match registry_fetch(&url, MAX_ARTWORK_BYTES).await {
             Ok(r) => r,
@@ -4948,17 +5009,36 @@ mod tests {
     }
 
     #[test]
-    fn ipfs_candidates_follow_the_registry_and_name_the_holders_gateway_last() {
+    fn artwork_candidates_ask_the_holders_gateway_first_when_one_is_set() {
         let h = "66da2bb6b99707ed09bddcd1777299a0acfc97079684e79278a5b6934099ecf0";
-        std::env::remove_var("ZECBOAT_IPFS_GATEWAY");
-        let v = super::ipfs_candidate_urls("https://zecboat.com", h);
-        assert_eq!(v, vec!["https://zecboat.com/ipfs/bafkreidg3iv3nomxa7wqtpo42f3xfgnavt6job4wqttze6ffw2jubgpm6a".to_string()]);
-        std::env::set_var("ZECBOAT_IPFS_GATEWAY", "http://127.0.0.1:8080/");
-        let v = super::ipfs_candidate_urls("https://zecboat.com", h);
-        std::env::remove_var("ZECBOAT_IPFS_GATEWAY");
-        assert_eq!(v.len(), 2);
-        assert_eq!(v[1], "http://127.0.0.1:8080/ipfs/bafkreidg3iv3nomxa7wqtpo42f3xfgnavt6job4wqttze6ffw2jubgpm6a");
-        assert!(super::ipfs_candidate_urls("https://zecboat.com", "nope").is_empty());
+        let cid = "bafkreidg3iv3nomxa7wqtpo42f3xfgnavt6job4wqttze6ffw2jubgpm6a";
+        let id = "aa".repeat(32);
+        // No gateway: the registry's four file names, then its /ipfs/ path.
+        let v = super::artwork_candidates("https://zecboat.com", &id, h, None);
+        assert_eq!(v.len(), 5);
+        assert!(v[0].starts_with("https://zecboat.com/collection/"));
+        assert_eq!(v[4], format!("https://zecboat.com/ipfs/{cid}"));
+        // With the holder's gateway: it comes first, zecboat.com after.
+        let v = super::artwork_candidates("https://zecboat.com", &id, h, Some("http://127.0.0.1:8080"));
+        assert_eq!(v.len(), 6);
+        assert_eq!(v[0], format!("http://127.0.0.1:8080/ipfs/{cid}"));
+        assert_eq!(v[5], format!("https://zecboat.com/ipfs/{cid}"));
+        // An image hash that is not one gives no content address, only the registry's files.
+        assert_eq!(super::artwork_candidates("https://zecboat.com", &id, "nope", Some("https://g.example")).len(), 4);
+    }
+
+    #[test]
+    fn gateway_urls_are_https_or_this_machines_loopback() {
+        use super::normalise_ipfs_gateway as n;
+        assert_eq!(n("").unwrap(), None);
+        assert_eq!(n("  ").unwrap(), None);
+        assert_eq!(n("http://127.0.0.1:8080/").unwrap().as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(n("http://localhost:8080").unwrap().as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(n("https://ipfs.example.org/ipfs/").unwrap().as_deref(), Some("https://ipfs.example.org"));
+        assert_eq!(n("https://zecboat.com/ipfs").unwrap().as_deref(), Some("https://zecboat.com"));
+        for bad in ["http://192.168.0.5:8080", "ipfs://bafkqaaa", "ftp://x", "http://example.org", "https://a b"] {
+            assert!(n(bad).is_err(), "{bad} must be refused");
+        }
     }
 
     use super::*;
