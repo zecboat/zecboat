@@ -1,6 +1,6 @@
 [package]
 name = "zecboat-ui"
-version = "0.7.2"
+version = "0.7.3"
 description = "Shielded Zcash wallet for znfts (ZMAP shielded objects)"
 authors = ["Zecboat <speed@zecboat.com>"]
 edition = "2021"

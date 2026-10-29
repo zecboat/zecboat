@@ -97,7 +97,7 @@ not the diff.
   carried by its 0.00010000 ZEC note" and "A unit travels with its own memo; a message cannot
   be attached", and sends the neutral values (0, empty) the core expects. ZEC path unchanged.
 
-## 0.7.2-beta — unreleased
+## 0.7.2-beta — 2026-10-22 *(staged, never published — see 0.7.3-beta)*
 
 ### NU7 (2026-10-22)
 

@@ -8196,7 +8196,7 @@ dependencies = [
 
 [[package]]
 name = "zecboat-core"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "age",
  "anyhow",
@@ -8241,7 +8241,7 @@ dependencies = [
 
 [[package]]
 name = "zecboat-ui"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "serde",
  "serde_json",
