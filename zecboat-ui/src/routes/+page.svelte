@@ -179,7 +179,9 @@
     <!-- Main Content Area -->
     <main class="main-content">
       <header class="top-bar">
-        <h2>{currentView}</h2>
+        <!-- The znft page carries its own heading ("Zec Non Fungible Thing"); the bar shows no
+             second one there (owner, 2026-10-29). The element stays so the lock button keeps its place. -->
+        <h2>{currentView === 'znfts' ? '' : currentView}</h2>
         <div class="user-profile">
           <UpgradeNotice compact />
           <button class="lock-btn" onclick={handleLock} title="Lock Wallet">🔒</button>
