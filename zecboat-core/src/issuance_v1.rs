@@ -39,6 +39,7 @@ pub const PINNED_V1: &[(&str, &str, &str)] = &[
     ("Lagos Post Card", "e9be4cf91390aba0740ce108a0c2f390d1610ef5c77ede09b445e888fd79b590", "issuance/lpc_issuance_manifest.json"),
     ("Happy Birthday Zcash 10", "1ba0bd2f1a1891d616ce912b5e02c38069a9ec87d6b33769bdd8a00741ce1fa0", "issuance/hbd10_issuance_manifest.json"),
     ("Barcelona Post Card 2026", "d289030848144bc321be1030051f90dbf170f0c6752ab8dbf6ed029658d1a820", "issuance/bcn26_issuance_manifest.json"),
+    ("The Crossing", "5913127988cecf46ba838d1bfb02360d86295443e1fed1ac84d56442632c4b17", "issuance/wwav1_issuance_manifest.json"),
 ];
 
 /// The Zecboat Registry (created 2026-09-27, `~/zecboat_registry/ZECBOAT_REGISTRY.md`): the one
@@ -287,6 +288,7 @@ pub const SEEDS: &[Seed] = &[
     Seed { label: "Lagos Post Card", ik: "e9be4cf91390aba0740ce108a0c2f390d1610ef5c77ede09b445e888fd79b590", manifest: include_bytes!("../pinned/lpc_issuance_manifest.json"), signature: include_bytes!("../pinned/lpc_issuance_manifest.sig") },
     Seed { label: "Happy Birthday Zcash 10", ik: "1ba0bd2f1a1891d616ce912b5e02c38069a9ec87d6b33769bdd8a00741ce1fa0", manifest: include_bytes!("../pinned/hbd10_issuance_manifest.json"), signature: include_bytes!("../pinned/hbd10_issuance_manifest.sig") },
     Seed { label: "Barcelona Post Card 2026", ik: "d289030848144bc321be1030051f90dbf170f0c6752ab8dbf6ed029658d1a820", manifest: include_bytes!("../pinned/bcn26_issuance_manifest.json"), signature: include_bytes!("../pinned/bcn26_issuance_manifest.sig") },
+    Seed { label: "The Crossing", ik: "5913127988cecf46ba838d1bfb02360d86295443e1fed1ac84d56442632c4b17", manifest: include_bytes!("../pinned/wwav1_issuance_manifest.json"), signature: include_bytes!("../pinned/wwav1_issuance_manifest.sig") },
 ];
 
 /// The ik of the pinned collection whose manifest (chain copy, or built-in seed) lists

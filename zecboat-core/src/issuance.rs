@@ -3,7 +3,7 @@
 //! Answers one question: **did the issuer this asset names actually create this design?**
 //! The checks are `issuance_v1`'s (identity v1: a BIP-340 `ik`, a signed proof-of-issuance
 //! manifest held by this wallet, the genesis output on chain with the stated commitment),
-//! against the three collections pinned in this build or a collection audited from the
+//! against the collections pinned in this build or a collection audited from the
 //! Zecboat Registry. Nothing is fetched from zecboat.com.
 //!
 //! Until 2026-10-09 this module also carried the pre-v1 path (ed25519 keys, a disclosure

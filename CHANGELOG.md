@@ -5,6 +5,17 @@ not the diff.
 
 ## 0.7.3-beta — unreleased
 
+### The Crossing is pinned (2026-10-29)
+
+- **Whalewave chapter 1, The Crossing (WWAV1), is a collection this build knows.** Its issuer
+  key (`59131279…4b17`) and its signed proof-of-issuance manifest are built in beside Lagos Post
+  Card, Happy Birthday Zcash 10 and Barcelona Post Card 2026, so its ten units can show Design
+  Verified with no network and nothing from zecboat.com. Minted at height 3,534,613, closed at
+  3,534,619, registered at 3,534,623. Built 0.7.2 wallets read it only through the Zecboat
+  Registry, as registered, never green.
+- Each of its manifest entries also carries `image_ipfs`, the `ipfs://` address of the page,
+  computed from the same SHA-256 the wallet already checks.
+
 ### Your own IPFS gateway, in Settings (2026-10-28)
 
 - **Settings → Artwork: name your own IPFS gateway, and the wallet asks it first.** A unit

@@ -1,0 +1,158 @@
+{
+  "assets": [
+    {
+      "asset_desc": "zmap-desc-v1|The Crossing|1|The Crossing #001|WWAV1|c2e617a0623b499ed719b7585798244a26e8d65deb3a03a4012eccc1e98dd5d8",
+      "asset_id": "f4d9d45b9a4a1e2bbb7d48fa40a558a1d6b08da161511ea5cb8f19e8e67a0153",
+      "image": "/collection/f4d9d45b9a4a1e2bbb7d48fa40a558a1d6b08da161511ea5cb8f19e8e67a0153.jpg",
+      "image_ipfs": "ipfs://bafkreigc4yl2ayr3jgpnognxlblzqjcke3unmxplhib2iajozta6tdov3a",
+      "image_sha256": "c2e617a0623b499ed719b7585798244a26e8d65deb3a03a4012eccc1e98dd5d8",
+      "issuance": {
+        "action_index": 5,
+        "cmx": "bb88fd23e3d9bce8a1e8583777644620f517197ab6d15642c3af48daa2e4db06",
+        "height": 3534613,
+        "txid": "01d6ce0665cf716c2654ab0b86b456e14ad4f1d844d8de11af109f4e8fb97d73"
+      },
+      "name": "The Crossing #001"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|The Crossing|2|The Crossing #002|WWAV1|52cb455eba64b757aef50b40a844c4ebbe6980b5236a4bede84b6613e04c10c6",
+      "asset_id": "e1deb8fb3a1ada24651f1b94ddfebf6d47525edea0246a01fd6e922f9efb8e29",
+      "image": "/collection/e1deb8fb3a1ada24651f1b94ddfebf6d47525edea0246a01fd6e922f9efb8e29.jpg",
+      "image_ipfs": "ipfs://bafkreicszncv5otew5l255ilicuejrhlxzuybnjdnjf632clmyj6ataqyy",
+      "image_sha256": "52cb455eba64b757aef50b40a844c4ebbe6980b5236a4bede84b6613e04c10c6",
+      "issuance": {
+        "action_index": 9,
+        "cmx": "5b9835d83a9083a8822ed64fa5086c75e689b5ddbeaa7e3c4db033ea5053cb15",
+        "height": 3534613,
+        "txid": "01d6ce0665cf716c2654ab0b86b456e14ad4f1d844d8de11af109f4e8fb97d73"
+      },
+      "name": "The Crossing #002"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|The Crossing|3|The Crossing #003|WWAV1|c05d48746333edfaf19c41e8592736030e2aa3f386b179909d8823b4fb5f792a",
+      "asset_id": "bc5dbe7650536346d1289cb8f966e159beeec8542a3bd9c8a5a79c682d4af490",
+      "image": "/collection/bc5dbe7650536346d1289cb8f966e159beeec8542a3bd9c8a5a79c682d4af490.jpg",
+      "image_ipfs": "ipfs://bafkreigalvehiyzt5x5pdhcb5bmsonqdbyvkh44gwf4zbhmieo2pwx3zfi",
+      "image_sha256": "c05d48746333edfaf19c41e8592736030e2aa3f386b179909d8823b4fb5f792a",
+      "issuance": {
+        "action_index": 4,
+        "cmx": "64d2adf2a2ef45ad1cb32c9989d5309af8d90aec82a0efedac15868ef64a6930",
+        "height": 3534613,
+        "txid": "01d6ce0665cf716c2654ab0b86b456e14ad4f1d844d8de11af109f4e8fb97d73"
+      },
+      "name": "The Crossing #003"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|The Crossing|4|The Crossing #004|WWAV1|d35e2626fdb8e19a24cf4afa752e26ececec419168775f0f91246fdd3167b164",
+      "asset_id": "06262739023060a655cbca62a8d3728be94233236f464540c4e67ca5a3648ed3",
+      "image": "/collection/06262739023060a655cbca62a8d3728be94233236f464540c4e67ca5a3648ed3.jpg",
+      "image_ipfs": "ipfs://bafkreigtlytcn7ny4gncjt2k7j2s4jxm5twedelio5pq7ejen7otcz5rmq",
+      "image_sha256": "d35e2626fdb8e19a24cf4afa752e26ececec419168775f0f91246fdd3167b164",
+      "issuance": {
+        "action_index": 6,
+        "cmx": "21424bb5b388a759dd73a3667b393ef92582b8e7c78a556a559e61a3ee9b8b2f",
+        "height": 3534613,
+        "txid": "01d6ce0665cf716c2654ab0b86b456e14ad4f1d844d8de11af109f4e8fb97d73"
+      },
+      "name": "The Crossing #004"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|The Crossing|5|The Crossing #005|WWAV1|837f1bfa6e193162035fe30a7e2ad4cde9108ef07c4c308c44abba02de36ad19",
+      "asset_id": "6ad1c833322fc77019ef3918278f39af793edcf0c49b78759b76d38fdaf79854",
+      "image": "/collection/6ad1c833322fc77019ef3918278f39af793edcf0c49b78759b76d38fdaf79854.jpg",
+      "image_ipfs": "ipfs://bafkreiedp4n7u3qzgfragx7dbj7cvvgn5eii54d4jqyiyrflxibn4nvnde",
+      "image_sha256": "837f1bfa6e193162035fe30a7e2ad4cde9108ef07c4c308c44abba02de36ad19",
+      "issuance": {
+        "action_index": 0,
+        "cmx": "d0a2f16978701c6c78ef6a4dc483b168faa1ab3eb5e37336220478a8bb07e537",
+        "height": 3534613,
+        "txid": "01d6ce0665cf716c2654ab0b86b456e14ad4f1d844d8de11af109f4e8fb97d73"
+      },
+      "name": "The Crossing #005"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|The Crossing|6|The Crossing #006|WWAV1|4da7a97a2f2351b54a4766dd94ba842a06383c077b14bb50419bbeeffe0b5ef5",
+      "asset_id": "d1f34f77fd894fa2a5532d6cbaf4e25e6bb2d3a751fda32bdaf887731c6c24c9",
+      "image": "/collection/d1f34f77fd894fa2a5532d6cbaf4e25e6bb2d3a751fda32bdaf887731c6c24c9.jpg",
+      "image_ipfs": "ipfs://bafkreicnu6uxulzdkg2uur3g3wklvbbkay4dyb33cs5vaqm3x3x74c266u",
+      "image_sha256": "4da7a97a2f2351b54a4766dd94ba842a06383c077b14bb50419bbeeffe0b5ef5",
+      "issuance": {
+        "action_index": 1,
+        "cmx": "365640bbc735deb03086571c6398ad5aa8d3912d334055885662c4711b7ad735",
+        "height": 3534613,
+        "txid": "01d6ce0665cf716c2654ab0b86b456e14ad4f1d844d8de11af109f4e8fb97d73"
+      },
+      "name": "The Crossing #006"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|The Crossing|7|The Crossing #007|WWAV1|2b3fe11dcfa234fdc6d3b40079adfcb3c27ed5aacdb7a4e53c5ee2e724350eff",
+      "asset_id": "db6f4dec8c110bb7455cef9bceefb93519f4ad8f9782d366f8b6c49b6c61eb9f",
+      "image": "/collection/db6f4dec8c110bb7455cef9bceefb93519f4ad8f9782d366f8b6c49b6c61eb9f.jpg",
+      "image_ipfs": "ipfs://bafkreiblh7qr3t5cgt64nu5uab4237ftyj7nlkwnw6sokpc64ltsinio74",
+      "image_sha256": "2b3fe11dcfa234fdc6d3b40079adfcb3c27ed5aacdb7a4e53c5ee2e724350eff",
+      "issuance": {
+        "action_index": 8,
+        "cmx": "2dac31d2c7a4230bf97a748cb54b168425ddac6f4cb8612bf09fc98a88198e32",
+        "height": 3534613,
+        "txid": "01d6ce0665cf716c2654ab0b86b456e14ad4f1d844d8de11af109f4e8fb97d73"
+      },
+      "name": "The Crossing #007"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|The Crossing|8|The Crossing #008|WWAV1|a0e30a4c4639a046510072ff73d60efde5f189fbbdc8607724caf8a08b75e0b8",
+      "asset_id": "b44f36d569d7db18c441a3b6fa93349353514d8201f9916fe837907f67730eef",
+      "image": "/collection/b44f36d569d7db18c441a3b6fa93349353514d8201f9916fe837907f67730eef.jpg",
+      "image_ipfs": "ipfs://bafkreifa4mfeyrrzubdfcads75z5mdx54xyyt655zbqhojgk7cqiw5paxa",
+      "image_sha256": "a0e30a4c4639a046510072ff73d60efde5f189fbbdc8607724caf8a08b75e0b8",
+      "issuance": {
+        "action_index": 2,
+        "cmx": "b29a770ba9df4ee33d5f836989463478e936eaee588739c6485b830011e25b25",
+        "height": 3534613,
+        "txid": "01d6ce0665cf716c2654ab0b86b456e14ad4f1d844d8de11af109f4e8fb97d73"
+      },
+      "name": "The Crossing #008"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|The Crossing|9|The Crossing #009|WWAV1|a64d3b977ee50bad30bfe37cb72ded7f95ee4a0ead1428bc2631ec2dd50cae4d",
+      "asset_id": "ee631dd46545da5c87553fae5a02473f969cff771886da2ae0b5fb62fa4268d9",
+      "image": "/collection/ee631dd46545da5c87553fae5a02473f969cff771886da2ae0b5fb62fa4268d9.jpg",
+      "image_ipfs": "ipfs://bafkreifgju5zo7xfbowtbp7dps3s33l7sxxeudvncqulyjrr5qw5kdfoju",
+      "image_sha256": "a64d3b977ee50bad30bfe37cb72ded7f95ee4a0ead1428bc2631ec2dd50cae4d",
+      "issuance": {
+        "action_index": 3,
+        "cmx": "651870792babeecf2826169041dd1aed7eeeee6df32e9e475488649f2952a104",
+        "height": 3534613,
+        "txid": "01d6ce0665cf716c2654ab0b86b456e14ad4f1d844d8de11af109f4e8fb97d73"
+      },
+      "name": "The Crossing #009"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|The Crossing|10|The Crossing #010|WWAV1|37ebc8a119c8bd2b9a4ea8033ac542a2bc8eba240c9e0cee106b939e574b740e",
+      "asset_id": "3e3895e4a6dd71e0890258e12c58f412a89ffd931d84b911f66d7c978e6be59b",
+      "image": "/collection/3e3895e4a6dd71e0890258e12c58f412a89ffd931d84b911f66d7c978e6be59b.jpg",
+      "image_ipfs": "ipfs://bafkreibx5pekcgoixuvzutviam5mkqvcxshlujamtygo4edlsopfos3uby",
+      "image_sha256": "37ebc8a119c8bd2b9a4ea8033ac542a2bc8eba240c9e0cee106b939e574b740e",
+      "issuance": {
+        "action_index": 7,
+        "cmx": "59c1b395944bf66b00274c24948017f925b3ff3c79b698a55a31f9d0bfb6a409",
+        "height": 3534613,
+        "txid": "01d6ce0665cf716c2654ab0b86b456e14ad4f1d844d8de11af109f4e8fb97d73"
+      },
+      "name": "The Crossing #010"
+    }
+  ],
+  "generation": 1,
+  "identity": {
+    "ik": "5913127988cecf46ba838d1bfb02360d86295443e1fed1ac84d56442632c4b17",
+    "issuance_ufvk": "uview13ts35n9q55pwvn9mfnrxpa5p78k5340xxrr6cxm2vqecls8mmc73pq80hwaemmvj2s5ne4cv9zasnhlh8kq02p6gmptzspq8dkk9h0qmmp0zr5y542lrz5qft2s288jc3uutqs3x0r234zk594k4caawkwgkcvxwkyylfuz3s0a52vzsflk3lcs37jk3jlw76drz92vu2u7gm9tgjykeptnweah6qtaen8pfml27azu4266ek4az6nnf8s8qcm3tktxjreydslgz9t2f9mg2crxaym7cut4z4lle7wg5t7y0fyjw53d3as0dz3dr4vlzvwmg5cs34euep34v0wqcuaan3zna5dlkunzrgxrq0gt8en065tulp5zlmm3kptw0naqqayc76vvjx",
+    "scheme": "zmap-asset-id-v1",
+    "signature": "bip340"
+  },
+  "issued_at": 1793270257,
+  "issuer": {
+    "collection": "The Crossing",
+    "name": "Zecboat"
+  },
+  "network": "main",
+  "schema": "zecboat-proof-of-issuance/2"
+}
