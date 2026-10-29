@@ -5,6 +5,20 @@ not the diff.
 
 ## 0.7.3-beta — unreleased
 
+### A znft opens as a page (2026-10-29)
+
+- **Click a unit and you get the picture, not a form.** The unit opens near the full window with
+  its name as the title and its artwork as large as the window allows, whole and never cropped:
+  a comic page reads like a comic page. Under it, one line of three marks, the same three verdicts
+  as before, one word each: artwork, issuer, lineage. They stay three marks and never become one
+  tick. **Details** opens everything the box used to show first: the three badges with their check
+  lists and caveats, then the metadata table; nothing was removed. **Send this unit** opens the
+  Send page with the type and this asset id already filled in.
+- The znfts page is headed **Zec Non Fungible Things**; the navigation entry stays "znfts".
+- Send: the type reads "znft (shielded)", not "znft (shielded object)". Internal value unchanged.
+- The artwork cache beside the wallet (`artwork/`, new in 0.7.3) is now owner-only like every
+  other wallet file; the test wallet showed it world-readable.
+
 ### The Crossing is pinned (2026-10-29)
 
 - **Whalewave chapter 1, The Crossing (WWAV1), is a collection this build knows.** Its issuer

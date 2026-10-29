@@ -7,17 +7,20 @@
   let { 
     initialAssetType = "ZEC", 
     initialToAddress = "", 
-    initialAmount = "", 
-    initialMemo = ""
+    initialAmount = "",
+    initialMemo = "",
+    initialAssetId = ""
   } = $props<{
     initialAssetType?: string,
+    initialAssetId?: string,
     initialToAddress?: string,
     initialAmount?: string,
     initialMemo?: string
   }>();
 
   let assetType = $state(initialAssetType);
-  let fromAddress = $state("");
+  // 0.7.3: filled in by "Send this unit" on the unit's page; typed here otherwise.
+  let fromAddress = $state(initialAssetId);
   $effect(() => {
     // 0.7.2: an asset id entered for a znft send must not linger behind a ZEC send.
     if (assetType === "ZEC" && fromAddress) fromAddress = "";
@@ -58,6 +61,7 @@
 
   $effect(() => {
     assetType = initialAssetType;
+    fromAddress = initialAssetId;
     toAddress = initialToAddress;
     amount = initialAmount;
     memo = initialMemo;
@@ -427,7 +431,7 @@
         <label for="asset-type">What to send</label>
         <select id="asset-type" bind:value={assetType}>
           <option value="ZEC">ZEC</option>
-          <option value="znft">znft (shielded object)</option>
+          <option value="znft">znft (shielded)</option>
         </select>
       </div>
 

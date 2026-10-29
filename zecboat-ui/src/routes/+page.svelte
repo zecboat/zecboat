@@ -23,6 +23,7 @@
   
   let sendProps = $state<{
     initialAssetType?: string,
+    initialAssetId?: string,
     initialToAddress?: string,
     initialAmount?: string,
     initialMemo?: string
@@ -30,6 +31,13 @@
 
   function setView(view: string) {
     currentView = view;
+  }
+
+  // 0.7.3: "Send this unit" on a unit's page opens Send with the type and the asset id filled
+  // in, so the id is never copied by hand.
+  function sendUnit(assetId: string) {
+    sendProps = { initialAssetType: "znft", initialAssetId: assetId };
+    setView("Send");
   }
 
   // A global handler to parse zecboat:// URIs
@@ -196,7 +204,7 @@
             <TransactionHistory onViewAll={() => setView('Transactions')} />
           </div>
           <div class="side-col">
-            <ZnftGallery />
+            <ZnftGallery onSend={sendUnit} />
           </div>
         {:else if currentView === 'Send'}
           <div class="full-col">
@@ -210,7 +218,7 @@
           <TransactionsView />
         {:else if currentView === 'znfts'}
           <div class="full-col">
-            <ZnftGallery />
+            <ZnftGallery title="Zec Non Fungible Things" onSend={sendUnit} />
           </div>
         <!-- Invoices removed from the navigation when the in-wallet market was withdrawn
              before release; this branch has been unreachable since, and its two buttons were

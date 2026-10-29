@@ -4045,7 +4045,9 @@ const MAX_ARTWORK_BYTES: usize = 8 * 1024 * 1024;
 /// Where verified artwork is kept, beside the wallet: one file per image hash.
 fn artwork_cache_dir() -> Result<std::path::PathBuf> {
     let dir = crate::paths::app_data_dir()?.join("artwork");
-    std::fs::create_dir_all(&dir)?;
+    // Owner-only like everything else beside the wallet (0.7.2 fix-list P1); the 0.7.3 test
+    // wallet showed this folder 775 and its files 664 (2026-10-29).
+    crate::paths::create_private_dir(&dir)?;
     Ok(dir)
 }
 
@@ -4219,7 +4221,7 @@ pub async fn verify_asset_image(asset_id: String) -> Result<Value> {
         // picture vanished each time the holder came back (owner, 2026-10-10). Content-named,
         // so a read re-hashes the file and never trusts a name.
         if let Ok(dir) = artwork_cache_dir() {
-            let _ = std::fs::write(dir.join(format!("{}.img", expected.to_ascii_lowercase())), &bytes);
+            let _ = crate::paths::write_private(dir.join(format!("{}.img", expected.to_ascii_lowercase())), &bytes);
         }
         use base64::Engine;
         Some(format!(

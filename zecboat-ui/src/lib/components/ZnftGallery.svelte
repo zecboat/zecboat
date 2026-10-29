@@ -95,6 +95,36 @@
   let verifyError = $state<string | null>(null);
   let isVerifying = $state(false);
 
+  // 0.7.3: a unit opens as a page, not a form (owner, 2026-10-29: "users are not paying for a
+  // tiny image and loads of computer text"). The artwork fills the window; the three verdicts
+  // are three marks on one line, never merged into one (§12.1); every badge, check line, caveat
+  // and metadata row is behind Details, one click away, unchanged. `title` is the page heading
+  // when the gallery is the whole page; `onSend` opens the Send page with this unit filled in.
+  let { title = null, onSend = null }: { title?: string | null; onSend?: ((assetId: string) => void) | null } = $props();
+  let showDetails = $state(false);
+  let selectedName = $derived(assets.find((a) => a.asset_id === selectedAssetId)?.name ?? "znft");
+  // [mark, colour class, title]. The colours and words are the badges' own, one word each.
+  let artworkMark = $derived<[string, string, string]>(
+    isVerifying ? ["…", "checking", "checking the artwork against the memo"]
+    : verification?.verified ? ["✓", "ok", "artwork matches the memo's commitment"]
+    : verification ? ["✕", "bad", "artwork does NOT match the memo"]
+    : verifyError ? ["?", "unknown", "artwork could not be verified"]
+    : ["·", "neutral", "no artwork"]);
+  let issuerMark = $derived<[string, string, string]>(
+    isCheckingIssuance ? ["…", "checking", "checking issuance against a pinned issuer key"]
+    : badge?.state === "verified" ? (wake?.state === "verified" && badge.pinned ? ["✓", "ok", `issued by ${badge.issuer}`] : ["▫", "neutral", `design registered by ${badge.issuer}`])
+    : badge?.state === "not_listed" || badge?.state === "signature_failed" ? ["✕", "bad", "issuance check failed"]
+    : badge?.state === "could_not_check" ? ["?", "unknown", "issuance could not be checked"]
+    : ["·", "neutral", "collection not known to this wallet"]);
+  let lineageMark = $derived<[string, string, string]>(
+    isCheckingLineage ? ["…", "checking", "verifying lineage"]
+    : wake?.state === "verified" ? ["✓", WAKE_REVIEWED ? "ok" : "amber", "lineage checks out on your own node"]
+    : wake?.state === "provider_checked" ? ["◐", "provider", "lineage checks out, by your provider's word"]
+    : wake?.state === "no_wake" ? ["◌", "amber", "no lineage proof held"]
+    : wake?.state === "broken" ? ["✕", "bad", "lineage proof is broken"]
+    : wake ? ["?", "unknown", "lineage could not be verified right now"]
+    : ["·", "neutral", "no lineage"]);
+
   // Card artwork, keyed by asset id, as hash-verified data: URIs from verify_asset_image.
   //
   // Cards used to build `${registryBase}/collection/${id}.png` client-side. That guessed the
@@ -132,6 +162,7 @@
 
   async function showAssetDetails(assetId: string) {
     selectedAssetId = assetId;
+    showDetails = false;
     isLoadingMetadata = true;
     isVerifying = true;
     verification = null;
@@ -200,6 +231,9 @@
 </script>
 
 <div class="znft-gallery card">
+  {#if title}
+    <div class="header"><h2>{title}</h2></div>
+  {/if}
   <div class="asset-grid">
     {#each assets as asset}
       {@const n = splitName(asset.name)}
@@ -243,18 +277,40 @@
     <div class="modal-backdrop" onclick={closeDetails}>
       <div class="modal-content" onclick={(e) => e.stopPropagation()}>
         <div class="modal-header">
-          <h3>Asset Metadata</h3>
+          <h3>{selectedName}</h3>
           <button class="close-btn" onclick={closeDetails}>✕</button>
         </div>
         <div class="modal-body">
+          <!-- The page: the artwork as large as the window allows, whole and never cropped. These
+               are the bytes that were hashed (check 6). Rendering the remote URL again here would
+               display something nobody checked, so until the check passes the frame stays empty. -->
+          <div class="reader-image">
+            {#if verification?.verified && verification.image}
+              <img src={verification.image} alt={selectedName} />
+            {:else if isVerifying}
+              <span class="reader-empty">Verifying the artwork against the memo…</span>
+            {:else}
+              <span class="reader-empty">No verified artwork to show. Details says why.</span>
+            {/if}
+          </div>
+          <!-- Three marks, never one: artwork, issuer, lineage (§12.1). Words are in Details. -->
+          <div class="reader-bar">
+            <span class="marks">
+              <span class="mark {artworkMark[1]}" title={artworkMark[2]}>{artworkMark[0]} artwork</span>
+              <span class="mark {issuerMark[1]}" title={issuerMark[2]}>{issuerMark[0]} issuer</span>
+              <span class="mark {lineageMark[1]}" title={lineageMark[2]}>{lineageMark[0]} lineage</span>
+            </span>
+            <span class="reader-actions">
+              <button class="btn secondary" onclick={() => { showDetails = !showDetails; }}>{showDetails ? 'Hide details' : 'Details'}</button>
+              {#if onSend && selectedAssetId}
+                <button class="btn" onclick={() => { const id = selectedAssetId!; closeDetails(); onSend(id); }}>Send this unit</button>
+              {/if}
+            </span>
+          </div>
+          {#if showDetails}
           {#if isVerifying}
             <div class="verify-badge checking">Verifying artwork against the memo…</div>
           {:else if verification?.verified && verification.image}
-            <div class="modal-image-container">
-              <!-- These are the bytes that were hashed. Rendering the remote URL again here would
-                   display something nobody checked. -->
-              <img src={verification.image} alt={selectedAssetId ?? 'Asset'} />
-            </div>
             <div class="verify-badge ok">
               ✓ Artwork matches the memo&rsquo;s commitment
               <span class="verify-detail">sha256 {verification.expected_hash.slice(0, 16)}… · {(verification.bytes / 1024).toFixed(0)} KB</span>
@@ -444,6 +500,7 @@
           {:else}
             <pre>{selectedAssetMetadata}</pre>
           {/if}
+          {/if}
         </div>
       </div>
     </div>
@@ -624,13 +681,72 @@
     z-index: 1000;
   }
 
+  .header h2 {
+    margin: 0;
+    font-size: 1.3rem;
+    color: var(--text-primary);
+  }
+
+  /* The reader: the unit as a page. Near the whole window; the picture gets the height. */
+  .reader-image {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 40vh;
+    margin-bottom: 0.75rem;
+  }
+
+  .reader-image img {
+    max-width: 100%;
+    max-height: 72vh;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  }
+
+  .reader-empty {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+  }
+
+  .reader-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    padding: 0.5rem 0 0.75rem;
+    border-bottom: 1px solid var(--border-color, #333);
+    margin-bottom: 1rem;
+  }
+
+  .marks {
+    display: flex;
+    gap: 1.25rem;
+    font-size: 1rem;
+  }
+
+  .mark.ok { color: #4ade80; }
+  .mark.bad { color: #f87171; }
+  .mark.amber { color: #fbbf24; }
+  .mark.provider { color: #93c5fd; }
+  .mark.checking, .mark.unknown, .mark.neutral { color: var(--text-secondary); }
+
+  .reader-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+
   .modal-content {
     background: var(--surface-color, #1e1e24);
     border: 1px solid var(--border-color, #333);
     border-radius: 12px;
-    width: 90%;
-    max-width: 600px;
-    max-height: 80vh;
+    width: 96vw;
+    max-width: 96vw;
+    height: 94vh;
+    max-height: 94vh;
     display: flex;
     flex-direction: column;
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
@@ -686,18 +802,6 @@
     word-break: break-all;
   }
 
-  .modal-image-container {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 1.5rem;
-  }
-
-  .modal-image-container img {
-    max-width: 250px;
-    height: auto;
-    border-radius: 12px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  }
 
   .loading {
     text-align: center;
