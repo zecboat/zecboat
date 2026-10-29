@@ -14,7 +14,8 @@ not the diff.
   tick. **Details** opens everything the box used to show first: the three badges with their check
   lists and caveats, then the metadata table; nothing was removed. **Send this unit** opens the
   Send page with the type and this asset id already filled in.
-- The znfts page is headed **Zec Non Fungible Things**; the navigation entry stays "znfts".
+- The navigation entry reads **znft** and its page is headed **Zec Non Fungible Thing**, singular
+  on both: the plural is the reader's to say.
 - Send: the type reads "znft (shielded)", not "znft (shielded object)". Internal value unchanged.
 - The artwork cache beside the wallet (`artwork/`, new in 0.7.3) is now owner-only like every
   other wallet file; the test wallet showed it world-readable.

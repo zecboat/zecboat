@@ -166,7 +166,7 @@
         <button class="nav-item {currentView === 'Send' ? 'active' : ''}" onclick={() => setView('Send')}>Send</button>
         <button class="nav-item {currentView === 'Receive' ? 'active' : ''}" onclick={() => setView('Receive')}>Receive</button>
         <button class="nav-item {currentView === 'Transactions' ? 'active' : ''}" onclick={() => setView('Transactions')}>🧾 Transactions</button>
-        <button class="nav-item {currentView === 'znfts' ? 'active' : ''}" onclick={() => setView('znfts')}>📦 znfts</button>
+        <button class="nav-item {currentView === 'znfts' ? 'active' : ''}" onclick={() => setView('znfts')}>📦 znft</button>
         <button class="nav-item {currentView === 'Collections' ? 'active' : ''}" onclick={() => setView('Collections')}>🔎 Collections</button>
         <button class="nav-item {currentView === 'Roster' ? 'active' : ''}" onclick={() => setView('Roster')}>👥 Roster</button>
         <button class="nav-item {currentView === 'Settings' ? 'active' : ''}" onclick={() => setView('Settings')}>⚙️ Settings</button>
@@ -218,7 +218,7 @@
           <TransactionsView />
         {:else if currentView === 'znfts'}
           <div class="full-col">
-            <ZnftGallery title="Zec Non Fungible Things" onSend={sendUnit} />
+            <ZnftGallery title="Zec Non Fungible Thing" onSend={sendUnit} />
           </div>
         <!-- Invoices removed from the navigation when the in-wallet market was withdrawn
              before release; this branch has been unreachable since, and its two buttons were
