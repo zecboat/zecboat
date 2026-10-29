@@ -412,9 +412,9 @@ mod tests {
         for bad in ["", "../x", "0.7.3 beta", "0.7.3/"] {
             assert!(deb_file_name(bad).is_err(), "{bad:?}");
         }
-        let c = install_command(Path::new("/home/u/.AppVault/data/updates/Zecboat_0.7.3-beta_amd64.deb"));
+        let c = install_command(Path::new("/opt/example/updates/Zecboat_0.7.3-beta_amd64.deb"));
         assert_eq!(c.get_program(), "pkexec");
         let args: Vec<_> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
-        assert_eq!(args, ["apt-get", "install", "-y", "/home/u/.AppVault/data/updates/Zecboat_0.7.3-beta_amd64.deb"]);
+        assert_eq!(args, ["apt-get", "install", "-y", "/opt/example/updates/Zecboat_0.7.3-beta_amd64.deb"]);
     }
 }
