@@ -702,10 +702,19 @@ pub fn carrier_output_refs(holdings: &[ZmapHolding]) -> Vec<OutputRef> {
 /// chosen target with `LockedInputPolicy::PreferLocked`; only *incidental* selection is blocked.
 ///
 /// [`LockedInputPolicy::Exclude`]: zcash_client_backend::data_api::wallet::input_selection::LockedInputPolicy::Exclude
+///
+/// **A unit sent to this wallet's own address** (the Whalewave treasury, 2026-10-30, `657cb97a…`):
+/// the library records an output to one of our addresses in a transaction we built as change,
+/// with no memo, and the compact-block scan never fills one in because the raw transaction is
+/// already stored. The memo exists all the same: this wallet wrote it, and `sent_notes` keeps it,
+/// linked from the view by `sent_note_id`. Without the fallback the carrier dropped out of the
+/// holdings and the unit showed as "lineage of … — memo missing" with no artwork.
 pub const CARRIER_SQL: &str = "\
-    SELECT v.pool, v.id_within_pool_table, t.txid, v.output_index, v.value, v.memo
+    SELECT v.pool, v.id_within_pool_table, t.txid, v.output_index, v.value,
+           COALESCE(v.memo, sn.memo) AS memo
       FROM v_received_outputs v
       JOIN transactions t ON t.id_tx = v.transaction_id
+      LEFT JOIN sent_notes sn ON sn.id = v.sent_note_id
      WHERE NOT EXISTS (
              SELECT 1
                FROM v_received_output_spends s
@@ -713,7 +722,7 @@ pub const CARRIER_SQL: &str = "\
               WHERE s.received_output_id = v.id_within_pool_table
                 AND s.pool = v.pool
                 AND st.mined_height IS NOT NULL)
-       AND v.memo IS NOT NULL
+       AND COALESCE(v.memo, sn.memo) IS NOT NULL
        AND v.value = ?1
      ORDER BY v.pool, v.id_within_pool_table";
 
@@ -794,19 +803,24 @@ pub fn lineage_lock_owner(asset_id: &str) -> LockOwner {
 pub fn read_lineage_rows(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<LineageRow>> {
     let mut out = Vec::new();
     for (pool, table) in [(POOL_IRONWOOD, "ironwood"), (POOL_ORCHARD, "orchard")] {
-        // Seeds: the nullifiers of carriers this wallet spent, with their asset ids.
+        // Seeds: the nullifiers of carriers this wallet spent, with their asset ids. A carrier
+        // this wallet sent to itself has no memo on its received row (see `CARRIER_SQL`); the
+        // memo it was sent with is in `sent_notes`, matched by transaction, pool and output.
         let seed_sql = format!(
-            "SELECT n.nf, n.memo
+            "SELECT n.nf, COALESCE(n.memo, sn.memo)
                FROM {t}_received_notes n
                JOIN {t}_received_note_spends s ON s.{t}_received_note_id = n.id
                JOIN transactions st ON st.id_tx = s.transaction_id
+               LEFT JOIN sent_notes sn ON sn.transaction_id = n.transaction_id
+                                      AND sn.output_index = n.action_index
+                                      AND sn.output_pool = ?2
               WHERE st.mined_height IS NOT NULL
-                AND n.value = ?1 AND n.memo IS NOT NULL AND n.nf IS NOT NULL",
+                AND n.value = ?1 AND COALESCE(n.memo, sn.memo) IS NOT NULL AND n.nf IS NOT NULL",
             t = table
         );
         let mut frontier: Vec<(Vec<u8>, String)> = {
             let mut stmt = conn.prepare(&seed_sql)?;
-            let rows = stmt.query_map([CARRIER_ZAT as i64], |r| {
+            let rows = stmt.query_map(rusqlite::params![CARRIER_ZAT as i64, pool], |r| {
                 Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
             })?;
             let mut v = Vec::new();
@@ -820,13 +834,16 @@ pub fn read_lineage_rows(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<Li
         };
 
         let hop_sql = format!(
-            "SELECT n.id, t.txid, n.action_index, n.nf, n.value, n.memo,
+            "SELECT n.id, t.txid, n.action_index, n.nf, n.value, COALESCE(n.memo, sn.memo),
                     EXISTS (SELECT 1 FROM {t}_received_note_spends s
                               JOIN transactions st ON st.id_tx = s.transaction_id
                              WHERE s.{t}_received_note_id = n.id
                                AND st.mined_height IS NOT NULL) AS spent
                FROM {t}_received_notes n
                JOIN transactions t ON t.id_tx = n.transaction_id
+               LEFT JOIN sent_notes sn ON sn.transaction_id = n.transaction_id
+                                      AND sn.output_index = n.action_index
+                                      AND sn.output_pool = ?2
               WHERE n.rho = ?1",
             t = table
         );
@@ -835,7 +852,7 @@ pub fn read_lineage_rows(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<Li
         while !frontier.is_empty() {
             let mut next = Vec::new();
             for (nf, asset_id) in frontier.drain(..) {
-                let rows = stmt.query_map([nf.as_slice()], |r| {
+                let rows = stmt.query_map(rusqlite::params![nf.as_slice(), pool], |r| {
                     Ok((
                         r.get::<_, i64>(0)?,
                         r.get::<_, Vec<u8>>(1)?,
@@ -1891,6 +1908,9 @@ mod tests {
                  id INTEGER PRIMARY KEY, transaction_id INTEGER, action_index INTEGER,
                  value INTEGER, rho BLOB, nf BLOB, memo BLOB);
              CREATE TABLE orchard_received_note_spends (orchard_received_note_id INTEGER, transaction_id INTEGER);
+             CREATE TABLE sent_notes (
+                 id INTEGER PRIMARY KEY, transaction_id INTEGER, output_pool INTEGER,
+                 output_index INTEGER, memo BLOB);
              INSERT INTO transactions VALUES (10, x'0a', 100), (20, x'14', 200), (30, x'1e', 300), (40, x'28', 400);",
         )
         .unwrap();
@@ -1953,6 +1973,34 @@ mod tests {
         assert!(holdings[0].name.contains("memo missing"));
     }
 
+    /// The treasury's self-send (2026-10-30, The Crossing #001): the successor note comes back
+    /// from the library as change without a memo, but `sent_notes` holds the memo this wallet
+    /// wrote for it. It is a carrier, not a memo-less lineage note, so the unit keeps its name
+    /// and artwork instead of becoming "lineage of … — memo missing".
+    #[test]
+    fn a_self_sent_successor_is_a_carrier_through_sent_notes() {
+        let conn = lineage_fixture();
+        let memo_c = format!(r#"{{"asset_id":"{}","name":"C"}}"#, "cc".repeat(32));
+        conn.execute("INSERT INTO transactions VALUES (50, x'32', 500)", []).unwrap();
+        conn.execute(
+            "INSERT INTO ironwood_received_notes VALUES (7, 10, 2, 10000, x'02', x'c5', ?1)",
+            [memo_c.as_bytes()],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO ironwood_received_notes VALUES (8, 50, 7, 10000, x'c5', x'c6', NULL)", []).unwrap();
+        conn.execute("INSERT INTO ironwood_received_note_spends VALUES (7, 50)", []).unwrap();
+        conn.execute("INSERT INTO sent_notes VALUES (1, 50, 4, 7, ?1)", [memo_c.as_bytes()]).unwrap();
+
+        let rows = read_lineage_rows(&conn).unwrap();
+        let r = rows.iter().find(|r| r.note_id == 8).expect("the successor is found through its rho");
+        assert!(r.is_carrier, "a self-sent successor with the memo this wallet wrote is a carrier");
+        assert_eq!(r.asset_id, "cc".repeat(32));
+        let c = "cc".repeat(32);
+        let mut holdings = Vec::new();
+        attach_lineage(&mut holdings, rows);
+        assert!(holdings.iter().all(|h| h.asset_id != c), "no synthetic 'memo missing' holding for C");
+    }
+
     #[test]
     fn lineage_out_table_round_trips_and_is_idempotent() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -1982,9 +2030,12 @@ mod tests {
                  id_tx INTEGER PRIMARY KEY, txid BLOB, mined_height INTEGER, expiry_height INTEGER);
              CREATE TABLE v_received_outputs (
                  id_within_pool_table INTEGER, pool INTEGER, transaction_id INTEGER,
-                 output_index INTEGER, value INTEGER, memo BLOB);
+                 output_index INTEGER, value INTEGER, memo BLOB, sent_note_id INTEGER);
              CREATE TABLE v_received_output_spends (
                  received_output_id INTEGER, pool INTEGER, transaction_id INTEGER);
+             CREATE TABLE sent_notes (
+                 id INTEGER PRIMARY KEY, transaction_id INTEGER, output_pool INTEGER,
+                 output_index INTEGER, memo BLOB);
 
              -- tx 1 minted the carriers; tx 5 expired unmined; tx 9 is mined.
              INSERT INTO transactions VALUES (1, x'01', 3447455, NULL);
@@ -1992,18 +2043,39 @@ mod tests {
              INSERT INTO transactions VALUES (9, x'09', 3458293, 3458331);
 
              -- note 8: an expired spend only. Still ours.
-             INSERT INTO v_received_outputs VALUES (8, 4, 1, 0, 10000, x'7b7d');
+             INSERT INTO v_received_outputs VALUES (8, 4, 1, 0, 10000, x'7b7d', NULL);
              INSERT INTO v_received_output_spends VALUES (8, 4, 5);
 
              -- note 9: never spent.
-             INSERT INTO v_received_outputs VALUES (9, 4, 1, 1, 10000, x'7b7d');
+             INSERT INTO v_received_outputs VALUES (9, 4, 1, 1, 10000, x'7b7d', NULL);
 
              -- note 7: genuinely spent by a mined transaction. Gone.
-             INSERT INTO v_received_outputs VALUES (7, 4, 1, 2, 10000, x'7b7d');
+             INSERT INTO v_received_outputs VALUES (7, 4, 1, 2, 10000, x'7b7d', NULL);
              INSERT INTO v_received_output_spends VALUES (7, 4, 9);",
         )
         .unwrap();
         conn
+    }
+
+    /// A unit sent to this wallet's own address (the Whalewave treasury, 2026-10-30): the library
+    /// records the output as change with no memo, but the wallet wrote that memo itself and keeps
+    /// it in `sent_notes`. The carrier must come back as a holding, with the memo it was sent with.
+    /// A memo-less note of ours that we did not name (the knot output) stays out.
+    #[test]
+    fn self_sent_carrier_keeps_its_memo_through_sent_notes() {
+        let conn = carrier_fixture();
+        conn.execute_batch(
+            "INSERT INTO transactions VALUES (12, x'0c', 3535791, 3535831);
+             INSERT INTO sent_notes VALUES (8, 12, 4, 7, x'7b7d');
+             INSERT INTO sent_notes VALUES (11, 12, 4, 10, NULL);
+             INSERT INTO v_received_outputs VALUES (14, 4, 12, 7, 10000, NULL, 8);
+             INSERT INTO v_received_outputs VALUES (15, 4, 12, 10, 0, NULL, 11);",
+        )
+        .unwrap();
+        let rows = read_carrier_rows(&conn).unwrap();
+        let r = rows.iter().find(|r| r.note_id == 14).expect("the self-sent carrier is a holding again");
+        assert_eq!(r.memo.as_deref(), Some(&b"{}"[..]), "the memo this wallet wrote comes back through sent_notes");
+        assert!(!rows.iter().any(|r| r.note_id == 15), "the knot output is not a carrier");
     }
 
     /// The Happy Birthday #003 burn, 2026-08-23.

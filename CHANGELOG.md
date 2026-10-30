@@ -23,6 +23,13 @@ not the diff.
 - Send: the type reads "znft (shielded)", not "znft (shielded object)". Internal value unchanged.
 - The artwork cache beside the wallet (`artwork/`, new in 0.7.3) is now owner-only like every
   other wallet file; the test wallet showed it world-readable.
+- **A unit sent to your own address keeps its name, artwork and lineage.** The Whalewave
+  treasury sent The Crossing #001 to itself to start its lineage (2026-10-30) and the unit came
+  back as "lineage of f4d9… — memo missing" with no picture: the library records an output to
+  one of the wallet's own addresses as change without a memo, and nothing fills it in later. The
+  wallet wrote that memo itself and keeps it with the sent note, so the carrier and lineage
+  readers now fall back to it. Two tests, one per reader. Nothing on chain was wrong; the unit
+  was never at risk (lineage notes are locked against being spent as change).
 
 ### The Crossing is pinned (2026-10-29)
 
