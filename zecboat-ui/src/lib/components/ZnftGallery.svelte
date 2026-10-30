@@ -103,6 +103,29 @@
   let { title = null, onSend = null }: { title?: string | null; onSend?: ((assetId: string) => void) | null } = $props();
   let showDetails = $state(false);
   let selectedName = $derived(assets.find((a) => a.asset_id === selectedAssetId)?.name ?? "znft");
+  // Reading order (owner, 2026-10-30, the treasury holding The Crossing #001-#010): by range name,
+  // then by design number, so a chapter's pages sit in page order. The chain gives no order; the
+  // wallet's list came back as the notes were scanned. Units without a number sort by name after.
+  let sortedAssets = $derived([...assets].sort((a, b) => {
+    const x = splitName(a.name), y = splitName(b.name);
+    if (x.range !== y.range) return x.range.localeCompare(y.range);
+    const nx = x.design ? parseInt(x.design.slice(1), 10) : Number.MAX_SAFE_INTEGER;
+    const ny = y.design ? parseInt(y.design.slice(1), 10) : Number.MAX_SAFE_INTEGER;
+    return nx !== ny ? nx - ny : a.name.localeCompare(b.name);
+  }));
+  // Previous / Next walk that order from the open unit, like turning a page.
+  let selectedIndex = $derived(sortedAssets.findIndex((a) => a.asset_id === selectedAssetId));
+  let prevAsset = $derived(selectedIndex > 0 ? sortedAssets[selectedIndex - 1] : null);
+  let nextAsset = $derived(selectedIndex >= 0 && selectedIndex < sortedAssets.length - 1 ? sortedAssets[selectedIndex + 1] : null);
+  function turnPage(to: Asset | null) {
+    if (to) showAssetDetails(to.asset_id);
+  }
+  function onKey(e: KeyboardEvent) {
+    if (!selectedAssetId) return;
+    if (e.key === "ArrowRight") turnPage(nextAsset);
+    else if (e.key === "ArrowLeft") turnPage(prevAsset);
+    else if (e.key === "Escape") closeDetails();
+  }
   // [mark, colour class, title]. The colours and words are the badges' own, one word each.
   let artworkMark = $derived<[string, string, string]>(
     isVerifying ? ["…", "checking", "checking the artwork against the memo"]
@@ -230,12 +253,16 @@
   });
 </script>
 
+<!-- Arrow keys turn the page and Escape closes while a unit is open (onKey does nothing otherwise):
+     a reader, not a form. -->
+<svelte:window onkeydown={onKey} />
+
 <div class="znft-gallery card">
   {#if title}
     <div class="header"><h2>{title}</h2></div>
   {/if}
   <div class="asset-grid">
-    {#each assets as asset}
+    {#each sortedAssets as asset (asset.asset_id)}
       {@const n = splitName(asset.name)}
       <div class="asset-item" title="ID: {asset.asset_id}" onclick={() => showAssetDetails(asset.asset_id)}>
         <div class="asset-icon">
@@ -301,6 +328,8 @@
               <span class="mark {lineageMark[1]}" title={lineageMark[2]}>{lineageMark[0]} lineage</span>
             </span>
             <span class="reader-actions">
+              <button class="btn secondary" onclick={() => turnPage(prevAsset)} disabled={!prevAsset} title={prevAsset ? prevAsset.name : 'first unit'}>‹ Previous</button>
+              <button class="btn secondary" onclick={() => turnPage(nextAsset)} disabled={!nextAsset} title={nextAsset ? nextAsset.name : 'last unit'}>Next ›</button>
               <button class="btn secondary" onclick={() => { showDetails = !showDetails; }}>{showDetails ? 'Hide details' : 'Details'}</button>
               {#if onSend && selectedAssetId}
                 <button class="btn" onclick={() => { const id = selectedAssetId!; closeDetails(); onSend(id); }}>Send this unit</button>
