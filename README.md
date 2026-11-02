@@ -2,7 +2,7 @@
 
 A desktop Zcash wallet that holds **znfts** (Zec Non Fungible Things) as well as ZEC.
 
-A znft here is an ordinary Zcash note carrying a memo that names it: a shielded object. Sending one spends
+A znft here is an ordinary Zcash note carrying a memo that names it. Sending one spends
 that exact note and writes the same identity into the next note's memo (ZMAP §5.3: the asset id,
 the issuer key and the description it derives from, plus the hash of the unit's lineage record),
 so custody changes hands while identity does not. It is an ordinary shielded note underneath: no

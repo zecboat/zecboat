@@ -118,7 +118,7 @@ not the diff.
 - **The wallet now calls its units znfts, Zec Non Fungible Things, and never "ZSA" or
   "Shielded Asset".** Those are ZIP 226/227's words for a different thing: a consensus-level
   fungible token with a quantity. A znft has no quantity and cannot be split; it is one shielded
-  note carrying one named unit, a shielded object. Changed: the Send screen's asset option
+  note carrying one named unit. Changed: the Send screen's asset option
   ("znft (shielded object)"), its hints and fee notices ("destroy the unit"), the navigation
   entry and the gallery's empty state ("No znfts held."), the transaction detail heading, the
   README. The Send screen's option value is `znft` too, so the word ZSA is gone from the form
