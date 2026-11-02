@@ -180,6 +180,30 @@ pub struct Out {
     pub outgoing: bool,
 }
 
+/// Does this output carry a memo at all? After [`trim`], a note sent with no memo is the single
+/// `0xF6` marker byte (ZIP 302) and an all-zero memo is empty; anything else is a memo. Every
+/// ZMAP statement (carrier, pin, close, chunk, lineage note, registration) is a memo, so an
+/// output that carries none cannot be an issue of any kind (ZMAP §7.4, 2026-11-02).
+pub fn carries_memo(memo: &[u8]) -> bool {
+    let m = trim(memo);
+    !m.is_empty() && m != [0xF6]
+}
+
+/// Check 9's count: the account's outputs mined after the close, or in the close's block from
+/// another transaction, excluding the registration transaction, split into those that carry a
+/// memo (a breach) and those that carry none (fee change leaving the account; allowed).
+pub fn outputs_after_close(outs: &[Out], close_height: u32, close_txid: &str, registration_txid: &str) -> (usize, usize) {
+    let after = outs
+        .iter()
+        .filter(|o| o.height > close_height || (o.height == close_height && o.txid != close_txid))
+        .filter(|o| !o.txid.eq_ignore_ascii_case(registration_txid));
+    let (mut memo, mut plain) = (0usize, 0usize);
+    for o in after {
+        if carries_memo(&o.memo) { memo += 1 } else { plain += 1 }
+    }
+    (memo, plain)
+}
+
 /// Per-transaction value flow, for check 14.
 #[derive(Debug, Clone)]
 pub struct Flow {
@@ -300,25 +324,32 @@ pub fn run_checks(reg: &Registration, ufvk: &str, outs: &[Out], flows: &[Flow]) 
         })
         .collect();
     let before: Vec<&(&Out, String, String)> = carriers.iter().filter(|c| c.0.height < close_height).collect();
-    // ZMAP §7.3.2 and §7.4: ANY output of the account mined after the close is a breach, not
-    // only a well-formed carrier (review 2026-10-09, session 4, Issue D: a payment, a second
-    // pin or a malformed carrier after the close used to pass). The close's own outputs are
-    // the close.
+    // ZMAP §7.3.2 and §7.4: every MEMO-BEARING output of the account mined after the close is
+    // a breach, not only a well-formed carrier (review 2026-10-09, session 4, Issue D: a
+    // payment with a memo, a second pin or a malformed carrier after the close used to pass).
+    // An output with no memo at all (the 0xF6 marker, or nothing) cannot be a carrier, a pin,
+    // a chunk or a lineage note under any dialect: it is fee change leaving the account, and
+    // it is reported in the detail, not failed (rule narrowed 2026-11-02: The Crossing's
+    // issuer swept 0.0008 ZEC, memo-less, a day after its close, and every wallet then showed
+    // its showcase collection as failed; until then the rule read "ANY output"). The close's
+    // own outputs are the close.
     // The registration in the Zecboat Registry is sent by the issuance account AFTER the
     // close, by construction (it names the close): it is the issuer's act of registering, not
     // an issue, and its outputs are not counted. Until 2026-10-10 the audit passed this check
     // only because a provider reporting no height for that transaction kept it from being
     // stored at all (hardening 25); once stored, Lagos Post Card read "3 output(s) after the
     // close" and failed.
-    let after_any = outs
-        .iter()
-        .filter(|o| o.height > close_height || (o.height == close_height && o.txid != close_out.txid))
-        .filter(|o| !o.txid.eq_ignore_ascii_case(&reg.registration_txid))
-        .count();
+    let (after_memo, after_plain) = outputs_after_close(outs, close_height, &close_out.txid, &reg.registration_txid);
     add(8, "carriers issued before the close equal the close memo's count", before.len() as u32 == close.count,
         Some(format!("{} carriers, count {}", before.len(), close.count)));
-    add(9, "no output issued by this account after the close", after_any == 0,
-        (after_any > 0).then(|| format!("{after_any} output(s) after the close")));
+    add(9, "no memo-bearing output issued by this account after the close", after_memo == 0,
+        if after_memo > 0 {
+            Some(format!("{after_memo} memo-bearing output(s) after the close"))
+        } else if after_plain > 0 {
+            Some(format!("{after_plain} memo-less output(s) after the close: fee change, not an issue"))
+        } else {
+            None
+        });
     // Uniqueness (review 2026-10-09, session 4, Issue E): one unit number and one id each.
     // Unit numbers as numbers in canonical decimal (no sign, no leading zeros), and the set
     // must be exactly 1..=N for the N carriers before the close; "1", "01" and "+1" used to
@@ -395,7 +426,10 @@ pub fn run_checks(reg: &Registration, ufvk: &str, outs: &[Out], flows: &[Flow]) 
 fn audit_db_path(ufvk: &str) -> Result<String> {
     let tag = hex::encode(&Sha256::digest(ufvk.trim().as_bytes())[..8]);
     let dir = crate::paths::app_data_dir()?.join("collection_audits");
-    std::fs::create_dir_all(&dir)?;
+    // Owner-only like every other wallet folder (the el5050 stranger test of 0.7.3 found it
+    // group-readable, 2026-11-02). Public data, but the folder says which collections were
+    // checked here and when.
+    crate::paths::create_private_dir(&dir)?;
     Ok(dir.join(format!("{tag}.db")).to_string_lossy().into_owned())
 }
 
@@ -567,8 +601,11 @@ pub async fn audit(reg: &Registration) -> Result<AuditReport> {
     let birthday = reg.mint_height.saturating_sub(BIRTHDAY_MARGIN).max(1);
     let db = audit_db_path(&ufvk_str)?;
     ensure_account(&db, &ufvk, birthday).await?;
+    crate::paths::make_private_db(&db)?;
     let tip = sync_to_tip(&db, birthday).await?;
     let (outs, flows) = decrypted(&db, &ufvk).await?;
+    // SQLite makes the -wal/-shm sidecars during the sync with the process umask.
+    crate::paths::make_private_db(&db)?;
     let outs = issued_outputs(outs, &flows);
     let (checks, units, close) = run_checks(reg, &ufvk_str, &outs, &flows);
     let etched = close.as_ref().map(|c| etched_manifest(&outs, &c.1));
@@ -924,6 +961,44 @@ mod tests {
         ];
         let kept: Vec<String> = issued_outputs(outs, &flows).into_iter().map(|o| o.txid).collect();
         assert_eq!(kept, vec!["cc".to_string()]);
+    }
+
+    /// ZMAP §7.4 (2026-11-02): after the close, a memo-less output is fee change and not an
+    /// issue; anything with a memo is a breach; the close's own and the registration's outputs
+    /// never count. The Crossing's sweep (0.0008 ZEC + a 0-zat change note, both without memo)
+    /// must pass; a late carrier, a late pin or a plain payment WITH a memo must fail.
+    #[test]
+    fn a_memo_less_output_after_the_close_is_fee_change_not_an_issue() {
+        let mut none = vec![0xF6u8];
+        none.resize(512, 0);
+        assert!(!carries_memo(&none), "the 0xF6 marker padded to 512 bytes is no memo");
+        assert!(!carries_memo(&[0u8; 512]), "an all-zero memo is no memo");
+        assert!(!carries_memo(&[]), "nothing is no memo");
+        assert!(carries_memo(b"{\"asset_id\":\"00\"}"));
+        assert!(carries_memo(b"zmap:manifest:v1"));
+        assert!(carries_memo(b"thanks"));
+        assert!(carries_memo(&[0xF6, 1]), "a byte after the marker is a memo");
+        let out = |h: u32, txid: &str, value: u64, memo: &[u8]| Out {
+            height: h, txid: txid.to_string(), index: 0, value, cmx: None, memo: memo.to_vec(), outgoing: true,
+        };
+        let outs = vec![
+            out(100, "close", 0, b"zmap:close:v1 ..."),
+            out(100, "close", 0, b"zmap:chunk:v1 ..."),
+            out(104, "reg", 0, b"zmap:registry:v1 ..."),
+            out(104, "reg", 5_000, &[0xF6]),
+            out(1_241, "sweep", 80_000, &[0xF6]),
+            out(1_241, "sweep", 0, &[0xF6]),
+        ];
+        assert_eq!(outputs_after_close(&outs, 100, "close", "reg"), (0, 2), "The Crossing's sweep: reported, not failed");
+        let mut late = outs.clone();
+        late.push(out(2_000, "late", 10_000, b"{\"asset_id\":\"ff\",\"desc\":\"x\"}"));
+        assert_eq!(outputs_after_close(&late, 100, "close", "reg").0, 1, "a late carrier is a breach");
+        let mut pay = outs.clone();
+        pay.push(out(2_000, "pay", 50_000, b"thank you"));
+        assert_eq!(outputs_after_close(&pay, 100, "close", "reg").0, 1, "a payment with a memo is a breach");
+        let mut same_block = outs.clone();
+        same_block.push(out(100, "other", 0, &[0xF6]));
+        assert_eq!(outputs_after_close(&same_block, 100, "close", "reg"), (0, 3), "another transaction in the close's block counts");
     }
 
     /// F2: a close memo claiming u32::MAX inline commitments must be rejected, not allocated.

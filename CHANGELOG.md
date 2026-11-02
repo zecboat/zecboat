@@ -5,6 +5,19 @@ not the diff.
 
 ## 0.7.3-beta — unreleased
 
+### Collections Check (2026-11-02)
+
+- **Check 9 asks the right question.** It used to fail a collection on *any* output of its
+  issuance account after the close, so an issuer moving its leftover fee change out of the
+  account, with no memo, failed its own collection for good: The Crossing read 16 of 17 on the
+  el5050 stranger test. An output with no memo cannot be a unit, a pin, a chunk or a lineage note
+  under any dialect, so the check now fails only on a **memo-bearing** output after the close
+  and reports memo-less ones in its detail ("2 memo-less output(s) after the close: fee change,
+  not an issue"). ZMAP §7.3.2 and §7.4 narrowed the same day; the mint's `audit` agrees.
+- The Check's own folder (`collection_audits/`) and its databases are owner-only like every
+  other wallet file; the stranger test found the folder group-readable and the databases
+  world-readable.
+
 ### A znft opens as a page (2026-10-29)
 
 - **Click a unit and you get the picture, not a form.** The unit opens near the full window with
