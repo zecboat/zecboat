@@ -27,7 +27,7 @@ are no automatic updates, and it handles real value on Zcash mainnet.
 ## What it does
 
 - Holds and sends shielded ZEC on Zcash mainnet
-- Holds, verifies and transfers znfts
+- Holds, verifies and transfers znft
 - Fetches artwork from your own IPFS gateway first when you set one (Settings → Artwork), checked against the hash each unit carries (0.7.3)
 - Checks for its own next release under the pinned release key, and installs it only after verifying the package against the signed note (0.7.3)
 - Protects assets from being spent by accident — see [Asset carriers](#asset-carriers)
@@ -312,7 +312,7 @@ That is a limitation of the explorer, not a defect in the transaction.
 
 - Guides and install instructions — <https://zecboat.com/guide>
 - The ZMAP protocol specification — <https://zecboat.com/protocol>
-- What znfts are, and are not, good for — <https://zecboat.com/shielded-assets>
+- What a znft is, and is not, good for — <https://zecboat.com/shielded-assets>
 - Verifying an asset's issuance — <https://zecboat.com/proof-of-issuance>
 
 ## Contributing

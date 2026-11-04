@@ -81,7 +81,7 @@
     <div class="empty-state">
       <div class="icon">🧾</div>
       <p>No market invoices found.</p>
-      <p class="hint">When you purchase znfts from the market, your receipts will appear here.</p>
+      <p class="hint">When you purchase a znft from the market, your receipts will appear here.</p>
     </div>
   {:else}
     <div class="invoice-list">

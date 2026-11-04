@@ -162,7 +162,7 @@
     try {
       assets = await invoke("get_znfts");
     } catch (e) {
-      console.error("Failed to load znfts:", e);
+      console.error("Failed to load znft:", e);
       return;
     }
     // No artwork REQUEST on load. Fetching every held asset's artwork from zecboat.com each
@@ -296,7 +296,7 @@
         </div>
       </div>
     {:else}
-      <div class="empty-state">No znfts held.</div>
+      <div class="empty-state">No znft held.</div>
     {/each}
   </div>
 

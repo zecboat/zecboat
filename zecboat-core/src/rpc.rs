@@ -3637,7 +3637,7 @@ pub async fn add_invoice(invoice_id: String, date: String, items: String, total_
     Ok(())
 }
 
-/// List the znfts (ZMAP units) this wallet holds.
+/// List the znft (ZMAP units) this wallet holds.
 ///
 /// Detection is [`crate::zmap`]'s: a note is an asset only if its value is **exactly**
 /// [`crate::zmap::CARRIER_ZAT`] *and* its memo parses as one of the two ZMAP dialects. Holdings are
@@ -3703,7 +3703,7 @@ pub async fn get_znfts() -> Result<Vec<Value>> {
 /// fork, which listened on `:8237`, and even there it did no chain lookup — it fetched
 /// `https://zecboat.com/collection/{asset_id}.json`, exactly as this does now.
 ///
-/// The deeper reason is structural: **a node cannot see znfts at all.** It holds no viewing
+/// The deeper reason is structural: **a node cannot see a znft at all.** It holds no viewing
 /// keys, so it cannot decrypt the memo that carries the asset's identity. No RPC extension fixes
 /// that. The wallet already holds the keys and the memo, so metadata is the only thing left to
 /// fetch, and it lives on the web.

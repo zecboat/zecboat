@@ -24,7 +24,7 @@ impl WalletPool {
         Ok(Self { pool })
     }
     
-    /// Detect znfts (ZMAP units) held in this wallet.
+    /// Detect znft (ZMAP units) held in this wallet.
     ///
     /// Replaces the previous `get_assets`, which had three defects this fixes:
     ///

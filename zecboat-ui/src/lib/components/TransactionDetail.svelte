@@ -87,7 +87,7 @@
 
       {#if tx.assets.length}
         <div class="field">
-          <span class="k">znfts</span>
+          <span class="k">znft</span>
           <div class="v">
             {#each tx.assets as a}
               <div class="asset">

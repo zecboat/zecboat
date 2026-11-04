@@ -442,7 +442,7 @@
       {#if assetType === "znft"}
         <div class="form-group slide-in">
           <label for="from-address">znft to send (asset id)</label>
-          <input id="from-address" type="text" placeholder="The 64-character asset id, or pick the item under znfts" bind:value={fromAddress} required />
+          <input id="from-address" type="text" placeholder="The 64-character asset id, or pick the item under znft" bind:value={fromAddress} required />
           <p class="hint">A znft send names the unit by its asset id. To send plain ZEC, choose ZEC above.</p>
         </div>
       {/if}
