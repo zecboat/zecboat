@@ -1,6 +1,6 @@
 # Zecboat
 
-A desktop Zcash wallet that holds **znfts** (Zec Non Fungible Things) as well as ZEC.
+A desktop Zcash wallet that holds **znft** (Zec Non Fungible Thing) as well as ZEC.
 
 A znft here is an ordinary Zcash note carrying a memo that names it. Sending one spends
 that exact note and writes the same identity into the next note's memo (ZMAP §5.3: the asset id,

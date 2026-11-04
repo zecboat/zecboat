@@ -43,8 +43,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "shortDescription": "Shielded Zcash wallet for znfts (Zec Non Fungible Things)",
-    "longDescription": "Zecboat is a desktop Zcash wallet that holds, verifies and transfers znfts: Zec Non Fungible Things, each one shielded note carrying one named unit under ZMAP. It syncs over lightwalletd gRPC and keeps spending keys encrypted on disk. It does not mint.",
+    "shortDescription": "Shielded Zcash wallet for znft (Zec Non Fungible Thing)",
+    "longDescription": "Zecboat is a desktop Zcash wallet that holds, verifies and transfers znft: Zec Non Fungible Thing, each one shielded note carrying one named unit under ZMAP. It syncs over lightwalletd gRPC and keeps spending keys encrypted on disk. It does not mint.",
     "category": "Finance",
     "licenseFile": "../../LICENSE",
     "linux": {
