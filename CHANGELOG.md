@@ -3,7 +3,17 @@
 Notable changes to the Zecboat desktop wallet. Entries describe the user-visible effect,
 not the diff.
 
-## 0.7.3-beta — unreleased
+## 0.7.4-beta — unreleased
+
+### Frankfurt Xmas is pinned (2026-11-04)
+
+- **Frankfurt Xmas (FXM) is a collection this build knows.** Its issuer key (`23735882…ca5a`) and
+  its signed proof-of-issuance manifest are built in beside the other four collections, so its
+  ten znft can show as verified with no network and nothing from zecboat.com. Minted at height
+  3,541,618, closed at 3,541,623, registered by 3,541,625. Everything else in this version is 0.7.3-beta's,
+  which was staged and never published.
+
+## 0.7.3-beta — 2026-11-02 *(staged, never published — see 0.7.4-beta)*
 
 ### Collections Check (2026-11-02)
 
