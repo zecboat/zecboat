@@ -1,0 +1,163 @@
+{
+  "assets": [
+    {
+      "asset_desc": "zmap-desc-v1|Frankfurt Xmas|1|Frankfurt Xmas #001|FXM|d44f692fa4292cbb57cc4e55ac6b96fa0b3810c7dfa46050c5d92cf10d053b3b",
+      "asset_id": "61c2a1ccf5a37cae21ef2588f960b9e5e581d63e1db889f428f5f0220fe44317",
+      "image": "/collection/61c2a1ccf5a37cae21ef2588f960b9e5e581d63e1db889f428f5f0220fe44317.jpg",
+      "image_ipfs": "ipfs://bafkreiguj5us7jbjfs5vptcokwwgxfx2bm4bbr67urqfbrozftyq2bj3hm",
+      "image_sha256": "d44f692fa4292cbb57cc4e55ac6b96fa0b3810c7dfa46050c5d92cf10d053b3b",
+      "issuance": {
+        "action_index": 9,
+        "cmx": "8881f6bb3a18be5d2894f4341676f306c589c4c6097df30bf26071cd2f675936",
+        "height": 3541618,
+        "txid": "67dd1910a6b39dd1131bd361e8313bff4c493239b1abceb577979d2f2c2ea7a3"
+      },
+      "name": "Frankfurt Xmas #001"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Frankfurt Xmas|2|Frankfurt Xmas #002|FXM|eba10d75a4a8ba39c34b73ba67379af24eef98fd8b765dd0917121c6199ef71e",
+      "asset_id": "821327c8d5d0d718996e25bc9b963d1a8f46df0c1d52b447990dc049b25423d4",
+      "image": "/collection/821327c8d5d0d718996e25bc9b963d1a8f46df0c1d52b447990dc049b25423d4.jpg",
+      "image_ipfs": "ipfs://bafkreihluegxljfixi44gs3txjttpgxsj3xzr7mlozo5belrehdbthxxdy",
+      "image_sha256": "eba10d75a4a8ba39c34b73ba67379af24eef98fd8b765dd0917121c6199ef71e",
+      "issuance": {
+        "action_index": 0,
+        "cmx": "52e586a5afce9e4b5c61a3688bd1516e42da534b0e3b15299e8be90283288b16",
+        "height": 3541618,
+        "txid": "67dd1910a6b39dd1131bd361e8313bff4c493239b1abceb577979d2f2c2ea7a3"
+      },
+      "name": "Frankfurt Xmas #002"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Frankfurt Xmas|3|Frankfurt Xmas #003|FXM|c0b305b7e47416e54e261df642f86e4beb6e79b1467dd6b9e34f51c26ebb1c4c",
+      "asset_id": "18adc217ee74c9ecd65270c76cea1d781c0578d09e26ec4f60b413bfd4878249",
+      "image": "/collection/18adc217ee74c9ecd65270c76cea1d781c0578d09e26ec4f60b413bfd4878249.jpg",
+      "image_ipfs": "ipfs://bafkreigawmc3pzduc3su4jq56zbpq3sl5nxhtmkgpxllty2pkhbg5oy4jq",
+      "image_sha256": "c0b305b7e47416e54e261df642f86e4beb6e79b1467dd6b9e34f51c26ebb1c4c",
+      "issuance": {
+        "action_index": 6,
+        "cmx": "35959267d89f1262b463f456e2ba6cc52cd14ea27e3dc2fc2679b9a2be5de005",
+        "height": 3541618,
+        "txid": "67dd1910a6b39dd1131bd361e8313bff4c493239b1abceb577979d2f2c2ea7a3"
+      },
+      "name": "Frankfurt Xmas #003"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Frankfurt Xmas|4|Frankfurt Xmas #004|FXM|53508e764b5e40510e0750c486f76c0c7c7153966711d949de989d303ebdf3e0",
+      "asset_id": "75365c069dba9ba8b07fecf7e9ac701029247f465240317e5b0577b1f094c65a",
+      "image": "/collection/75365c069dba9ba8b07fecf7e9ac701029247f465240317e5b0577b1f094c65a.jpg",
+      "image_ipfs": "ipfs://bafkreictkchhms26ibiq4b2qysdpo3ampryvhfthchmutxuytuyd5ppt4a",
+      "image_sha256": "53508e764b5e40510e0750c486f76c0c7c7153966711d949de989d303ebdf3e0",
+      "issuance": {
+        "action_index": 3,
+        "cmx": "6b9c5609179831ee1d79b59de2b32cf185bc2d4dfb29f6e396997a45780fbb11",
+        "height": 3541618,
+        "txid": "67dd1910a6b39dd1131bd361e8313bff4c493239b1abceb577979d2f2c2ea7a3"
+      },
+      "name": "Frankfurt Xmas #004"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Frankfurt Xmas|5|Frankfurt Xmas #005|FXM|e75f01e01d97b02ce5293ffa774606cdefc418c0a8969df13f4efce6e25342b1",
+      "asset_id": "a2edd6ba489167efe76ff2174fff55e8946dbd7492225e8fea11b23aa4beea26",
+      "image": "/collection/a2edd6ba489167efe76ff2174fff55e8946dbd7492225e8fea11b23aa4beea26.jpg",
+      "image_ipfs": "ipfs://bafkreihhl4a6ahmxwawokkj77j3umbwn57cbrqfis2o7cp2o7ttoeu2cwe",
+      "image_sha256": "e75f01e01d97b02ce5293ffa774606cdefc418c0a8969df13f4efce6e25342b1",
+      "issuance": {
+        "action_index": 2,
+        "cmx": "24a2aeebaa22be88cd034bf5982ea358cbd26627c585bb784b140c579ac51530",
+        "height": 3541618,
+        "txid": "67dd1910a6b39dd1131bd361e8313bff4c493239b1abceb577979d2f2c2ea7a3"
+      },
+      "name": "Frankfurt Xmas #005"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Frankfurt Xmas|6|Frankfurt Xmas #006|FXM|2826b05981d94e609b0301e81877bb5a76b9581d2fdb91813197c841c02667bf",
+      "asset_id": "7020ba6c6b3e160ac0ba9958ff91e810a2f62b98aed3a1f57ff0915748354869",
+      "image": "/collection/7020ba6c6b3e160ac0ba9958ff91e810a2f62b98aed3a1f57ff0915748354869.jpg",
+      "image_ipfs": "ipfs://bafkreibie2yftaozjzqjwayb5amhpo22o24vqhjp3oiycmmxzba4ajthx4",
+      "image_sha256": "2826b05981d94e609b0301e81877bb5a76b9581d2fdb91813197c841c02667bf",
+      "issuance": {
+        "action_index": 7,
+        "cmx": "c228d4f9cc75cd52c5dc27470daea03d6a1894bd65ceb2608abcad945eb9a43d",
+        "height": 3541618,
+        "txid": "67dd1910a6b39dd1131bd361e8313bff4c493239b1abceb577979d2f2c2ea7a3"
+      },
+      "name": "Frankfurt Xmas #006"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Frankfurt Xmas|7|Frankfurt Xmas #007|FXM|0f2b4d7ddebd1ff58312f99270b8c3150347dafed1565a51f0dec5e5810fa46e",
+      "asset_id": "ba88890ba0804a9fd9bd5ca619aa1d2b9097863bf9195f0a3e759e1fe1fc1e24",
+      "image": "/collection/ba88890ba0804a9fd9bd5ca619aa1d2b9097863bf9195f0a3e759e1fe1fc1e24.jpg",
+      "image_ipfs": "ipfs://bafkreiapfngx3xv5d72ygexzsjylrqyvand5v7wrkznfd4g6yxsycd5eny",
+      "image_sha256": "0f2b4d7ddebd1ff58312f99270b8c3150347dafed1565a51f0dec5e5810fa46e",
+      "issuance": {
+        "action_index": 10,
+        "cmx": "5fa77fbf0a4ba4f583a151c729b876e6d4793ffcc0c1c7c2e295aac72e9bb130",
+        "height": 3541618,
+        "txid": "67dd1910a6b39dd1131bd361e8313bff4c493239b1abceb577979d2f2c2ea7a3"
+      },
+      "name": "Frankfurt Xmas #007"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Frankfurt Xmas|8|Frankfurt Xmas #008|FXM|1fda695a5c95bdd3bb4db93e93e8a919dbd4343f2187547787a33824269ac4c3",
+      "asset_id": "273dd8be602bd4e2a1d39bac36d9f47ce14caade511f83ba8e4b0c9b5ff1d49b",
+      "image": "/collection/273dd8be602bd4e2a1d39bac36d9f47ce14caade511f83ba8e4b0c9b5ff1d49b.jpg",
+      "image_ipfs": "ipfs://bafkreia73juvuxevxxj3wtnzh2j6rkiz3pkdipzbq5khpb5dhascngweym",
+      "image_sha256": "1fda695a5c95bdd3bb4db93e93e8a919dbd4343f2187547787a33824269ac4c3",
+      "issuance": {
+        "action_index": 5,
+        "cmx": "828de650effef4c1664ed001fe7761a162a5caad2e221c655a03e9bca6421302",
+        "height": 3541618,
+        "txid": "67dd1910a6b39dd1131bd361e8313bff4c493239b1abceb577979d2f2c2ea7a3"
+      },
+      "name": "Frankfurt Xmas #008"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Frankfurt Xmas|9|Frankfurt Xmas #009|FXM|679c1a979d9961827d7207203839021708ec38f5d8341e7f17f570ec7c6e1c88",
+      "asset_id": "c6a95ceb8d3a9a6626851440e8c0f81c6bf6d9b5ad2a17ad3befc097e6071bd1",
+      "image": "/collection/c6a95ceb8d3a9a6626851440e8c0f81c6bf6d9b5ad2a17ad3befc097e6071bd1.jpg",
+      "image_ipfs": "ipfs://bafkreidhtqnjphmzmgbh24qhea4dsaqxbdwdr5oygqph6f7vodwhy3q4ra",
+      "image_sha256": "679c1a979d9961827d7207203839021708ec38f5d8341e7f17f570ec7c6e1c88",
+      "issuance": {
+        "action_index": 1,
+        "cmx": "40a416a67ce5cb8f4fb63da7f3f5b187310c46f05c0bb783f3e0dc6ef84e9b1b",
+        "height": 3541618,
+        "txid": "67dd1910a6b39dd1131bd361e8313bff4c493239b1abceb577979d2f2c2ea7a3"
+      },
+      "name": "Frankfurt Xmas #009"
+    },
+    {
+      "asset_desc": "zmap-desc-v1|Frankfurt Xmas|10|Frankfurt Xmas #010|FXM|8239cbef912dee1ebdf6f259fd6e149f360474ad4fd6708487bbe2b6d62f4f70",
+      "asset_id": "4392409d742524ce0b70fc67aefd554dba8a63a9b9141826494c5c2bcd8323c4",
+      "image": "/collection/4392409d742524ce0b70fc67aefd554dba8a63a9b9141826494c5c2bcd8323c4.jpg",
+      "image_ipfs": "ipfs://bafkreiechhf67ejn5ypl35xslh6w4fe7gychjlkp2zyijb534k3nml2poa",
+      "image_sha256": "8239cbef912dee1ebdf6f259fd6e149f360474ad4fd6708487bbe2b6d62f4f70",
+      "issuance": {
+        "action_index": 8,
+        "cmx": "074c037e66cbd4fc6818242d32c7bd0cb31e4674155b81cfb640db61bdb4f625",
+        "height": 3541618,
+        "txid": "67dd1910a6b39dd1131bd361e8313bff4c493239b1abceb577979d2f2c2ea7a3"
+      },
+      "name": "Frankfurt Xmas #010"
+    }
+  ],
+  "generation": 1,
+  "identity": {
+    "ik": "23735882657b545bcb88aa5dc52f24978b9b4da65d69b8fb3bf3bad5e1f1ca5a",
+    "issuance_ufvk": "uview1f45enkkkpj5ww7egfkxg2sr4672dd3nu0zh7hdvveeq9thp3flzw23wqyj5tscn7pkwm0rjvcdw4pywpttdfxd25vgvyxhnzd7n9fdrl7czf3uukj7qz3fhpzxc92p7er8hrgcp3wqcvm6e23kcauejr4fawtp33yss0rn33rhzyxf23ur0swt55ag3q776yefqhfsthnmae5pulx86ah9uchxzqpkagwuee65s547z05v4rxx0umr8h2hs7hv7tsgua7yjdayf6edvq7fnw8ly2f67y0z0lxqnq3y24rz8cg6rqj23q5gx8ljd77ye5ghhr5em9c9e6q9e4jmln8uvajksvcde86gdhql2clh4xrv53lq9dw4v7xe2hhj4ump5s09cjurp63",
+    "scheme": "zmap-asset-id-v1",
+    "signature": "bip340"
+  },
+  "issued_at": 1793798795,
+  "issuer": {
+    "collection": "Frankfurt Xmas",
+    "name": "Zecboat"
+  },
+  "licence": {
+    "cid": "ipfs://bafkreiane4uhqoj3z5noqrwwhwgkocbn53qrq7rohadjnrjgxzapl6pfke",
+    "sha256": "0d272878393bcf5ae846d63d8ca7082deee1187e2e380696c526be40f5f9e551",
+    "version": "zecboat-collection-licence/1.0"
+  },
+  "network": "main",
+  "schema": "zecboat-proof-of-issuance/2"
+}
